@@ -16,6 +16,8 @@ class TeejusbFsrManager {
 
   TeejusbFsrManager();
   ~TeejusbFsrManager();
+  TeejusbFsrManager(const TeejusbFsrManager&) = delete;
+  TeejusbFsrManager& operator=(const TeejusbFsrManager&) = delete;
 
   std::vector<std::string> GetDevicePorts() const;
 
@@ -65,6 +67,7 @@ class TeejusbFsrManager {
     std::string status = "Not connected";
     std::string notice;
     std::string lastResponse;
+    bool protocolVerified = false;
     bool pendingThresholdLoad = false;
     bool pendingEepromSave = false;
     bool pendingEepromFinalCommand = false;
@@ -78,6 +81,8 @@ class TeejusbFsrManager {
     std::chrono::steady_clock::time_point lastValueRequest =
         std::chrono::steady_clock::time_point::min();
     std::chrono::steady_clock::time_point noticeUntil =
+        std::chrono::steady_clock::time_point::min();
+    std::chrono::steady_clock::time_point reconnectAfter =
         std::chrono::steady_clock::time_point::min();
   };
 
@@ -98,6 +103,8 @@ class TeejusbFsrManager {
   void ReadAvailableLines(DeviceState& device);
   void ProcessLine(DeviceState& device, const std::string& line);
   void MaybeRequestValues(DeviceState& device);
+  bool IsPortAssigned(const std::string& port) const;
+  bool IsOperationPending(const DeviceState& device) const;
   void SetStatus(DeviceState& device, const std::string& status);
   void SetNotice(DeviceState& device, const std::string& notice);
   void PushDeviceSnapshot(lua_State* L, const DeviceState* device) const;
@@ -105,6 +112,8 @@ class TeejusbFsrManager {
   std::vector<DeviceState> m_vDevices;
   std::string m_sActivePort;
   std::array<std::string, NUM_ASSIGNABLE_PLAYERS> m_sAssignedPorts;
+  std::chrono::steady_clock::time_point m_LastDeviceScan =
+      std::chrono::steady_clock::time_point::min();
 };
 
 extern TeejusbFsrManager* TEEJUSBFSR;

@@ -1250,6 +1250,11 @@ void NetworkManager::RunDownloadWorker() {
       if (this->shutdownWorkers.load() && this->downloadWorkerQueue.empty()) {
         return;
       }
+      if (this->shutdownWorkers.load()) {
+        std::queue<std::function<void()>> emptyQueue;
+        this->downloadWorkerQueue.swap(emptyQueue);
+        return;
+      }
       task = std::move(this->downloadWorkerQueue.front());
       this->downloadWorkerQueue.pop();
     }
@@ -1407,7 +1412,7 @@ bool NetworkManager::EnqueueDownloadTask(std::function<void()> task) {
   {
     std::lock_guard<std::mutex> lock(this->downloadWorkerMutex);
     if (this->shutdownWorkers.load() ||
-        this->downloadWorkerQueue.size() >= kMaxHttpWorkerQueue) {
+        this->downloadWorkerQueue.size() >= kMaxDownloadWorkerQueue) {
       return false;
     }
     this->downloadWorkerQueue.push(std::move(task));

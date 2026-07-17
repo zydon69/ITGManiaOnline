@@ -71,6 +71,8 @@ class OptionRow : public ActorFrame {
   void ImportOptions(const std::vector<PlayerNumber>& vpns);
   int ExportOptions(
       const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS]);
+  int ExportOptionsForPreview(
+      const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS]);
 
   enum RowType { RowType_Normal, RowType_Exit };
 
@@ -133,6 +135,10 @@ class OptionRow : public ActorFrame {
   void PushSelf(lua_State* L);
 
  protected:
+  int ExportOptionsInternal(
+      const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS],
+      bool preview);
+
   const OptionRowType* m_pParentType;
   RowType m_RowType;
   OptionRowHandler* m_pHand;

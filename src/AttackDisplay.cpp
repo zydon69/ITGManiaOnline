@@ -31,7 +31,8 @@ void WarnAttackDisplay(const char* message) {
 
 void WarnAttackDisplay(const char* message, int value) {
   if (LOG != nullptr) {
-    LOG->Warn(message, value);
+    const std::string formatted = ssprintf(message, value);
+    LOG->Warn("%s", formatted.c_str());
   }
 }
 

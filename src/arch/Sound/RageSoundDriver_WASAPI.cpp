@@ -276,7 +276,7 @@ void RageSoundDriver_WASAPI::MixerThread() {
 
   HRESULT hr = m_pAudioClient->Start();
   if (FAILED(hr)) {
-    LOG->Warn(hr_ssprintf(hr, "Failed to start IAudioClient").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "Failed to start IAudioClient").c_str());
     return;
   }
 
@@ -289,18 +289,18 @@ void RageSoundDriver_WASAPI::MixerThread() {
       LOG->Warn("WASAPI: Timeout waiting for audio event");
       hr = m_pAudioClient->Stop();
       if (FAILED(hr)) {
-        LOG->Warn(hr_ssprintf(hr, "Failed to stop IAudioClient after timeout").c_str());
+        LOG->Warn("%s", hr_ssprintf(hr, "Failed to stop IAudioClient after timeout").c_str());
         break;
       }
       hr = m_pAudioClient->Start();
       if (FAILED(hr)) {
-        LOG->Warn(hr_ssprintf(hr, "Failed to restart IAudioClient after timeout").c_str());
+        LOG->Warn("%s", hr_ssprintf(hr, "Failed to restart IAudioClient after timeout").c_str());
         break;
       }
       continue;
     }
     if (waitResult != WAIT_OBJECT_0) {
-      LOG->Warn(werr_ssprintf(GetLastError(), "WASAPI event wait failed").c_str());
+      LOG->Warn("%s", werr_ssprintf(GetLastError(), "WASAPI event wait failed").c_str());
       break;
     }
 
@@ -311,7 +311,7 @@ void RageSoundDriver_WASAPI::MixerThread() {
     UINT32 padding = 0;
     hr = m_pAudioClient->GetCurrentPadding(&padding);
     if (FAILED(hr)) {
-      LOG->Warn(hr_ssprintf(hr, "GetCurrentPadding failed").c_str());
+      LOG->Warn("%s", hr_ssprintf(hr, "GetCurrentPadding failed").c_str());
       continue;
     }
 
@@ -331,7 +331,7 @@ void RageSoundDriver_WASAPI::MixerThread() {
     BYTE* pData = nullptr;
     hr = m_pRenderClient->GetBuffer(framesAvailable, &pData);
     if (FAILED(hr)) {
-      LOG->Warn(hr_ssprintf(hr, "GetBuffer failed").c_str());
+      LOG->Warn("%s", hr_ssprintf(hr, "GetBuffer failed").c_str());
       continue;
     }
     if (pData == nullptr) {
@@ -354,7 +354,7 @@ void RageSoundDriver_WASAPI::MixerThread() {
 
     hr = m_pRenderClient->ReleaseBuffer(framesAvailable, 0);
     if (FAILED(hr)) {
-      LOG->Warn(hr_ssprintf(hr, "ReleaseBuffer failed").c_str());
+      LOG->Warn("%s", hr_ssprintf(hr, "ReleaseBuffer failed").c_str());
     }
 
     iHardwareFrame += framesAvailable;

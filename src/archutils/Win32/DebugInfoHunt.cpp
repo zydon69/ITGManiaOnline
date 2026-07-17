@@ -198,7 +198,8 @@ static void GetSoundDriverDebugInfo() {
 
     MMRESULT ret = waveOutGetDevCaps(i, &caps, sizeof(caps));
     if (ret != MMSYSERR_NOERROR) {
-      LOG->Info(wo_ssprintf(ret, "waveOutGetDevCaps(%i) failed", i).c_str());
+      LOG->Info(
+          "%s", wo_ssprintf(ret, "waveOutGetDevCaps(%i) failed", i).c_str());
       continue;
     }
     LOG->Info(

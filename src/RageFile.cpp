@@ -7,9 +7,11 @@
 
 #include "RageFile.h"
 
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 
 #include "LuaManager.h"
@@ -49,8 +51,8 @@ std::string RageFile::GetPath() const {
 }
 
 bool RageFile::Open(const std::string& path, int mode) {
-  ASSERT(FILEMAN != nullptr);
   Close();
+  ClearError();
 
   m_Path = path;
   FixSlashesInPlace(m_Path);
@@ -66,9 +68,13 @@ bool RageFile::Open(const std::string& path, int mode) {
     SetError("Neither reading nor writing specified");
     return false;
   }
+  if (FILEMAN == nullptr) {
+    SetError("File manager is not initialized");
+    return false;
+  }
 
-  int error;
-  m_File = FILEMAN->Open(path, mode, error);
+  int error = EIO;
+  m_File = FILEMAN->Open(m_Path, mode, error);
 
   if (m_File == nullptr) {
     SetError(strerror(error));
@@ -80,14 +86,16 @@ bool RageFile::Open(const std::string& path, int mode) {
 
 void RageFile::Close() {
   if (m_File == nullptr) {
+    m_Mode = 0;
     return;
   }
   RageFileBasic* pFile = m_File;
   m_File = nullptr;
-  if (m_Mode & WRITE) {
+  if ((m_Mode & WRITE) && FILEMAN != nullptr) {
     FILEMAN->CacheFile(pFile, m_Path);
   }
   delete pFile;
+  m_Mode = 0;
 }
 
 void RageFile::AssertOpen() const {
@@ -220,6 +228,10 @@ void FileReading::ReadBytes(
   if (sError.size() != 0) {
     return;
   }
+  if (size < 0) {
+    sError = "Negative read size";
+    return;
+  }
 
   int ret = f.Read(buf, size);
   if (ret == -1) {
@@ -232,6 +244,10 @@ void FileReading::ReadBytes(
 std::string FileReading::ReadString(
     RageFileBasic& f, int size, std::string& sError) {
   if (sError.size() != 0) {
+    return std::string();
+  }
+  if (size < 0) {
+    sError = "Negative string size";
     return std::string();
   }
 
@@ -249,9 +265,16 @@ void FileReading::SkipBytes(RageFileBasic& f, int iBytes, std::string& sError) {
   if (sError.size() != 0) {
     return;
   }
-
-  iBytes += f.Tell();
-  FileReading::Seek(f, iBytes, sError);
+  if (iBytes < 0) {
+    sError = "Negative skip size";
+    return;
+  }
+  const int current = f.Tell();
+  if (current < 0 || iBytes > std::numeric_limits<int>::max() - current) {
+    sError = "Skip target is outside the supported range";
+    return;
+  }
+  FileReading::Seek(f, current + iBytes, sError);
 }
 
 void FileReading::Seek(RageFileBasic& f, int iOffset, std::string& sError) {
@@ -265,8 +288,9 @@ void FileReading::Seek(RageFileBasic& f, int iOffset, std::string& sError) {
   }
   if (iGot == -1) {
     sError = f.GetError();
-  } else if (iGot < iOffset) {
-    sError = "Unexpected end of file";
+  } else {
+    sError = iGot < iOffset ? "Unexpected end of file"
+                            : "Unexpected seek position";
   }
 }
 
@@ -352,8 +376,11 @@ class LunaRageFile : public Luna<RageFile> {
     const std::string path = SArg(1);
     int mode = IArg(2);
 
-    if ((mode & RageFile::WRITE) && FILEMAN->IsPathProtected(path)) {
-      LOG->Warn("Writing to %s is not allowed", path.c_str());
+    if ((mode & RageFile::WRITE) && FILEMAN != nullptr &&
+        FILEMAN->IsPathProtected(path)) {
+      if (LOG != nullptr) {
+        LOG->Warn("Writing to %s is not allowed", path.c_str());
+      }
       lua_pushboolean(L, false);
       return 1;
     }

@@ -6,9 +6,11 @@ set(actual_radar "${ITGMANIA_SOURCE_DIR}/src/NoteDataWithScoring.cpp")
 set(normal_score "${ITGMANIA_SOURCE_DIR}/src/ScoreKeeperNormal.cpp")
 set(rave_score "${ITGMANIA_SOURCE_DIR}/src/ScoreKeeperRave.cpp")
 set(shared_score "${ITGMANIA_SOURCE_DIR}/src/ScoreKeeperShared.cpp")
+set(song_position "${ITGMANIA_SOURCE_DIR}/src/SongPosition.h")
 
 foreach(path IN ITEMS
-    "${actual_radar}" "${normal_score}" "${rave_score}" "${shared_score}")
+    "${actual_radar}" "${normal_score}" "${rave_score}" "${shared_score}"
+    "${song_position}")
   if(NOT EXISTS "${path}")
     message(FATAL_ERROR "Missing scoring source: ${path}")
   endif()
@@ -18,6 +20,7 @@ file(READ "${actual_radar}" actual_radar_source)
 file(READ "${normal_score}" normal_score_source)
 file(READ "${rave_score}" rave_score_source)
 file(READ "${shared_score}" shared_score_source)
+file(READ "${song_position}" song_position_source)
 
 function(require_contains content needle label)
   string(FIND "${content}" "${needle}" position)
@@ -71,6 +74,14 @@ require_contains(
   "course scoring verifies that the active chart matches the loaded index")
 require_contains(
   "${normal_score_source}"
+  "!THEME->IsThemeLoaded() || LUA == nullptr"
+  "score metrics load only with a complete theme and Lua runtime")
+require_contains(
+  "${normal_score_source}"
+  "apSteps[i]->m_pSong != apSongs[i]"
+  "score course entries preserve their song/steps association")
+require_contains(
+  "${normal_score_source}"
   "value >= static_cast<float>(std::numeric_limits<int>::max())"
   "float radar totals are bounded before integer conversion")
 require_contains(
@@ -109,5 +120,9 @@ require_contains(
   "${shared_score_source}"
   "bool ScoreKeeperShared::IsMasterScoreKeeper() const"
   "Routine scoring callbacks share one defensive master gate")
+require_contains(
+  "${song_position_source}"
+  "m_LastBeatUpdate = RageZeroTimer;"
+  "reset clears the timestamp together with the timing state")
 
 message(STATUS "Scoring revalidation invariants passed")

@@ -51,6 +51,15 @@ int ClampInt64ToInt(std::int64_t value) {
   return static_cast<int>(value);
 }
 
+bool CheckedAddFrames(std::int64_t base, int frames, std::int64_t* result) {
+  if (result == nullptr || frames < 0 ||
+      base > std::numeric_limits<std::int64_t>::max() - frames) {
+    return false;
+  }
+  *result = base + frames;
+  return true;
+}
+
 class RestoreThreadedBufferState {
  public:
   RestoreThreadedBufferState(const RageSoundReader_ThreadedBuffer& reader,
@@ -121,7 +130,8 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
   }
   m_bEOF = false;
 
-  m_StreamPosition.back().iPositionOfFirstFrame = pSource->GetNextSourceFrame();
+  m_StreamPosition.back().iPositionOfFirstFrame =
+      pSource->GetNextSourceFrame64();
   m_StreamPosition.back().fRate = pSource->GetStreamToSourceRatio();
 
   m_Thread.SetName("Sound buffering");
@@ -524,9 +534,14 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
     }
 
     const Mapping& currentMapping = m_StreamPosition.back();
-    const std::int64_t iExpectedNextSourceFrame =
-        currentMapping.iPositionOfFirstFrame +
-        currentMapping.iFramesBuffered;
+    std::int64_t iExpectedNextSourceFrame = 0;
+    if (!CheckedAddFrames(currentMapping.iPositionOfFirstFrame,
+                          currentMapping.iFramesBuffered,
+                          &iExpectedNextSourceFrame)) {
+      SetError("SRC_AUDIT_FIX SRC-3323: threaded-buffer source mapping "
+               "overflow");
+      return RageSoundReader::ERROR;
+    }
     if (static_cast<std::int64_t>(iNextSourceFrame) != iExpectedNextSourceFrame ||
         fRate != m_StreamPosition.back().fRate) {
       try {
@@ -607,11 +622,11 @@ int RageSoundReader_ThreadedBuffer::Read(float* pBuffer, int iFrames) {
       m_Event.Unlock();
       return RageSoundReader::ERROR;
     }
-    const std::int64_t iNewSourceFrame =
-        pos.iPositionOfFirstFrame + iFramesToRead;
-    if (iNewSourceFrame > std::numeric_limits<int>::max()) {
+    std::int64_t iNewSourceFrame = 0;
+    if (!CheckedAddFrames(
+            pos.iPositionOfFirstFrame, iFramesToRead, &iNewSourceFrame)) {
       m_Event.Unlock();
-      SetError("SRC_AUDIT_FIX SRC-2859: threaded-buffer read position "
+      SetError("SRC_AUDIT_FIX SRC-3323: threaded-buffer read position "
                "overflow");
       return RageSoundReader::ERROR;
     }

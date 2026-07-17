@@ -326,19 +326,23 @@ void ScreenOptions::Init() {
   this->AddChild(&m_frameContainer);
 
   m_sprPage.Load(HasTheme() ? THEME->GetPathG(m_sName, "page") : "");
-  m_sprPage->SetName("Page");
-  LOAD_ALL_COMMANDS_AND_SET_XY(m_sprPage);
-  m_frameContainer.AddChild(m_sprPage);
+  if (m_sprPage.IsLoaded()) {
+    m_sprPage->SetName("Page");
+    LOAD_ALL_COMMANDS_AND_SET_XY(m_sprPage);
+    m_frameContainer.AddChild(m_sprPage);
+  }
 
   // init line highlights
   FOREACH_PlayerNumber(p) {
     m_sprLineHighlight[p].Load(
         HasTheme() ? THEME->GetPathG(m_sName, ssprintf("LineHighlight P%d", p + 1))
                    : "");
-    m_sprLineHighlight[p]->SetName(ssprintf("LineHighlightP%d", p + 1));
-    m_sprLineHighlight[p]->SetX(LINE_HIGHLIGHT_X);
-    LOAD_ALL_COMMANDS(m_sprLineHighlight[p]);
-    m_frameContainer.AddChild(m_sprLineHighlight[p]);
+    if (m_sprLineHighlight[p].IsLoaded()) {
+      m_sprLineHighlight[p]->SetName(ssprintf("LineHighlightP%d", p + 1));
+      m_sprLineHighlight[p]->SetX(LINE_HIGHLIGHT_X);
+      LOAD_ALL_COMMANDS(m_sprLineHighlight[p]);
+      m_frameContainer.AddChild(m_sprLineHighlight[p]);
+    }
   }
 
   // init cursors
@@ -394,11 +398,13 @@ void ScreenOptions::Init() {
   }
 
   m_sprMore.Load(HasTheme() ? THEME->GetPathG(m_sName, "more") : "");
-  m_sprMore->SetName("More");
-  LOAD_ALL_COMMANDS_AND_SET_XY(m_sprMore);
-  m_sprMore->SetDrawOrder(2);
-  m_sprMore->PlayCommand("LoseFocus");
-  m_frameContainer.AddChild(m_sprMore);
+  if (m_sprMore.IsLoaded()) {
+    m_sprMore->SetName("More");
+    LOAD_ALL_COMMANDS_AND_SET_XY(m_sprMore);
+    m_sprMore->SetDrawOrder(2);
+    m_sprMore->PlayCommand("LoseFocus");
+    m_frameContainer.AddChild(m_sprMore);
+  }
 
   m_OptionRowTypeNormal.Load(OPTION_ROW_NORMAL_METRICS_GROUP, this);
   m_OptionRowTypeExit.Load(OPTION_ROW_EXIT_METRICS_GROUP, this);
@@ -706,7 +712,11 @@ void ScreenOptions::TweenCursor(PlayerNumber pn) {
   if (cursor.GetDestX() != (float)iX || cursor.GetDestY() != (float)iY ||
       cursor.GetBarWidth() != iWidth) {
     cursor.StopTweening();
-    cursor.BeginTweening(CURSOR_TWEEN_SECONDS);
+    const float configuredTweenSeconds = CURSOR_TWEEN_SECONDS;
+    const float tweenSeconds = std::isfinite(configuredTweenSeconds)
+                                   ? std::max(configuredTweenSeconds, 0.0f)
+                                   : 0.0f;
+    cursor.BeginTweening(tweenSeconds);
     cursor.SetXY((float)iX, (float)iY);
     cursor.SetBarWidth(iWidth);
   }
@@ -1443,13 +1453,18 @@ void ScreenOptions::StoreFocus(PlayerNumber pn) {
     return;
   }
 
+  const int focusedChoice = row.GetChoiceInRowWithFocus(pn);
+  if (focusedChoice < 0 ||
+      focusedChoice >= static_cast<int>(row.GetRowDef().m_vsChoices.size())) {
+    return;
+  }
+
   int iWidth, iY;
   GetWidthXY(
-      pn, m_iCurrentRow[pn], row.GetChoiceInRowWithFocus(pn), iWidth,
-      m_iFocusX[pn], iY);
+      pn, m_iCurrentRow[pn], focusedChoice, iWidth, m_iFocusX[pn], iY);
   ScreenOptionsLogTrace(
-      ssprintf("cur selection %ix%i @ %i", m_iCurrentRow[pn],
-               row.GetChoiceInRowWithFocus(pn), m_iFocusX[pn]));
+    ssprintf("cur selection %ix%i @ %i", m_iCurrentRow[pn],
+               focusedChoice, m_iFocusX[pn]));
 }
 
 bool ScreenOptions::FocusedItemEndsScreen(PlayerNumber pn) const {
@@ -1529,6 +1544,10 @@ void ScreenOptions::ChangeValueInRowAbsolute(
   }
 
   int iCurrentChoiceWithFocus = row.GetChoiceInRowWithFocus(pn);
+  if (iCurrentChoiceWithFocus < 0 ||
+      iCurrentChoiceWithFocus >= iNumChoices) {
+    iCurrentChoiceWithFocus = 0;
+  }
   int iDelta = iChoiceIndex - iCurrentChoiceWithFocus;
 
   Message msg("ChangeValue");

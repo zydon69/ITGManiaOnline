@@ -206,7 +206,7 @@ int WindowsFileIO::read_several(
   delete[] Handles;
 
   if (ret == -1) {
-    LOG->Trace(werr_ssprintf(GetLastError(), "WaitForMultipleObjectsEx failed")
+    LOG->Trace("%s", werr_ssprintf(GetLastError(), "WaitForMultipleObjectsEx failed")
                    .c_str());
     return -1;
   }

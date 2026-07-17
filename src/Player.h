@@ -99,7 +99,7 @@ class Player : public ActorFrame {
   // underneath the combo and judgment.  They're not embedded in
   // PlayerMatrixPusher so that some nutjob can later decide to expose them
   // to lua. -Kyz
-  void PushPlayerMatrix(float x, float skew, float center_y);
+  bool PushPlayerMatrix(float x, float skew, float center_y);
   void PopPlayerMatrix();
 
   // This exists so that the board can be drawn underneath combo/judge. -Kyz
@@ -115,6 +115,7 @@ class Player : public ActorFrame {
         bool reverse);
     ~PlayerNoteFieldPositioner();
     Player* player;
+    bool matrix_pushed;
     float original_y;
     float y_offset;
   };
@@ -320,6 +321,7 @@ class Player : public ActorFrame {
   int m_iPerfTapJudgmentsSinceLastSnapshot;
   int m_iPerfHoldJudgmentsSinceLastSnapshot;
   int m_iPerfMineJudgmentsSinceLastSnapshot;
+  int m_iMultiplayerUpdateCycle;
   // This exists so that the board can be drawn underneath combo/judge. -Kyz
   bool m_drawing_notefield_board;
 };

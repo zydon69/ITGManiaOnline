@@ -1,9 +1,12 @@
 #include "ScreenGameplayLesson.h"
 
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Actor.h"
+#include "ActorUtil.h"
 #include "AutoActor.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
@@ -119,8 +122,9 @@ bool ScreenGameplayLesson::Input(const InputEventPlus& input) {
       LOG->Warn("ScreenGameplayLesson ignored invalid page index %d during "
                 "input.",
                 m_iCurrentPageIndex);
-      m_iCurrentPageIndex = -1;
-      return ScreenGameplay::Input(input);
+      HideCurrentPageIfValid();
+      EnterLessonPlay(true);
+      return true;
     }
 
     // show a lesson page
@@ -141,7 +145,8 @@ void ScreenGameplayLesson::HandleScreenMessage(const ScreenMessage SM) {
         LOG->Warn("ScreenGameplayLesson recovered from invalid page index %d "
                   "when notes ended.",
                   m_iCurrentPageIndex);
-        m_iCurrentPageIndex = -1;
+        HideCurrentPageIfValid();
+        EnterLessonPlay(true);
         return;
       }
       ResetAndRestartCurrentSong();
@@ -193,8 +198,9 @@ bool ScreenGameplayLesson::MenuStart(const InputEventPlus& input) {
   if (!IsCurrentPageIndexValid()) {
     LOG->Warn("ScreenGameplayLesson ignored Start on invalid page index %d.",
               m_iCurrentPageIndex);
-    m_iCurrentPageIndex = -1;
-    return false;
+    HideCurrentPageIfValid();
+    EnterLessonPlay(true);
+    return true;
   }
   ChangeLessonPage(+1);
   return true;
@@ -205,6 +211,7 @@ bool ScreenGameplayLesson::MenuBack(const InputEventPlus& input) {
     return false;
   }
   if (m_iCurrentPageIndex == 0) {
+    RestoreLessonControllers();
     BeginBackingOutFromGameplay();
     return true;
   }
@@ -214,8 +221,9 @@ bool ScreenGameplayLesson::MenuBack(const InputEventPlus& input) {
   if (!IsCurrentPageIndexValid()) {
     LOG->Warn("ScreenGameplayLesson ignored Back on invalid page index %d.",
               m_iCurrentPageIndex);
-    m_iCurrentPageIndex = -1;
-    return false;
+    HideCurrentPageIfValid();
+    EnterLessonPlay(true);
+    return true;
   }
   ChangeLessonPage(-1);
   return true;
@@ -225,7 +233,8 @@ void ScreenGameplayLesson::ChangeLessonPage(int iDir) {
   if (!IsCurrentPageIndexValid()) {
     LOG->Warn("ScreenGameplayLesson cannot change from invalid page index %d.",
               m_iCurrentPageIndex);
-    m_iCurrentPageIndex = -1;
+    HideCurrentPageIfValid();
+    EnterLessonPlay(true);
     return;
   }
 
@@ -287,12 +296,13 @@ bool ScreenGameplayLesson::LoadLessonPages(Song* pSong) {
         "PageIndex", LuaReference::Create(static_cast<int>(loadedPages)));
     LuaThreadVariable iPages(
         "NumPages", LuaReference::Create(static_cast<int>(vs.size())));
-    aa.Load(vs[i]);
-    if (!aa.IsLoaded()) {
+    std::unique_ptr<Actor> page(ActorUtil::MakeActor(vs[i]));
+    if (page == nullptr) {
       LOG->Warn("ScreenGameplayLesson failed to load lesson page '%s'.",
                 vs[i].c_str());
       continue;
     }
+    aa.Adopt(std::move(page));
 
     aa->SetDrawOrder(DRAW_ORDER_OVERLAY + 1);
     this->AddChild(aa);

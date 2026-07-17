@@ -113,7 +113,7 @@ void MemoryCardDriverThreaded_Windows::GetUSBStorageDevices(
 
     std::string sDrive = ssprintf("%c:", 'A' + i % 26);
 
-    LOG->Trace(sDrive.c_str());
+    LOG->Trace("%s", sDrive.c_str());
 
     // we definitely don't need this lol
     if (IsFloppyDrive(sDrive.c_str())) {
@@ -193,7 +193,7 @@ void MemoryCardDriverThreaded_Windows::Unmount(UsbStorageDevice* pDevice) {
       FILE_ATTRIBUTE_NORMAL, nullptr);
 
   if (hDevice == INVALID_HANDLE_VALUE) {
-    LOG->Warn(werr_ssprintf(
+    LOG->Warn("%s", werr_ssprintf(
                   GetLastError(),
                   "Couldn't open memory card device to flush (%s): CreateFile",
                   pDevice->sDevice.c_str())
@@ -202,7 +202,7 @@ void MemoryCardDriverThreaded_Windows::Unmount(UsbStorageDevice* pDevice) {
   }
 
   if (!FlushFileBuffers(hDevice)) {
-    LOG->Warn(werr_ssprintf(
+    LOG->Warn("%s", werr_ssprintf(
                   GetLastError(),
                   "Couldn't flush memory card device (%s): FlushFileBuffers",
                   pDevice->sDevice.c_str())

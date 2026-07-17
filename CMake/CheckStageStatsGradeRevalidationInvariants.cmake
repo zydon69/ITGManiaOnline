@@ -8,10 +8,11 @@ set(stage_stats "${ITGMANIA_SOURCE_DIR}/src/StageStats.cpp")
 set(player_stats "${ITGMANIA_SOURCE_DIR}/src/PlayerStageStats.cpp")
 set(stats_manager "${ITGMANIA_SOURCE_DIR}/src/StatsManager.cpp")
 set(screen_gameplay "${ITGMANIA_SOURCE_DIR}/src/ScreenGameplay.cpp")
+set(screen_evaluation "${ITGMANIA_SOURCE_DIR}/src/ScreenEvaluation.cpp")
 
 foreach(path IN ITEMS
     "${grade_header}" "${grade_source}" "${stage_stats}" "${player_stats}"
-    "${stats_manager}" "${screen_gameplay}")
+    "${stats_manager}" "${screen_gameplay}" "${screen_evaluation}")
   if(NOT EXISTS "${path}")
     message(FATAL_ERROR "Missing stage-stat source: ${path}")
   endif()
@@ -23,6 +24,7 @@ file(READ "${stage_stats}" stage_stats_source)
 file(READ "${player_stats}" player_stats_source)
 file(READ "${stats_manager}" stats_manager_source)
 file(READ "${screen_gameplay}" screen_gameplay_source)
+file(READ "${screen_evaluation}" screen_evaluation_source)
 
 function(require_contains content needle label)
   string(FIND "${content}" "${needle}" position)
@@ -107,16 +109,48 @@ require_contains(
   "const Course* pCourse = m_pPlayedCourse;"
   "high-score lookup uses recorded course context")
 require_contains(
+  "${stage_stats_source}"
+  "const Trail* pTrail = m_pPlayedTrails[p];"
+  "summary ranking uses the recorded trail meter")
+require_contains(
+  "${stage_stats_source}"
+  "const PlayerNumber master = m_RoutinePlayer.m_player_number;"
+  "routine high-score paths use the recorded master")
+require_contains(
+  "${player_stats_source}"
+  "void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {\n  if (!std::isfinite(fLife)"
+  "life history never depends on a live unrelated course")
+require_not_contains(
+  "${player_stats_source}"
+  "CurrentCourseIsEndless"
+  "bounded life and combo histories do not depend on live course state")
+require_contains(
+  "${player_stats_source}"
+  "m_StageAward = StageAward_Invalid;\n  m_PeakComboAward = PeakComboAward_Invalid;"
+  "award recalculation clears both local awards first")
+require_contains(
   "${stats_manager_source}"
   "Course* currentCourse = isCourseMode ? pSS->m_pPlayedCourse : nullptr;"
   "recent score export uses recorded course context")
+require_contains(
+  "${stats_manager_source}"
+  "const bool bMultiplayer = HasRecordedMultiPlayerStats(*pSS);"
+  "profile commit and export derive multiplayer state from recorded stats")
+require_contains(
+  "${stats_manager_source}"
+  "const std::string stageGuid = !pSS->m_sStageGuid.empty()"
+  "recent score export uses the recorded stage GUID")
+require_contains(
+  "${stats_manager_source}"
+  "std::max(0, pSS->m_player[pn].m_iStepsPlayed)"
+  "player song totals use the player's recorded cardinality")
 require_contains(
   "${stats_manager_source}"
   "ssreturn.m_player[p].m_radarActual[r] /= stepsPlayed;"
   "radar averages use per-player song counts")
 require_contains(
   "${stats_manager_source}"
-  "return ss.m_RoutinePlayer.m_bJoined;"
+  "return HasRecordedPlayerStats(ss.m_RoutinePlayer);"
   "routine stats retain their referenced steps")
 require_contains(
   "${stats_manager_source}"
@@ -131,8 +165,40 @@ require_contains(
   "if (!HasRecordedPlayerStats(p->m_CurStageStats.m_player[pn]))"
   "grade aggregation reads recorded players instead of live GameState state")
 require_contains(
+  "${stats_manager_source}"
+  "opts.FromString(playerStats->m_HighScore.GetModifiers());"
+  "Padmiss exports the recorded modifiers instead of live player options")
+require_contains(
+  "${stats_manager_source}"
+  "if (!HasRecordedPlayerStats(stats.m_player[p]))"
+  "final grade aggregation iterates recorded players")
+require_contains(
+  "${stage_stats_source}"
+  "bool IsRoutineSharedStyleActive(const StageStats& stats)"
+  "routine pass/fail uses the recorded style snapshot")
+require_contains(
   "${screen_gameplay_source}"
   "m_CurStageStats.m_pPlayedCourse = GAMESTATE->m_pCurCourse;"
   "gameplay snapshots course context when stats are created")
+require_contains(
+  "${stage_stats_source}"
+  "m_sStageGuid.clear();"
+  "stage statistics own an initialized stage GUID snapshot")
+require_contains(
+  "${screen_evaluation_source}"
+  "m_bPreviousTokenAdjustment"
+  "evaluation restores the previous token-adjustment state")
+require_contains(
+  "${screen_evaluation_source}"
+  "m_FinalEvalStageStats = STATSMAN->m_vPlayedStageStats.back();"
+  "evaluation owns a stable copy of the displayed stage")
+require_contains(
+  "${screen_evaluation_source}"
+  "m_LargeBanner.LoadFromCourse(m_pStageStats->m_pPlayedCourse);"
+  "course banner uses recorded stage context")
+require_not_contains(
+  "${screen_evaluation_source}"
+  "courseEntries = GAMESTATE->m_pCurCourse->m_vEntries.size();"
+  "bonus divider never falls back to a live course")
 
 message(STATUS "StageStats/Grade revalidation invariants passed")

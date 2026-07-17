@@ -4,6 +4,7 @@ local selected_device = 1
 local selected_focus = 1
 local selected_action = 2
 local action_feedback = ""
+local next_refresh_at = 0
 
 local focus_names = { "Player", "Controller", "Sensor", "Action" }
 local action_names = { "charger", "enregistrer" }
@@ -85,8 +86,11 @@ local function assign_selected_controller()
 
 	selected_device = clamp(selected_device, 1, #device_snapshots)
 	local port = device_snapshots[selected_device].port or ""
-	manager:AssignPlayer(selected_player, port)
-	manager:RequestThresholdsForPort(port)
+	local assigned = manager:AssignPlayer(selected_player, port)
+	if not assigned then
+		action_feedback = "connexion ou affectation impossible"
+		return
+	end
 	snapshot = manager:GetSnapshotForPlayer(selected_player) or snapshot
 	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 end
@@ -117,9 +121,13 @@ local function update_threshold(delta)
 	local thresholds = snapshot.thresholds or {}
 	local current = thresholds[selected_sensor] or 1000
 	local next_value = clamp(current + delta, 0, 1023)
-	manager:SetThresholdForPort(port, selected_sensor, next_value)
-	snapshot.thresholds[selected_sensor] = next_value
-	action_feedback = ""
+	local updated = manager:SetThresholdForPort(port, selected_sensor, next_value)
+	if updated then
+		snapshot.thresholds[selected_sensor] = next_value
+		action_feedback = ""
+	else
+		action_feedback = "modification impossible"
+	end
 	MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 end
 
@@ -158,10 +166,10 @@ local InputHandler = function(event)
 	local is_repeat = event.type == "InputEventType_Repeat"
 	if not is_first_press and not is_repeat then return false end
 
-	if event.GameButton == "MenuUp" then
+	if selected_focus == 3 and event.GameButton == "MenuUp" then
 		update_threshold(is_repeat and 25 or 5)
 		return true
-	elseif event.GameButton == "MenuDown" then
+	elseif selected_focus == 3 and event.GameButton == "MenuDown" then
 		update_threshold(is_repeat and -25 or -5)
 		return true
 	end
@@ -371,6 +379,9 @@ local af = Def.ActorFrame{
 		end
 		refresh_snapshot()
 		self:SetUpdateFunction(function()
+			local now = GetTimeSinceStart()
+			if now < next_refresh_at then return end
+			next_refresh_at = now + 0.04
 			refresh_snapshot()
 			MESSAGEMAN:Broadcast("TeejusbFsrUpdated")
 		end)

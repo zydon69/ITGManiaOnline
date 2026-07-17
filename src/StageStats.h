@@ -1,6 +1,7 @@
 #ifndef StageStats_H
 #define StageStats_H
 
+#include <string>
 #include <vector>
 
 #include "GameConstantsAndTypes.h"
@@ -48,6 +49,7 @@ class StageStats {
   // Non-owning gameplay snapshots, parallel to the song/steps pointers.
   Course* m_pPlayedCourse;
   Trail* m_pPlayedTrails[NUM_PLAYERS];
+  std::string m_sStageGuid;
 
   /** @brief Was an extra stage earned this goaround? */
   EarnedExtraStage m_EarnedExtraStage;

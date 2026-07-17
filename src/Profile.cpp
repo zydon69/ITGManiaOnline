@@ -539,6 +539,9 @@ int Profile::GetTotalStepsWithTopGrade(
     }
 
     for (Steps* pSteps : pSong->GetAllSteps()) {
+      if (pSteps == nullptr) {
+        continue;
+      }
       if (pSteps->m_StepsType != st) {
         continue;  // skip
       }
@@ -804,7 +807,9 @@ int Profile::GetSongNumTimesPlayed(const SongID& songID) const {
        hsSong->m_StepsHighScores) {
     const HighScoresForASteps& hsSteps = j.second;
 
-    iTotalNumTimesPlayed += hsSteps.hsl.GetNumTimesPlayed();
+    iTotalNumTimesPlayed = AddProfileIntSaturated(
+        iTotalNumTimesPlayed, hsSteps.hsl.GetNumTimesPlayed(),
+        "song play count");
   }
   return iTotalNumTimesPlayed;
 }
@@ -1508,13 +1513,14 @@ void Profile::LoadCustomFunction(std::string sDir, PlayerNumber pn) {
   LUA->Release(L);
 }
 
-void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
+bool Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
         "Profile::HandleStatsPrefixChange: ProfileManager unavailable; "
         "leaving profile data untouched.");
-    return;
+    return false;
   }
+  const Profile backup = *this;
   // Temp variables to preserve stuff across the reload.
   // Some stuff intentionally left out because the original reason for the
   // stats prefix was to allow scores from different game types to coexist.
@@ -1552,8 +1558,10 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
     if (result != ProfileLoadResult_Success) {
       LOG->Warn(
           "Profile::HandleStatsPrefixChange: failed to reload stats prefix "
-          "'%s'; keeping preserved profile fields only.",
+          "'%s'; restoring the previous in-memory profile.",
           PROFILEMAN->GetStatsPrefix().c_str());
+      *this = backup;
+      return false;
     }
   } else {
     ClearStats();
@@ -1591,8 +1599,11 @@ void Profile::HandleStatsPrefixChange(std::string dir, bool require_signature) {
           "Profile::HandleStatsPrefixChange: failed to create stats file for "
           "prefix '%s'.",
           PROFILEMAN->GetStatsPrefix().c_str());
+      *this = backup;
+      return false;
     }
   }
+  return true;
 }
 
 ProfileLoadResult Profile::LoadAllFromDir(
@@ -2791,6 +2802,7 @@ void Profile::LoadSongScoresFromNode(const XNode* pSongScores) {
   }
 
   size_t songScoreRoots = 0;
+  size_t stepScoreEntries = 0;
   FOREACH_CONST_Child(pSongScores, pSong) {
     if (pSong->GetName() != "Song") {
       continue;
@@ -2810,6 +2822,10 @@ void Profile::LoadSongScoresFromNode(const XNode* pSongScores) {
     FOREACH_CONST_Child(pSong, pSteps) {
       if (pSteps->GetName() != "Steps") {
         continue;
+      }
+      if (++stepScoreEntries > MAX_PROFILE_SCORE_ROOT_ENTRIES) {
+        LOG->Warn("Profile::LoadSongScoresFromNode: too many Steps entries.");
+        return;
       }
 
       StepsID stepsID;
@@ -2885,6 +2901,7 @@ void Profile::LoadCourseScoresFromNode(const XNode* pCourseScores) {
   }
 
   size_t courseScoreRoots = 0;
+  size_t trailScoreEntries = 0;
   FOREACH_CONST_Child(pCourseScores, pCourse) {
     if (pCourse->GetName() != "Course") {
       continue;
@@ -2938,6 +2955,10 @@ void Profile::LoadCourseScoresFromNode(const XNode* pCourseScores) {
     FOREACH_CONST_Child(pCourse, pTrail) {
       if (pTrail->GetName() != "Trail") {
         continue;
+      }
+      if (++trailScoreEntries > MAX_PROFILE_SCORE_ROOT_ENTRIES) {
+        LOG->Warn("Profile::LoadCourseScoresFromNode: too many Trail entries.");
+        return;
       }
 
       TrailID trailID;

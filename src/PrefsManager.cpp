@@ -749,6 +749,7 @@ void PrefsManager::ResetToFactoryDefaults() {
       SpecialFiles::STATIC_INI_PATH, GetPreferencesSection(), true);
 
   TranslateDeprecatedFlags();
+  RefreshPerfDiagnosticsPreferenceCache();
   InitializeGlobalOffsetProfiles();
   LogGlobalOffsetDiagnostics("reset_to_factory_defaults_before_save");
 

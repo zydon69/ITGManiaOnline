@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -36,6 +38,7 @@
 #include "NotesLoaderKSF.h"
 #include "NotesLoaderSM.h"
 #include "NotesLoaderSMA.h"
+#include "RageFileManager.h"
 #include "NotesLoaderSSC.h"
 #include "PlayerNumber.h"
 #include "RageLog.h"
@@ -77,6 +80,13 @@ bool IsValidDisplayBPM(DisplayBPM type) {
 
 bool IsPositiveFinite(float value) {
   return std::isfinite(value) && value > 0.0f;
+}
+
+bool ShouldLogStepsIssue(const std::string& key) {
+  static std::mutex mutex;
+  static std::set<std::string> loggedIssues;
+  std::lock_guard<std::mutex> lock(mutex);
+  return loggedIssues.insert(key).second;
 }
 
 PlayerNumber SafePlayerNumber(PlayerNumber pn, const char* context) {
@@ -309,9 +319,12 @@ bool Steps::GetNoteDataFromSimfile() {
       the cache files contain only the SSC step file,
       give the user some leeway and search for a .sm replacement
       */
-      SMLoader backup_loader;
       const std::string transformedStepFile = SetExtension(stepFile, "sm");
+      if (FILEMAN == nullptr || !FILEMAN->IsAFile(transformedStepFile)) {
+        return false;
+      }
 
+      SMLoader backup_loader;
       return backup_loader.LoadNoteDataFromSimfile(transformedStepFile, *this);
     } else {
       return true;
@@ -456,12 +469,15 @@ void Steps::TidyUpData() {
   // new style, editing a simfile with unrecognized Steps won't silently
   // delete them. -Kyz
   if (m_StepsType == StepsType_Invalid) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX SRC-604: detected steps with unknown style '%s' in "
-        "'%s'.",
-        m_StepsTypeStr.c_str(),
-        m_pSong != nullptr ? m_pSong->m_sSongFileName.c_str()
-                           : m_sFilename.c_str());
+    const std::string source =
+        m_pSong != nullptr ? m_pSong->m_sSongFileName : m_sFilename;
+    if (ShouldLogStepsIssue("unknown-style\n" + m_StepsTypeStr + "\n" + source)) {
+      LOG->UserLog(
+          "Steps file", source,
+          "uses unsupported style '%s'; further occurrences for this "
+          "file/style are suppressed.",
+          m_StepsTypeStr.c_str());
+    }
   } else if (m_StepsTypeStr == "") {
     m_StepsTypeStr = GAMEMAN->GetStepsTypeInfo(m_StepsType).szName;
   }
@@ -720,10 +736,17 @@ void Steps::Decompress() {
 
   if (!m_sFilename.empty() && m_sNoteDataCompressed.empty()) {
     // We have NoteData on disk and not in memory. Load it.
-    if (!this->GetNoteDataFromSimfile()) {
-      LOG->Warn(
-          "Couldn't load the %s chart's NoteData from \"%s\"",
-          DifficultyToString(m_Difficulty).c_str(), m_sFilename.c_str());
+    const bool loaded = this->GetNoteDataFromSimfile();
+    if (!loaded) {
+      const std::string difficulty = DifficultyToString(m_Difficulty);
+      if (ShouldLogStepsIssue(
+              "note-data-load\n" + m_sFilename + "\n" + difficulty)) {
+        LOG->UserLog(
+            "Steps file", m_sFilename,
+            "couldn't load the %s chart's NoteData; repeated warnings are "
+            "suppressed for this chart.",
+            difficulty.c_str());
+      }
       return;
     }
 

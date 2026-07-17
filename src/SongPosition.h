@@ -48,6 +48,7 @@ class SongPosition {
         -1;  // Set to -1 because some song may want to warp to row 0. -aj
     m_fWarpDestination =
         -1;  // Set when a warp is encountered. also see above. -aj
+    m_LastBeatUpdate = RageZeroTimer;
     m_fMusicSecondsVisible = 0;
     m_fSongBeatVisible = 0;
   }

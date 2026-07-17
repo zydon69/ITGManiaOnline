@@ -7093,7 +7093,6 @@ end
 
 function ITGOnline:EnforceRoomPhaseScreen(screenName)
 	if not self.currentRoomId or not self.currentRoom then
-		online_flow_trace("enforce_screen_skipped reason=no_current_room requestedScreen=" .. tostring(screenName or "nil"))
 		return false
 	end
 	local topScreen = top_screen()
@@ -7140,27 +7139,35 @@ function ITGOnline:NoteScreenChanged(screenName)
 			end
 			self.onlineNavigationInFlightKey = ""
 		self.onlineNavigationInFlightAt = 0
-		online_flow_trace("screen_changed previous=" .. tostring(previous)
-			.. " next=" .. tostring(screenName)
-			.. " topScreen=" .. tostring(topScreenName)
-			.. " screenMatchesTop=" .. tostring(tostring(screenName or "") == tostring(topScreenName or ""))
-			.. " generation=" .. tostring(self.screenGeneration)
-			.. " room=" .. tostring(self.currentRoomId or "nil")
-			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-			.. " playState=" .. tostring(playState)
-			.. " currentRoundKey=" .. tostring(self.currentRoomRoundKey or "")
-			.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
-			.. " optionsPresentedKey=" .. tostring(self.onlineOptionsPresentedSelectionKey or "")
-			.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
-			.. " evaluationReturnedKey=" .. tostring(self.onlineGameplayEvaluationReturnedKey or "")
-			.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
-			.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
-			.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
-			.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil")
-			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-			.. " syncInFlight=" .. tostring(self.syncInFlight == true)
-			.. " lobbyRefreshInFlight=" .. tostring(self.lobbyRefreshInFlight == true)
-			.. " lobbyRefreshQueued=" .. tostring(self.lobbyRefreshQueued == true))
+		local hasOnlineScreenContext = self.currentRoomId ~= nil
+			or self.currentRoom ~= nil
+			or self.connected == true
+			or self.socket ~= nil
+			or screenName == "ScreenOnlineLobbies"
+			or self.pendingJoinRoomId ~= nil
+		if hasOnlineScreenContext then
+			online_flow_trace("screen_changed previous=" .. tostring(previous)
+				.. " next=" .. tostring(screenName)
+				.. " topScreen=" .. tostring(topScreenName)
+				.. " screenMatchesTop=" .. tostring(tostring(screenName or "") == tostring(topScreenName or ""))
+				.. " generation=" .. tostring(self.screenGeneration)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+				.. " playState=" .. tostring(playState)
+				.. " currentRoundKey=" .. tostring(self.currentRoomRoundKey or "")
+				.. " activeRoundKey=" .. tostring(self.activeGameplayRoundKey or "")
+				.. " optionsPresentedKey=" .. tostring(self.onlineOptionsPresentedSelectionKey or "")
+				.. " evaluationShownKey=" .. tostring(self.onlineGameplayEvaluationShownKey or "")
+				.. " evaluationReturnedKey=" .. tostring(self.onlineGameplayEvaluationReturnedKey or "")
+				.. " finalResultsReady=" .. tostring(summary and summary.finalResultsReady == true)
+				.. " summaryPlayers=" .. tostring(summary and summary.players or "nil")
+				.. " summaryTerminal=" .. tostring(summary and summary.terminal or "nil")
+				.. " summaryFinalResults=" .. tostring(summary and summary.finalResults or "nil")
+				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+				.. " syncInFlight=" .. tostring(self.syncInFlight == true)
+				.. " lobbyRefreshInFlight=" .. tostring(self.lobbyRefreshInFlight == true)
+				.. " lobbyRefreshQueued=" .. tostring(self.lobbyRefreshQueued == true))
+		end
 		SL.Global.Online = SL.Global.Online or {}
 		SL.Global.Online.GameplayLayoutActive = self:IsOnlineGameplayScreen(screenName)
 			and self.currentRoomId ~= nil
@@ -14776,6 +14783,17 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 
 	local submitJoinRequest
 	submitJoinRequest = function(prefetchOk, prefetchDecoded, prefetchResponse)
+		if not online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId) then
+			online_flow_trace("join_room_prefetch_ignored reason=stale_intent"
+				.. " targetRoom=" .. tostring(joinIntentRoomId)
+				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+			safe_callback(callback, false, nil, {
+				cancelled = true,
+				errorMessage = "A newer room join attempt superseded this request.",
+			})
+			return
+		end
 		local freshPhase = "nil"
 		local freshRoomFound = false
 		if prefetchOk and type(prefetchDecoded) == "table" then
@@ -14823,7 +14841,34 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
 				pendingJoinRoomId = self.pendingJoinRoomId or "nil",
 			})
-			if ok and decoded and decoded.room then
+			local responseRoomId = decoded and decoded.room and decoded.room.id or nil
+			local pendingIntentMatches = online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId)
+			local realtimeAlreadyApplied = self.pendingJoinRoomId == nil
+				and online_room_ids_match(self.currentRoomId, joinIntentRoomId)
+			if ok and decoded and decoded.room
+				and not online_room_ids_match(responseRoomId, joinIntentRoomId) then
+				online_flow_trace("join_room_response_ignored reason=room_mismatch"
+					.. " targetRoom=" .. tostring(joinIntentRoomId)
+					.. " responseRoom=" .. tostring(responseRoomId or "nil"))
+				ok = false
+				decoded = nil
+				response = {
+					cancelled = true,
+					errorMessage = "The join response did not match the requested room.",
+				}
+			elseif ok and decoded and decoded.room
+				and not pendingIntentMatches and not realtimeAlreadyApplied then
+				online_flow_trace("join_room_response_ignored reason=stale_intent"
+					.. " targetRoom=" .. tostring(joinIntentRoomId)
+					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+				ok = false
+				decoded = nil
+				response = {
+					cancelled = true,
+					errorMessage = "A newer room join attempt superseded this response.",
+				}
+			elseif ok and decoded and decoded.room then
 				local room = self:ApplyDecodedRoomSnapshot(decoded, "join_room")
 				ok = room ~= nil
 				if room and online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId) then

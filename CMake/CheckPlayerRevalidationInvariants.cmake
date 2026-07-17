@@ -115,3 +115,39 @@ require_contains(
   "${player_cpp}"
   "Consuming attack note without target player"
   "untargetable attack notes are consumed instead of retriggered")
+require_contains(
+  "${player_cpp}"
+  "m_iMultiplayerUpdateCycle = (m_iMultiplayerUpdateCycle + 1) % 8"
+  "multiplayer staggering is scoped to each Player lifetime")
+require_not_contains(
+  "${player_cpp}"
+  "static int iCycle"
+  "multiplayer staggering must not leak across Player instances or sessions")
+require_contains(
+  "${player_cpp}"
+  "matrix_pushed = player->PushPlayerMatrix"
+  "notefield matrix cleanup tracks whether setup succeeded")
+require_contains(
+  "${player_cpp}"
+  "if (matrix_pushed)"
+  "notefield matrix cleanup only pops a matrix that was pushed")
+require_contains(
+  "${player_cpp}"
+  "FlashGhostRow skipped invalid state/row"
+  "ghost-row rendering validates public helper state and row")
+require_contains(
+  "${player_cpp}"
+  "currentMusicSecondsAtInput"
+  "step timing validates arithmetic after combining clock and rate")
+require_contains(
+  "${player_cpp}"
+  "Player::GetClosestNonEmptyRow next limit"
+  "closest-row search cannot overflow its row limits")
+require_contains(
+  "${player_cpp}"
+  "Player::Step attack duration"
+  "attack-note duration is finite and nonnegative")
+require_contains(
+  "${player_cpp}"
+  "m_iCurCombo <"
+  "combo counters saturate instead of wrapping")

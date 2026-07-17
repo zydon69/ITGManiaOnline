@@ -19,3 +19,19 @@ foreach(required
     message(FATAL_ERROR "Missing profile UI invariant: ${required}")
   endif()
 endforeach()
+
+file(READ
+  "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenProfileSaveSummary decorations.lua"
+  profile_save_summary_lua)
+
+string(FIND "${profile_save_summary_lua}" "PROFILEMAN:SaveMachineProfile()"
+  machine_save_at)
+if(machine_save_at EQUAL -1)
+  message(FATAL_ERROR "Profile save summary must persist the machine profile")
+endif()
+
+string(FIND "${profile_save_summary_lua}" ":Continue()" duplicate_continue_at)
+if(NOT duplicate_continue_at EQUAL -1)
+  message(FATAL_ERROR
+    "Profile save summary must rely on its loaded base actor for the single player-profile save")
+endif()

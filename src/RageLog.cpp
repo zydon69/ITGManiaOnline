@@ -99,13 +99,6 @@ RageLog::RageLog()
   g_fileUserLog = new RageFile;
   g_fileTimeLog = new RageFile;
 
-  if (m_bLogToDisk &&
-      !g_fileTimeLog->Open(TIME_PATH, RageFile::WRITE | RageFile::STREAMED)) {
-    fprintf(
-        stderr, "Couldn't open %s: %s\n", TIME_PATH,
-        g_fileTimeLog->GetError().c_str());
-  }
-
   g_Mutex = new RageMutex("Log");
 }
 
@@ -135,7 +128,8 @@ RageLog::~RageLog() {
 
 void RageLog::SetLogToDisk(bool b) {
   LockMut(*g_Mutex);
-  if (m_bLogToDisk == b) {
+  if (m_bLogToDisk == b &&
+      (!b || (g_fileLog->IsOpen() && g_fileTimeLog->IsOpen()))) {
     return;
   }
 
@@ -193,7 +187,7 @@ bool RageLog::ResetFile() {
 
 void RageLog::SetInfoToDisk(bool b) {
   LockMut(*g_Mutex);
-  if (m_bInfoToDisk == b) {
+  if (m_bInfoToDisk == b && (!b || g_fileInfo->IsOpen())) {
     return;
   }
 
@@ -215,7 +209,7 @@ void RageLog::SetInfoToDisk(bool b) {
 
 void RageLog::SetUserLogToDisk(bool b) {
   LockMut(*g_Mutex);
-  if (m_bUserLogToDisk == b) {
+  if (m_bUserLogToDisk == b && (!b || g_fileUserLog->IsOpen())) {
     return;
   }
 
@@ -243,6 +237,9 @@ void RageLog::SetFlushing(bool b) {
  * Windows. */
 void RageLog::SetShowLogOutput(bool show) {
   LockMut(*g_Mutex);
+  if (m_bShowLogOutput == show) {
+    return;
+  }
   m_bShowLogOutput = show;
 
 #if defined(_WIN32)
@@ -259,6 +256,9 @@ void RageLog::SetShowLogOutput(bool show) {
 }
 
 void RageLog::Trace(const char* fmt, ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   va_list va;
   va_start(va, fmt);
   std::string sBuff = vssprintf(fmt, va);
@@ -270,6 +270,9 @@ void RageLog::Trace(const char* fmt, ...) {
 /* Use this for more important information; it'll always be included
  * in crash dumps. */
 void RageLog::Info(const char* fmt, ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   va_list va;
   va_start(va, fmt);
   std::string sBuff = vssprintf(fmt, va);
@@ -279,6 +282,9 @@ void RageLog::Info(const char* fmt, ...) {
 }
 
 void RageLog::Warn(const char* fmt, ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   va_list va;
   va_start(va, fmt);
   std::string sBuff = vssprintf(fmt, va);
@@ -288,6 +294,9 @@ void RageLog::Warn(const char* fmt, ...) {
 }
 
 void RageLog::Time(const char* fmt, ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   va_list va;
   va_start(va, fmt);
   std::string sBuff = vssprintf(fmt, va);
@@ -299,6 +308,9 @@ void RageLog::Time(const char* fmt, ...) {
 void RageLog::UserLog(
     const std::string& sType, const std::string& sElement, const char* fmt,
     ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   va_list va;
   va_start(va, fmt);
   std::string sBuf = vssprintf(fmt, va);
@@ -314,6 +326,13 @@ void RageLog::UserLog(
 
 void RageLog::Write(int where, const std::string& sLine) {
   LockMut(*g_Mutex);
+
+  // User-facing content diagnostics have their own durable file.  Keeping
+  // them out of log.txt prevents malformed third-party packs from burying
+  // engine, renderer and crash diagnostics.
+  const bool writeToMainLog =
+      (where & WRITE_TO_USER_LOG) == 0 ||
+      (where & (WRITE_TO_INFO | WRITE_TO_TIME | WRITE_LOUD)) != 0;
 
   const char* const sWarningSeparator =
       "/////////////////////////////////////////";
@@ -365,7 +384,7 @@ void RageLog::Write(int where, const std::string& sLine) {
     }
 #endif
 
-    if (m_bLogToDisk && (where & WRITE_TO_INFO) && g_fileInfo->IsOpen()) {
+    if (m_bInfoToDisk && (where & WRITE_TO_INFO) && g_fileInfo->IsOpen()) {
       g_fileInfo->PutLine(sStr);
     }
     if (m_bUserLogToDisk && (where & WRITE_TO_USER_LOG) &&
@@ -377,13 +396,16 @@ void RageLog::Write(int where, const std::string& sLine) {
      * and stdout. */
     sStr.insert(0, sTimestamp);
 
-    if (m_bLogToDisk && (where & WRITE_TO_TIME)) {
+    if (m_bLogToDisk && (where & WRITE_TO_TIME) &&
+        g_fileTimeLog->IsOpen()) {
       g_fileTimeLog->PutLine(sStr);
     }
 
-    AddToRecentLogs(sStr);
+    if (writeToMainLog) {
+      AddToRecentLogs(sStr);
+    }
 
-    if (m_bLogToDisk && g_fileLog->IsOpen()) {
+    if (writeToMainLog && m_bLogToDisk && g_fileLog->IsOpen()) {
       g_fileLog->PutLine(sStr);
     }
   }
@@ -401,10 +423,18 @@ void RageLog::Write(int where, const std::string& sLine) {
 
 void RageLog::Flush() {
   LockMut(*g_Mutex);
-  g_fileLog->Flush();
-  g_fileInfo->Flush();
-  g_fileTimeLog->Flush();
-  g_fileUserLog->Flush();
+  if (g_fileLog->IsOpen()) {
+    g_fileLog->Flush();
+  }
+  if (g_fileInfo->IsOpen()) {
+    g_fileInfo->Flush();
+  }
+  if (g_fileTimeLog->IsOpen()) {
+    g_fileTimeLog->Flush();
+  }
+  if (g_fileUserLog->IsOpen()) {
+    g_fileUserLog->Flush();
+  }
 }
 
 #define NEWLINE "\n"
@@ -459,7 +489,7 @@ void RageLog::AddToRecentLogs(const std::string& str) {
 }
 
 const char* RageLog::GetRecentLog(int n) {
-  if (n >= BACKLOG_LINES || n >= backlog_cnt) {
+  if (n < 0 || n >= BACKLOG_LINES || n >= backlog_cnt) {
     return nullptr;
   }
 
@@ -494,6 +524,9 @@ const char* RageLog::GetAdditionalLog() {
 }
 
 void RageLog::MapLog(const std::string& key, const char* fmt, ...) {
+  if (fmt == nullptr) {
+    return;
+  }
   LockMut(*g_Mutex);
   std::string s;
 

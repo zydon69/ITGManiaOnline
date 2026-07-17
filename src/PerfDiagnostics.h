@@ -1,6 +1,8 @@
 #ifndef PERF_DIAGNOSTICS_H
 #define PERF_DIAGNOSTICS_H
 
+#include "Compiler.h"
+
 bool PerfDiagnosticsEnabled();
 void RefreshPerfDiagnosticsPreferenceCache();
 bool LogAudioUnderrunDiagnosticsEnabled();
@@ -16,6 +18,6 @@ bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
 bool LogGlobalOffsetDiagnosticsEnabled();
 bool ReviewSrcDiagnosticsEnabled();
-void LogReviewSrcDiagnostics(const char* fmt, ...);
+void LogReviewSrcDiagnostics(const char* fmt, ...) PRINTF(1, 2);
 
 #endif

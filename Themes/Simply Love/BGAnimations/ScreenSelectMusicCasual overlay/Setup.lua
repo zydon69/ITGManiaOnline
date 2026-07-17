@@ -73,14 +73,18 @@ local row = {
 ---------------------------------------------------------------------------
 -- a steps_type like "StepsType_Dance_Single" is needed so we can filter out steps that aren't suitable
 
-local current_style = GAMESTATE:GetCurrentStyle()
-if not current_style then
+local ok_style, current_style = pcall(function()
+	return GAMESTATE:GetCurrentStyle()
+end)
+if not ok_style or not current_style then
 	trace("missing current style")
 	return nil
 end
 
-local steps_type = current_style:GetStepsType()
-if not steps_type then
+local ok_steps_type, steps_type = pcall(function()
+	return current_style:GetStepsType()
+end)
+if not ok_steps_type or not steps_type then
 	trace("missing current steps type")
 	return nil
 end

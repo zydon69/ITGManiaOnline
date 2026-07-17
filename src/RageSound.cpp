@@ -364,7 +364,8 @@ bool RageSound::Load(std::string sSoundFilePath) {
 bool RageSound::Load(
     std::string sSoundFilePath, bool bPrecache,
     const RageSoundLoadParams* pParams) {
-  if (LOG != nullptr) {
+  if (LOG != nullptr &&
+      (LogPlayOnceDiagnosticsEnabled() || LogContentLoadDiagnosticsEnabled())) {
     LOG->Trace(
         "RageSound: Load \"%s\" (precache: %i)", sSoundFilePath.c_str(),
         bPrecache);

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <string>
 
 #include "RageUtil.h"
@@ -13,48 +15,56 @@
 
 REGISTER_CLASS_TRAITS(RageFileBasic, pCopy->Copy());
 
-RageFileObj::RageFileObj() {
-  m_pReadBuffer = nullptr;
-  m_pWriteBuffer = nullptr;
+RageFileObj::RageFileObj()
+    : m_bEOF(false),
+      m_iFilePos(0),
+      m_pReadBuffer(nullptr),
+      m_pReadBuf(nullptr),
+      m_iReadBufAvail(0),
+      m_pWriteBuffer(nullptr),
+      m_iWriteBufferPos(0),
+      m_iWriteBufferSize(0),
+      m_iWriteBufferUsed(0),
+      m_bCRC32Enabled(false),
+      m_iCRC32(0) {}
 
-  ResetReadBuf();
+RageFileObj::RageFileObj(const RageFileObj& cpy)
+    : RageFileBasic(cpy),
+      m_bEOF(cpy.m_bEOF),
+      m_iFilePos(cpy.m_iFilePos),
+      m_pReadBuffer(nullptr),
+      m_pReadBuf(nullptr),
+      m_iReadBufAvail(0),
+      m_pWriteBuffer(nullptr),
+      m_iWriteBufferPos(cpy.m_iWriteBufferPos),
+      m_iWriteBufferSize(0),
+      m_iWriteBufferUsed(0),
+      m_bCRC32Enabled(cpy.m_bCRC32Enabled),
+      m_iCRC32(cpy.m_iCRC32) {
+  std::unique_ptr<char[]> readBuffer;
+  std::unique_ptr<char[]> writeBuffer;
 
-  m_iReadBufAvail = 0;
-  m_iWriteBufferPos = 0;
-  m_iWriteBufferUsed = 0;
-  m_bEOF = false;
-  m_iFilePos = 0;
-  m_bCRC32Enabled = false;
-  m_iCRC32 = 0;
-}
-
-RageFileObj::RageFileObj(const RageFileObj& cpy) : RageFileBasic(cpy) {
   /* If the original file has a buffer, copy it. */
   if (cpy.m_pReadBuffer != nullptr) {
-    m_pReadBuffer = new char[BSIZE];
-    memcpy(m_pReadBuffer, cpy.m_pReadBuffer, BSIZE);
-
-    int iOffsetIntoBuffer = cpy.m_pReadBuf - cpy.m_pReadBuffer;
-    m_pReadBuf = m_pReadBuffer + iOffsetIntoBuffer;
-  } else {
-    m_pReadBuffer = nullptr;
+    readBuffer.reset(new char[BSIZE]);
+    memcpy(readBuffer.get(), cpy.m_pReadBuffer, BSIZE);
+    const ptrdiff_t rawOffset = cpy.m_pReadBuf - cpy.m_pReadBuffer;
+    const int offset = std::clamp<int>(rawOffset, 0, BSIZE);
+    m_iReadBufAvail =
+        std::clamp(cpy.m_iReadBufAvail, 0, BSIZE - offset);
+    m_pReadBuf = readBuffer.get() + offset;
   }
 
-  if (cpy.m_pWriteBuffer != nullptr) {
-    m_pWriteBuffer = new char[cpy.m_iWriteBufferSize];
-    memcpy(m_pWriteBuffer, cpy.m_pWriteBuffer, m_iWriteBufferUsed);
-  } else {
-    m_pWriteBuffer = nullptr;
+  if (cpy.m_pWriteBuffer != nullptr && cpy.m_iWriteBufferSize > 0) {
+    writeBuffer.reset(new char[cpy.m_iWriteBufferSize]);
+    m_iWriteBufferSize = cpy.m_iWriteBufferSize;
+    m_iWriteBufferUsed =
+        std::clamp(cpy.m_iWriteBufferUsed, 0, m_iWriteBufferSize);
+    memcpy(writeBuffer.get(), cpy.m_pWriteBuffer, m_iWriteBufferUsed);
   }
 
-  m_iReadBufAvail = cpy.m_iReadBufAvail;
-  m_bEOF = cpy.m_bEOF;
-  m_iFilePos = cpy.m_iFilePos;
-  m_iWriteBufferPos = cpy.m_iWriteBufferPos;
-  m_iWriteBufferSize = cpy.m_iWriteBufferSize;
-  m_iWriteBufferUsed = cpy.m_iWriteBufferUsed;
-  m_bCRC32Enabled = cpy.m_bCRC32Enabled;
-  m_iCRC32 = cpy.m_iCRC32;
+  m_pReadBuffer = readBuffer.release();
+  m_pWriteBuffer = writeBuffer.release();
 }
 
 RageFileObj::~RageFileObj() {
@@ -88,16 +98,37 @@ int RageFileObj::Seek(int iOffset) {
 }
 
 int RageFileObj::Seek(int offset, int whence) {
+  int64_t target = offset;
   switch (whence) {
     case SEEK_CUR:
-      return Seek(Tell() + offset);
+      target += Tell();
+      break;
     case SEEK_END:
-      offset += GetFileSize();
+      target += GetFileSize();
+      break;
+    case SEEK_SET:
+      break;
+    default:
+      SetError("Invalid seek origin");
+      return -1;
   }
-  return Seek((int)offset);
+  if (target < std::numeric_limits<int>::min() ||
+      target > std::numeric_limits<int>::max()) {
+    SetError("Seek target is outside the supported range");
+    return -1;
+  }
+  return Seek(static_cast<int>(target));
 }
 
 int RageFileObj::Read(void* pBuffer, size_t iBytes) {
+  if (iBytes > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    SetError("Read size is outside the supported range");
+    return -1;
+  }
+  if (pBuffer == nullptr && iBytes != 0) {
+    SetError("Read buffer is null");
+    return -1;
+  }
   int iRet = 0;
 
   while (!m_bEOF && iBytes > 0) {
@@ -133,6 +164,10 @@ int RageFileObj::Read(void* pBuffer, size_t iBytes) {
       if (iFromFile == -1) {
         return -1;
       }
+      if (iFromFile < 0 || static_cast<size_t>(iFromFile) > iBytes) {
+        SetError("Reader returned an invalid byte count");
+        return -1;
+      }
 
       if (iFromFile == 0) {
         m_bEOF = true;
@@ -161,7 +196,15 @@ int RageFileObj::Read(void* pBuffer, size_t iBytes) {
 }
 
 int RageFileObj::Read(std::string& sBuffer, int iBytes) {
-  sBuffer.reserve(iBytes != -1 ? iBytes : this->GetFileSize());
+  sBuffer.clear();
+  if (iBytes < -1) {
+    SetError("Read size is negative");
+    return -1;
+  }
+  const int reserveBytes = iBytes != -1 ? iBytes : this->GetFileSize();
+  if (reserveBytes > 0) {
+    sBuffer.reserve(static_cast<size_t>(reserveBytes));
+  }
 
   int iRet = 0;
   char buf[4096];
@@ -183,13 +226,20 @@ int RageFileObj::Read(std::string& sBuffer, int iBytes) {
     iRet += iGot;
   }
 
-  sBuffer.erase(sBuffer.begin() + iRet, sBuffer.end());
-
   return iRet;
 }
 
 int RageFileObj::Read(void* pBuffer, size_t iBytes, int iNmemb) {
-  const int iRet = Read(pBuffer, iBytes * iNmemb);
+  if (iBytes == 0 || iNmemb == 0) {
+    return 0;
+  }
+  if (iNmemb < 0 ||
+      iBytes > static_cast<size_t>(std::numeric_limits<int>::max()) /
+                   static_cast<size_t>(iNmemb)) {
+    SetError("Read element count is outside the supported range");
+    return -1;
+  }
+  const int iRet = Read(pBuffer, iBytes * static_cast<size_t>(iNmemb));
   if (iRet == -1) {
     return -1;
   }
@@ -198,8 +248,10 @@ int RageFileObj::Read(void* pBuffer, size_t iBytes, int iNmemb) {
    * bytes. Seek back.  XXX: seeking is very slow for eg. deflated ZIPs.  If the
    * block is small enough, we may be able to stuff the extra data into the
    * buffer. */
-  const int iExtra = iRet % iBytes;
-  Seek(Tell() - iExtra);
+  const int iExtra = iRet % static_cast<int>(iBytes);
+  if (iExtra != 0 && Seek(Tell() - iExtra) == -1) {
+    return -1;
+  }
 
   return iRet / iBytes;
 }
@@ -215,16 +267,33 @@ int RageFileObj::EmptyWriteBuf() {
      * Only seek if needed. */
     bool bSeeked = (m_iWriteBufferPos + m_iWriteBufferUsed != m_iFilePos);
     if (bSeeked) {
-      SeekInternal(m_iWriteBufferPos);
+      if (SeekInternal(m_iWriteBufferPos) != m_iWriteBufferPos) {
+        SetError("Failed to seek to buffered write position");
+        return -1;
+      }
     }
 
     int iRet = WriteInternal(m_pWriteBuffer, m_iWriteBufferUsed);
 
-    if (bSeeked) {
-      SeekInternal(m_iFilePos);
-    }
     if (iRet == -1) {
       return iRet;
+    }
+    if (iRet < 0 || iRet > m_iWriteBufferUsed) {
+      SetError("Writer returned an invalid buffered byte count");
+      return -1;
+    }
+    if (iRet < m_iWriteBufferUsed) {
+      memmove(
+          m_pWriteBuffer, m_pWriteBuffer + iRet,
+          static_cast<size_t>(m_iWriteBufferUsed - iRet));
+      m_iWriteBufferPos += iRet;
+      m_iWriteBufferUsed -= iRet;
+      SetError("Partial buffered write");
+      return -1;
+    }
+    if (bSeeked && SeekInternal(m_iFilePos) != m_iFilePos) {
+      SetError("Failed to restore file position after buffered write");
+      return -1;
     }
   }
 
@@ -234,6 +303,14 @@ int RageFileObj::EmptyWriteBuf() {
 }
 
 int RageFileObj::Write(const void* pBuffer, size_t iBytes) {
+  if (iBytes > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    SetError("Write size is outside the supported range");
+    return -1;
+  }
+  if (pBuffer == nullptr && iBytes != 0) {
+    SetError("Write buffer is null");
+    return -1;
+  }
   if (m_pWriteBuffer != nullptr) {
     /* If the file position has moved away from the write buffer, or the
      * incoming data won't fit in the buffer, flush. */
@@ -263,21 +340,33 @@ int RageFileObj::Write(const void* pBuffer, size_t iBytes) {
 
   int iRet = WriteInternal(pBuffer, iBytes);
   if (iRet != -1) {
+    if (iRet < 0 || static_cast<size_t>(iRet) > iBytes) {
+      SetError("Writer returned an invalid byte count");
+      return -1;
+    }
     m_iFilePos += iRet;
-    if (m_bCRC32Enabled) {
-      CRC32(m_iCRC32, pBuffer, iBytes);
+    if (m_bCRC32Enabled && iRet > 0) {
+      CRC32(m_iCRC32, pBuffer, iRet);
     }
   }
   return iRet;
 }
 
 int RageFileObj::Write(const void* pBuffer, size_t iBytes, int iNmemb) {
-  /* Simple write.  We never return partial writes. */
-  int iRet = Write(pBuffer, iBytes * iNmemb) / iBytes;
+  if (iBytes == 0 || iNmemb == 0) {
+    return 0;
+  }
+  if (iNmemb < 0 ||
+      iBytes > static_cast<size_t>(std::numeric_limits<int>::max()) /
+                   static_cast<size_t>(iNmemb)) {
+    SetError("Write element count is outside the supported range");
+    return -1;
+  }
+  const int iRet = Write(pBuffer, iBytes * static_cast<size_t>(iNmemb));
   if (iRet == -1) {
     return -1;
   }
-  return iRet / iBytes;
+  return iRet / static_cast<int>(iBytes);
 }
 
 int RageFileObj::Flush() {
@@ -295,6 +384,10 @@ void RageFileObj::EnableReadBuffering() {
 }
 
 void RageFileObj::EnableWriteBuffering(int iBytes) {
+  if (iBytes <= 0) {
+    SetError("Write buffer size must be positive");
+    return;
+  }
   if (m_pWriteBuffer == nullptr) {
     m_pWriteBuffer = new char[iBytes];
     m_iWriteBufferPos = m_iFilePos;
@@ -313,7 +406,7 @@ void RageFileObj::EnableCRC32(bool bOn) {
 }
 
 bool RageFileObj::GetCRC32(uint32_t* iRet) {
-  if (!m_bCRC32Enabled) {
+  if (!m_bCRC32Enabled || iRet == nullptr) {
     return false;
   }
 
@@ -415,10 +508,12 @@ int RageFileObj::GetLine(std::string& sOut) {
 // #endif
 
 int RageFileObj::PutLine(const std::string& sStr) {
-  if (Write(sStr) == -1) {
+  if (Write(sStr) != static_cast<int>(sStr.size())) {
     return -1;
   }
-  return Write(std::string(NEWLINE));
+  const std::string newline(NEWLINE);
+  const int written = Write(newline);
+  return written == static_cast<int>(newline.size()) ? written : -1;
 }
 
 /* Fill the internal buffer.  This never marks EOF, since this is an internal,
@@ -437,6 +532,11 @@ int RageFileObj::FillReadBuf() {
                           "%p, %p, %i", static_cast<void*>(m_pReadBuf),
                           static_cast<void*>(m_pReadBuffer), BSIZE));
   const int iSize = this->ReadInternal(m_pReadBuf + m_iReadBufAvail, iBufAvail);
+
+  if (iSize < -1 || iSize > iBufAvail) {
+    SetError("Reader returned an invalid buffered byte count");
+    return -1;
+  }
 
   if (iSize > 0) {
     m_iReadBufAvail += iSize;

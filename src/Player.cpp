@@ -293,6 +293,15 @@ static float SanitizePlayerNonNegative(float value, float fallback,
   return value;
 }
 
+static int AddRowsClamped(int row, int delta, const char* context) {
+  const int64_t sum = static_cast<int64_t>(row) + static_cast<int64_t>(delta);
+  if (sum < 0 || sum > MAX_NOTE_ROW) {
+    LOG->Warn("SRC_AUDIT_FIX: Clamped note row sum %lld in %s.",
+              static_cast<long long>(sum), context);
+  }
+  return static_cast<int>(std::clamp<int64_t>(sum, 0, MAX_NOTE_ROW));
+}
+
 static float GetSafePadStickSeconds() {
   if (PREFSMAN == nullptr || !std::isfinite(PREFSMAN->m_fPadStickSeconds.Get())) {
     return 0.0f;
@@ -573,6 +582,7 @@ Player::Player(NoteData& nd, bool bVisibleParts) : m_NoteData(nd) {
   m_iPerfTapJudgmentsSinceLastSnapshot = 0;
   m_iPerfHoldJudgmentsSinceLastSnapshot = 0;
   m_iPerfMineJudgmentsSinceLastSnapshot = 0;
+  m_iMultiplayerUpdateCycle = 0;
 }
 
 Player::~Player() {
@@ -1268,10 +1278,9 @@ void Player::Update(float fDeltaTime) {
      * in this mode, this doesn't degrade gameplay.  Run 4 players per update,
      * which means 12 Players in 3-difficulty mode.
      */
-    static int iCycle = 0;
-    iCycle = (iCycle + 1) % 8;
+    m_iMultiplayerUpdateCycle = (m_iMultiplayerUpdateCycle + 1) % 8;
 
-    if ((m_pPlayerState->m_mp % 8) != iCycle) {
+    if ((m_pPlayerState->m_mp % 8) != m_iMultiplayerUpdateCycle) {
       return;
     }
   }
@@ -2311,16 +2320,17 @@ void Player::DrawPrimitives() {
   }
 }
 
-void Player::PushPlayerMatrix(float x, float skew, float center_y) {
+bool Player::PushPlayerMatrix(float x, float skew, float center_y) {
   if (DISPLAY == nullptr) {
     LOG->Warn("SRC_AUDIT_FIX SRC-2029: PushPlayerMatrix skipped without DISPLAY.");
-    return;
+    return false;
   }
   DISPLAY->CameraPushMatrix();
   DISPLAY->PushMatrix();
   DISPLAY->LoadMenuPerspective(
       45, SCREEN_WIDTH, SCREEN_HEIGHT,
       SCALE(skew, 0.1f, 1.0f, x, SCREEN_CENTER_X), center_y);
+  return true;
 }
 
 void Player::PopPlayerMatrix() {
@@ -2405,7 +2415,7 @@ void Player::ResetGameplayPerfCounters() {
 Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
     Player* p, float x, float tilt, float skew, float mini, float center_y,
     bool reverse)
-    : player(p) {
+    : player(p), matrix_pushed(false) {
   if (player == nullptr || player->m_pNoteField == nullptr) {
     LOG->Warn(
         "SRC_AUDIT_FIX SRC-2029: PlayerNoteFieldPositioner skipped invalid "
@@ -2420,7 +2430,7 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
   mini = SanitizePlayerFinite(mini, 0.0f, "PlayerNoteFieldPositioner mini");
   center_y = SanitizePlayerFinite(
       center_y, SCREEN_CENTER_Y, "PlayerNoteFieldPositioner center_y");
-  player->PushPlayerMatrix(x, skew, center_y);
+  matrix_pushed = player->PushPlayerMatrix(x, skew, center_y);
   float reverse_mult = (reverse ? -1 : 1);
   original_y = player->m_pNoteField->GetY();
   float tilt_degrees = SCALE(tilt, -1.f, +1.f, +30, -30) * reverse_mult;
@@ -2462,7 +2472,9 @@ Player::PlayerNoteFieldPositioner::~PlayerNoteFieldPositioner() {
     return;
   }
   player->m_pNoteField->SetY(original_y);
-  player->PopPlayerMatrix();
+  if (matrix_pushed) {
+    player->PopPlayerMatrix();
+  }
 }
 
 void Player::DrawTapJudgments() {
@@ -2761,10 +2773,16 @@ int Player::GetClosestNonEmptyRow(
     return -1;
   }
   // Start at iIndexStartLookingAt and search outward.
+  const int nextLimit = AddRowsClamped(
+      iNoteRow, std::max(0, iMaxRowsAhead),
+      "Player::GetClosestNonEmptyRow next limit");
+  const int previousLimit = AddRowsClamped(
+      iNoteRow, -std::max(0, iMaxRowsBehind),
+      "Player::GetClosestNonEmptyRow previous limit");
   int iNextRow = GetClosestNonEmptyRowDirectional(
-      iNoteRow, iNoteRow + iMaxRowsAhead, bAllowGraded, true);
+      iNoteRow, nextLimit, bAllowGraded, true);
   int iPrevRow = GetClosestNonEmptyRowDirectional(
-      iNoteRow - iMaxRowsBehind, iNoteRow, bAllowGraded, false);
+      previousLimit, iNoteRow, bAllowGraded, false);
 
   if (iNextRow == -1 && iPrevRow == -1) {
     return -1;
@@ -2916,7 +2934,6 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
           tn.iKeysoundIndex);
       return;
     }
-    m_vKeysounds[tn.iKeysoundIndex].Play(false);
     Preference<float>* pVolume =
         Preference<float>::GetPreferenceByName("SoundVolume");
     float fVol = pVolume != nullptr
@@ -2924,6 +2941,7 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
                            pVolume->Get(), 1.0f, "Player::PlayKeysound volume")
                      : 1.0f;
     m_vKeysounds[tn.iKeysoundIndex].SetProperty("Volume", fVol);
+    m_vKeysounds[tn.iKeysoundIndex].Play(false);
   }
 }
 
@@ -3162,9 +3180,9 @@ void Player::Step(
     float fNoteOffset = 0.0f;
     // we need this later if we are autosyncing
     const float fStepBeat = NoteRowToBeat(iRowOfOverlappingNoteOrRow);
-      const float fStepSeconds = SanitizePlayerFinite(
-          m_Timing->GetElapsedTimeFromBeat(fStepBeat), fPositionSeconds,
-          "Player::Step note seconds");
+    const float fStepSeconds = SanitizePlayerFinite(
+        m_Timing->GetElapsedTimeFromBeat(fStepBeat), fPositionSeconds,
+        "Player::Step note seconds");
 
     if (row == -1) {
       // We actually stepped on the note this long ago:
@@ -3173,17 +3191,22 @@ void Player::Step(
       /* GAMESTATE->m_fMusicSeconds is the music time as of
        * GAMESTATE->m_LastBeatUpdate. Figure out what the music time is as of
        * now. */
-      const float fCurrentMusicSeconds =
-          m_pPlayerState->m_Position.m_fMusicSeconds +
-          (fLastBeatUpdate * musicRate);
+      const double currentMusicSecondsAtInput =
+          static_cast<double>(currentMusicSeconds) +
+          static_cast<double>(fLastBeatUpdate) * musicRate;
+      const float fCurrentMusicSeconds = SanitizePlayerFinite(
+          static_cast<float>(currentMusicSecondsAtInput), currentMusicSeconds,
+          "Player::Step current music seconds");
 
       // ... which means it happened at this point in the music:
-      const float fMusicSeconds =
-          fCurrentMusicSeconds - fTimeSinceStep * musicRate;
+      const float fMusicSeconds = SanitizePlayerFinite(
+          fCurrentMusicSeconds - fTimeSinceStep * musicRate,
+          fCurrentMusicSeconds, "Player::Step input music seconds");
 
       // The offset from the actual step in seconds:
-      fNoteOffset =
-          (fStepSeconds - fMusicSeconds) / musicRate;  // account for music rate
+      fNoteOffset = SanitizePlayerFinite(
+          (fStepSeconds - fMusicSeconds) / musicRate, 0.0f,
+          "Player::Step note offset");
                                         /*
                                         LOG->Trace("step was %.3f ago, music is off by %f: %f vs %f, step was %f
                                         off",                                   fTimeSinceStep,
@@ -3192,11 +3215,11 @@ void Player::Step(
                                         */
     }
 
-      const float fSecondsFromExact = std::abs(fNoteOffset);
-      if (!std::isfinite(fSecondsFromExact)) {
-        LOG->Warn("SRC_AUDIT_FIX SRC-2035: Ignoring non-finite note offset.");
-        return;
-      }
+    const float fSecondsFromExact = std::abs(fNoteOffset);
+    if (!std::isfinite(fSecondsFromExact)) {
+      LOG->Warn("SRC_AUDIT_FIX SRC-2035: Ignoring non-finite note offset.");
+      return;
+    }
 
     TapNote tnDummy = TAP_ORIGINAL_TAP;
     TapNote* pTN = nullptr;
@@ -3416,10 +3439,12 @@ void Player::Step(
       score = TNS_None;  // don't score this as anything
 
       // put attack in effect
+      const float attackDuration = SanitizePlayerNonNegative(
+          pTN->fAttackDurationSeconds, 0.0f, "Player::Step attack duration");
       Attack attack(
           ATTACK_LEVEL_1,
           -1,  // now
-          pTN->fAttackDurationSeconds, pTN->sAttackModifiers, true, false);
+          attackDuration, pTN->sAttackModifiers, true, false);
 
       // TODO: Remove use of PlayerNumber
       PlayerNumber pnToAttack = OPPOSITE_PLAYER[m_pPlayerState->m_PlayerNumber];
@@ -3865,6 +3890,12 @@ void Player::UpdateJudgedRows() {
 }
 
 void Player::FlashGhostRow(int iRow) {
+  if (m_pPlayerState == nullptr || iRow < 0 || iRow > MAX_NOTE_ROW) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX SRC-2030: FlashGhostRow skipped invalid state/row %i.",
+        iRow);
+    return;
+  }
   TapNoteScore lastTNS =
       NoteDataWithScoring::LastTapNoteWithResult(m_NoteData, iRow).result.tns;
   const bool bBlind =
@@ -4334,11 +4365,13 @@ float Player::GetMaxStepDistanceSeconds() {
                 GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate,
                 "Player::GetMaxStepDistanceSeconds")
           : 1.0f;
-  float f = rate * fMax;
+  const float f = SanitizePlayerNonNegative(
+      rate * fMax, 0.0f, "Player::GetMaxStepDistanceSeconds scaled window");
   const float latency = SanitizePlayerNonNegative(
       m_fMaxInputLatencySeconds, 0.0f,
       "Player::GetMaxStepDistanceSeconds latency");
-  return f + latency;
+  return SanitizePlayerNonNegative(
+      f + latency, f, "Player::GetMaxStepDistanceSeconds result");
 }
 
 void Player::FadeToFail() {
@@ -4602,11 +4635,17 @@ void Player::IncrementComboOrMissCombo(bool bComboOrMissCombo) {
 
   if (m_pPlayerStageStats) {
     if (bComboOrMissCombo) {
-      m_pPlayerStageStats->m_iCurCombo++;
+      if (m_pPlayerStageStats->m_iCurCombo <
+          std::numeric_limits<unsigned int>::max()) {
+        ++m_pPlayerStageStats->m_iCurCombo;
+      }
       m_pPlayerStageStats->m_iCurMissCombo = 0;
     } else {
       m_pPlayerStageStats->m_iCurCombo = 0;
-      m_pPlayerStageStats->m_iCurMissCombo++;
+      if (m_pPlayerStageStats->m_iCurMissCombo <
+          std::numeric_limits<unsigned int>::max()) {
+        ++m_pPlayerStageStats->m_iCurMissCombo;
+      }
     }
     SetCombo(
         m_pPlayerStageStats->m_iCurCombo, m_pPlayerStageStats->m_iCurMissCombo);

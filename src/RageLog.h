@@ -37,7 +37,7 @@ class RageLog {
   void SetShowLogOutput(bool show);  // enable or disable logging to stdout
   void SetLogToDisk(bool b);         // enable or disable logging to file
   void SetInfoToDisk(bool b);     // enable or disable logging info.txt to file
-  void SetUserLogToDisk(bool b);  // enable or disable logging user.txt to file
+  void SetUserLogToDisk(bool b);  // enable or disable userlog.txt output
   void SetFlushing(bool b);       // enable or disable flushing
 
  private:

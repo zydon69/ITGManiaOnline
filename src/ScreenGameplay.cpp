@@ -391,6 +391,60 @@ static float FiniteNonNegativeOr(float value, float fallback) {
   return IsFiniteNonNegative(value) ? value : fallback;
 }
 
+static void IncrementGameplayCount(int& value, const char* field) {
+  if (value < 0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: normalized negative gameplay counter %s=%i.", field,
+        value);
+    value = 0;
+  }
+  if (value == std::numeric_limits<int>::max()) {
+    LOG->Warn("SRC_AUDIT_FIX: saturated gameplay counter %s.", field);
+    return;
+  }
+  ++value;
+}
+
+static void AccumulateGameplaySeconds(
+    float& value, double delta, const char* field) {
+  if (!std::isfinite(value) || value < 0.0f) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: normalized invalid gameplay duration %s=%.6f.", field,
+        value);
+    value = 0.0f;
+  }
+  if (!std::isfinite(delta) || delta < 0.0) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: rejected invalid gameplay duration delta %s=%.6f.",
+        field, delta);
+    return;
+  }
+  const double total = static_cast<double>(value) + delta;
+  value = total <= std::numeric_limits<float>::max()
+              ? static_cast<float>(total)
+              : std::numeric_limits<float>::max();
+}
+
+static void AccumulateSignedGameplaySeconds(
+    float& value, double delta, const char* field) {
+  if (!std::isfinite(value)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: normalized non-finite gameplay value %s=%.6f.", field,
+        value);
+    value = 0.0f;
+  }
+  if (!std::isfinite(delta)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: rejected non-finite gameplay delta %s=%.6f.", field,
+        delta);
+    return;
+  }
+  const double total = static_cast<double>(value) + delta;
+  value = static_cast<float>(std::clamp(
+      total, -static_cast<double>(std::numeric_limits<float>::max()),
+      static_cast<double>(std::numeric_limits<float>::max())));
+}
+
 static float GetGameplayStartLeadInSeconds(
     const Song* song, float minTimeToNotes, float minTimeToMusic) {
   minTimeToNotes = FiniteNonNegativeOr(minTimeToNotes, 0.0f);
@@ -473,14 +527,17 @@ static bool HasCoreGameplayManagers(const char* context) {
 
 static bool HasRenderableGameplayManagers(const char* context) {
   if (HasCoreGameplayManagers(context) && THEME != nullptr &&
-      SCREENMAN != nullptr && MESSAGEMAN != nullptr) {
+      THEME->IsThemeLoaded() && LUA != nullptr && SCREENMAN != nullptr &&
+      MESSAGEMAN != nullptr) {
     return true;
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX: %s missing render managers (THEME=%p SCREENMAN=%p "
-      "MESSAGEMAN=%p).",
-      context, static_cast<void*>(THEME), static_cast<void*>(SCREENMAN),
+      "SRC_AUDIT_FIX: %s missing render runtime (THEME=%p loaded=%d LUA=%p "
+      "SCREENMAN=%p MESSAGEMAN=%p).",
+      context, static_cast<void*>(THEME),
+      THEME != nullptr && THEME->IsThemeLoaded() ? 1 : 0,
+      static_cast<void*>(LUA), static_cast<void*>(SCREENMAN),
       static_cast<void*>(MESSAGEMAN));
   return false;
 }
@@ -2096,6 +2153,34 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
         iSongIndex, m_apSongsQueue.size());
     return false;
   }
+
+  // Preflight every participant before mutating shared song or player state.
+  FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
+    PlayerState* playerState =
+        GetPlayerStateOrWarn(*pi, "ScreenGameplay::SetupSong preflight");
+    if (playerState == nullptr || pi->m_pPlayer == nullptr ||
+        !IsUsableStepsAndTrailIndex(
+            *pi, "ScreenGameplay::SetupSong preflight") ||
+        iSongIndex >= static_cast<int>(pi->m_vpStepsQueue.size()) ||
+        iSongIndex >= static_cast<int>(pi->m_asModifiersQueue.size()) ||
+        pi->m_vpStepsQueue[iSongIndex] == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SetupSong preflight rejected incomplete player %s "
+          "at song index %i.",
+          pi->GetName().c_str(), iSongIndex);
+      return false;
+    }
+
+    const PlayerNumber stepsPn = pi->GetStepsAndTrailIndex();
+    const PlayerNumber stylePn = pi->IsMultiPlayer() ? PLAYER_INVALID : stepsPn;
+    if (GAMESTATE->GetCurrentStyle(stylePn) == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX: SetupSong preflight rejected missing style for %s.",
+          pi->GetName().c_str());
+      return false;
+    }
+  }
+
   ApplyRoutineSharedMiniToPlayerStates("ScreenGameplay::SetupSong begin");
   bool complete = true;
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
@@ -2264,22 +2349,6 @@ void ScreenGameplay::LoadNextSong() {
     return;
   }
 
-  FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
-    PlayerStageStats* pss = pi->GetPlayerStageStats();
-    if (pss == nullptr) {
-      continue;
-    }
-    pss->m_iSongsPlayed++;
-    if (pi->m_ptextCourseSongNumber) {
-      pi->m_ptextCourseSongNumber->SetText(ssprintf(
-          SONG_NUMBER_FORMAT.GetValue().c_str(), pss->m_iSongsPassed + 1));
-    }
-  }
-  if (IsCurrentStyleSharedSides()) {
-    PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
-    routine.m_iSongsPlayed++;
-  }
-
   if (GAMESTATE->m_bMultiplayer) {
     FOREACH_ENUM(MultiPlayer, mp)
     this->UpdateStageStats(mp);
@@ -2295,7 +2364,6 @@ void ScreenGameplay::LoadNextSong() {
     LOG->Warn("SRC_AUDIT_FIX: LoadNextSong selected a null song.");
     return;
   }
-  STATSMAN->m_CurStageStats.m_vpPlayedSongs.push_back(GAMESTATE->m_pCurSong);
   m_iLightsRowLastCrossed = 0;
   m_iBeatRowLastCrossed = 0;
   ZERO(m_iNoteRowLastCrossed);
@@ -2328,6 +2396,23 @@ void ScreenGameplay::LoadNextSong() {
     return;
   }
 
+  FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
+    PlayerStageStats* pss = pi->GetPlayerStageStats();
+    if (pss == nullptr) {
+      continue;
+    }
+    IncrementGameplayCount(pss->m_iSongsPlayed, "player songs played");
+    if (pi->m_ptextCourseSongNumber) {
+      pi->m_ptextCourseSongNumber->SetText(ssprintf(
+          SONG_NUMBER_FORMAT.GetValue().c_str(), pss->m_iSongsPassed + 1));
+    }
+  }
+  if (IsCurrentStyleSharedSides()) {
+    PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
+    IncrementGameplayCount(routine.m_iSongsPlayed, "routine songs played");
+  }
+  STATSMAN->m_CurStageStats.m_vpPlayedSongs.push_back(GAMESTATE->m_pCurSong);
+
   Song* pSong = GAMESTATE->m_pCurSong;
   bool bSentRoutineSharedOnNextSong = false;
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
@@ -2346,7 +2431,7 @@ void ScreenGameplay::LoadNextSong() {
           pi->GetName().c_str());
       continue;
     }
-    ++pss->m_iStepsPlayed;
+    IncrementGameplayCount(pss->m_iStepsPlayed, "player steps played");
 
     if (pi->m_ptextStepsDescription) {
       pi->m_ptextStepsDescription->SetText(pSteps->GetDescription());
@@ -2439,7 +2524,9 @@ void ScreenGameplay::LoadNextSong() {
     }
   }
   if (IsCurrentStyleSharedSides()) {
-    STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iStepsPlayed++;
+    IncrementGameplayCount(
+        STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iStepsPlayed,
+        "routine steps played");
   }
 
   if (m_pCombinedLifeMeter != nullptr) {
@@ -2739,28 +2826,37 @@ void ScreenGameplay::StartPlayingSong(
     }
   }
 
-  ASSERT(!m_pSoundMusic->IsPlaying());
+  if (m_pSoundMusic->IsPlaying()) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StartPlayingSong stopped an already-playing sound "
+        "before restart.");
+    m_pSoundMusic->StopPlaying();
+  }
   {
     float fSecondsToStartFadingOutMusic, fSecondsToStartTransitioningOut;
     GetMusicEndTiming(
         fSecondsToStartFadingOutMusic, fSecondsToStartTransitioningOut);
 
+    const float musicLength = FiniteNonNegativeOr(
+        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds,
+        fSecondsToStartFadingOutMusic);
     if (IsFiniteNonNegative(fSecondsToStartFadingOutMusic) &&
-        fSecondsToStartFadingOutMusic <
-            GAMESTATE->m_pCurSong->m_fMusicLengthSeconds) {
+        fSecondsToStartFadingOutMusic < musicLength) {
       p.m_fFadeOutSeconds = FiniteNonNegativeOr(MUSIC_FADE_OUT_SECONDS, 0.0f);
-      p.m_LengthSeconds =
-          fSecondsToStartFadingOutMusic + p.m_fFadeOutSeconds - p.m_StartSecond;
-      if (!IsFiniteNonNegative(p.m_LengthSeconds)) {
-        p.m_LengthSeconds = 0.0f;
+      const double lengthSeconds =
+          static_cast<double>(fSecondsToStartFadingOutMusic) +
+          static_cast<double>(p.m_fFadeOutSeconds) -
+          static_cast<double>(p.m_StartSecond);
+      if (std::isfinite(lengthSeconds) && lengthSeconds >= 0.0 &&
+          lengthSeconds <= std::numeric_limits<float>::max()) {
+        p.m_LengthSeconds = static_cast<float>(lengthSeconds);
+      } else {
+        p.m_LengthSeconds = -1.0f;
       }
     }
   }
   if (!std::isfinite(p.m_StartSecond)) {
     p.m_StartSecond = 0.0f;
-  }
-  if (m_pSoundMusic->IsPlaying()) {
-    m_pSoundMusic->StopPlaying();
   }
   m_pSoundMusic->Play(false, &p);
   if (m_bPaused) {
@@ -3022,7 +3118,15 @@ void ScreenGameplay::GetMusicEndTiming(
     fLastStepSeconds =
         FiniteNonNegativeOr(GAMESTATE->m_pCurSong->GetLastSecond(), 0.0f);
   }
-  fLastStepSeconds += Player::GetMaxStepDistanceSeconds();
+  const float maxStepDistance =
+      FiniteNonNegativeOr(Player::GetMaxStepDistanceSeconds(), 0.0f);
+  const double lastStepWithJudgment =
+      static_cast<double>(fLastStepSeconds) + maxStepDistance;
+  fLastStepSeconds =
+      std::isfinite(lastStepWithJudgment) &&
+              lastStepWithJudgment <= std::numeric_limits<float>::max()
+          ? static_cast<float>(lastStepWithJudgment)
+          : std::numeric_limits<float>::max();
 
   float fTransitionLength;
   if (!GAMESTATE->IsCourseMode() || IsLastSong()) {
@@ -3036,15 +3140,22 @@ void ScreenGameplay::GetMusicEndTiming(
   fSecondsToStartTransitioningOut = fLastStepSeconds;
 
   // Align the end of the music fade to the end of the transition.
-  float fSecondsToFinishFadingOutMusic =
-      fSecondsToStartTransitioningOut + fTransitionLength;
-  if (fSecondsToFinishFadingOutMusic <
-      GAMESTATE->m_pCurSong->m_fMusicLengthSeconds) {
+  const float musicLength = FiniteNonNegativeOr(
+      GAMESTATE->m_pCurSong->m_fMusicLengthSeconds, fLastStepSeconds);
+  const double finishFade =
+      static_cast<double>(fSecondsToStartTransitioningOut) +
+      static_cast<double>(fTransitionLength);
+  const float fSecondsToFinishFadingOutMusic =
+      std::isfinite(finishFade) &&
+              finishFade <= std::numeric_limits<float>::max()
+          ? static_cast<float>(finishFade)
+          : std::numeric_limits<float>::max();
+  if (fSecondsToFinishFadingOutMusic < musicLength) {
     fSecondsToStartFadingOutMusic =
         fSecondsToFinishFadingOutMusic - musicFadeOutSeconds;
   } else {
     fSecondsToStartFadingOutMusic =
-        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds;  // don't fade
+        musicLength;  // don't fade
   }
 
   /* Make sure we keep going long enough to register a miss for the last note,
@@ -3055,9 +3166,17 @@ void ScreenGameplay::GetMusicEndTiming(
       std::max(fSecondsToStartTransitioningOut, fLastStepSeconds);
 
   /* Make sure the fade finishes before the transition finishes. */
-  fSecondsToStartTransitioningOut = std::max(
-      fSecondsToStartTransitioningOut,
-      fSecondsToStartFadingOutMusic + musicFadeOutSeconds - fTransitionLength);
+  const double transitionForFade =
+      static_cast<double>(fSecondsToStartFadingOutMusic) +
+      static_cast<double>(musicFadeOutSeconds) -
+      static_cast<double>(fTransitionLength);
+  const float finiteTransitionForFade =
+      std::isfinite(transitionForFade) &&
+              transitionForFade <= std::numeric_limits<float>::max()
+          ? static_cast<float>(transitionForFade)
+          : std::numeric_limits<float>::max();
+  fSecondsToStartTransitioningOut =
+      std::max(fSecondsToStartTransitioningOut, finiteTransitionForFade);
 
   if (!m_bLoggedGameplayChartTiming) {
     m_bLoggedGameplayChartTiming = true;
@@ -3066,10 +3185,9 @@ void ScreenGameplay::GetMusicEndTiming(
         "transition=%.6f fade_start=%.6f music_length=%.6f "
         "max_step_distance=%.6f",
         usedCurrentChartTiming ? "current_steps" : "song", fFirstChartSeconds,
-        fLastStepSeconds - Player::GetMaxStepDistanceSeconds(),
+        fLastStepSeconds - maxStepDistance,
         fSecondsToStartTransitioningOut, fSecondsToStartFadingOutMusic,
-        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds,
-        Player::GetMaxStepDistanceSeconds());
+        musicLength, maxStepDistance);
   }
 }
 
@@ -3080,7 +3198,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
         fDeltaTime);
     fDeltaTime = 0.0f;
   }
-  if (GAMESTATE == nullptr) {
+  if (!HasCoreGameplayManagers("ScreenGameplay::Update")) {
     Screen::Update(fDeltaTime);
     return;
   }
@@ -3090,46 +3208,6 @@ void ScreenGameplay::Update(float fDeltaTime) {
      * to make sure we receive the next-screen message. */
     Screen::Update(fDeltaTime);
     return;
-  }
-
-  if (fDeltaTime >= 0.025f) {
-    static uint64_t sLastGameplayHitchLogUsec = 0;
-    const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-    if (sLastGameplayHitchLogUsec == 0 ||
-        nowUsec - sLastGameplayHitchLogUsec >= 250000) {
-      sLastGameplayHitchLogUsec = nowUsec;
-      const GameplayVisualPerfSnapshot& perf = g_LastGameplayVisualPerf;
-      LOG->Trace(
-          "GAMEPLAY_FRAME_HITCH: delta=%.6f music=%.6f beat=%.6f fps=%d "
-          "perf_valid=%d last_draw_ms=%.3f song_background_ms=%.3f "
-          "notefield_board_ms=%.3f clear_zbuffer_ms=%.3f "
-          "screen_elements_ms=%.3f max_notefield_player=%s "
-          "max_notefield_ms=%.3f visible_notes=%d visible_taps=%d "
-          "visible_holds=%d visible_mines=%d visible_lifts=%d "
-          "visible_fakes=%d visible_attacks=%d visible_autokeysounds=%d "
-          "max_visible_player=%s max_visible_notes=%d active_receptors=%d "
-          "active_ghosts=%d active_tap_judgments=%d "
-          "active_hold_judgments=%d active_combo=%d "
-          "tap_judgments_since_snapshot=%d hold_judgments_since_snapshot=%d "
-          "mine_judgments_since_snapshot=%d danger_players=%d "
-          "failing_players=%d min_life=%.3f",
-          fDeltaTime, GAMESTATE->m_Position.m_fMusicSeconds,
-          GAMESTATE->m_Position.m_fSongBeat,
-          DISPLAY != nullptr ? DISPLAY->GetFPS() : 0, perf.valid ? 1 : 0,
-          perf.draw_ms, perf.song_background_ms, perf.notefield_board_ms,
-          perf.clear_zbuffer_ms, perf.screen_elements_ms,
-          perf.max_notefield_board_player.c_str(), perf.max_notefield_board_ms,
-          perf.visible_total, perf.visible_taps, perf.visible_holds,
-          perf.visible_mines, perf.visible_lifts, perf.visible_fakes,
-          perf.visible_attacks, perf.visible_autokeysounds,
-          perf.max_visible_notes_player.c_str(), perf.max_player_visible_total,
-          perf.active_receptors, perf.active_ghosts, perf.active_tap_judgments,
-          perf.active_hold_judgments, perf.active_combo,
-          perf.tap_judgments_since_last_snapshot,
-          perf.hold_judgments_since_last_snapshot,
-          perf.mine_judgments_since_last_snapshot, perf.danger_players,
-          perf.failing_players, perf.min_life);
-    }
   }
 
   UpdateSongPosition(fDeltaTime);
@@ -3401,23 +3479,33 @@ void ScreenGameplay::Update(float fDeltaTime) {
         PlayerStageStats* pss =
             GetPlayerStageStatsOrWarn(*pi, "ScreenGameplay::Update alive time");
         if (pss != nullptr && !pss->m_bFailed) {
-          pss->m_fAliveSeconds += fUnscaledDeltaTime * musicRate;
+          AccumulateGameplaySeconds(
+              pss->m_fAliveSeconds,
+              static_cast<double>(fUnscaledDeltaTime) * musicRate,
+              "player alive seconds");
         }
       }
       if (IsCurrentStyleSharedSides()) {
         PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
         if (!routine.m_bFailed) {
-          routine.m_fAliveSeconds += fUnscaledDeltaTime * musicRate;
+          AccumulateGameplaySeconds(
+              routine.m_fAliveSeconds,
+              static_cast<double>(fUnscaledDeltaTime) * musicRate,
+              "routine alive seconds");
         }
       }
 
       // update fGameplaySeconds
-      STATSMAN->m_CurStageStats.m_fGameplaySeconds += fUnscaledDeltaTime;
+      AccumulateGameplaySeconds(
+          STATSMAN->m_CurStageStats.m_fGameplaySeconds, fUnscaledDeltaTime,
+          "stage gameplay seconds");
       float curBeat = GAMESTATE->m_Position.m_fSongBeat;
       Song& s = *GAMESTATE->m_pCurSong;
 
       if (curBeat >= s.GetFirstBeat() && curBeat < s.GetLastBeat()) {
-        STATSMAN->m_CurStageStats.m_fStepsSeconds += fUnscaledDeltaTime;
+        AccumulateGameplaySeconds(
+            STATSMAN->m_CurStageStats.m_fStepsSeconds, fUnscaledDeltaTime,
+            "stage steps seconds");
 
         UpdateHasteRate();
 
@@ -3426,13 +3514,19 @@ void ScreenGameplay::Update(float fDeltaTime) {
           // For negative haste, accumulate seconds while the song is slowed
           // down.
           if (GAMESTATE->m_SongOptions.GetCurrent().m_fHaste < 0) {
-            GAMESTATE->m_fAccumulatedHasteSeconds -=
-                (fUnscaledDeltaTime * fHasteRate) - fUnscaledDeltaTime;
+            AccumulateSignedGameplaySeconds(
+                GAMESTATE->m_fAccumulatedHasteSeconds,
+                -((static_cast<double>(fUnscaledDeltaTime) * fHasteRate) -
+                  fUnscaledDeltaTime),
+                "accumulated haste seconds");
           }
           // For positive haste, accumulate seconds while the song is sped up.
           else {
-            GAMESTATE->m_fAccumulatedHasteSeconds +=
-                (fUnscaledDeltaTime * fHasteRate) - fUnscaledDeltaTime;
+            AccumulateSignedGameplaySeconds(
+                GAMESTATE->m_fAccumulatedHasteSeconds,
+                (static_cast<double>(fUnscaledDeltaTime) * fHasteRate) -
+                    fUnscaledDeltaTime,
+                "accumulated haste seconds");
           }
         }
       }
@@ -3445,7 +3539,14 @@ void ScreenGameplay::Update(float fDeltaTime) {
 
         bool bAllReallyFailed = STATSMAN->m_CurStageStats.AllFailed();
         if (bAllReallyFailed) {
-          fSecondsToStartTransitioningOut += BEGIN_FAILED_DELAY;
+          const double failedTransition =
+              static_cast<double>(fSecondsToStartTransitioningOut) +
+              FiniteNonNegativeOr(BEGIN_FAILED_DELAY, 0.0f);
+          fSecondsToStartTransitioningOut =
+              std::isfinite(failedTransition) &&
+                      failedTransition <= std::numeric_limits<float>::max()
+                  ? static_cast<float>(failedTransition)
+                  : std::numeric_limits<float>::max();
         }
 
         if (GAMESTATE->m_Position.m_fMusicSeconds >=
@@ -3755,8 +3856,11 @@ void ScreenGameplay::FailFadeRemovePlayer(PlayerInfo* pi) {
     LOG->Warn("SRC_AUDIT_FIX: FailFadeRemovePlayer ignored incomplete player.");
     return;
   }
-  if (SOUND != nullptr && THEME != nullptr) {
-    SOUND->PlayOnceFromDir(THEME->GetPathS(m_sName, "oni die"));
+  if (SOUND != nullptr && THEME != nullptr && THEME->IsThemeLoaded()) {
+    const std::string dieSound = THEME->GetPathS(m_sName, "oni die", true);
+    if (!dieSound.empty()) {
+      SOUND->PlayOnceFromDir(dieSound);
+    }
   }
   pi->ShowOniGameOver();
   int tracks = pi->m_NoteData.GetNumTracks();
@@ -3794,6 +3898,10 @@ void ScreenGameplay::UpdateHasteRate() {
   if (!std::isfinite(GAMESTATE->m_fHasteRate)) {
     LOG->Warn("SRC_AUDIT_FIX: Reset non-finite gameplay haste rate.");
     GAMESTATE->m_fHasteRate = 0.0f;
+  }
+  if (!std::isfinite(GAMESTATE->m_fAccumulatedHasteSeconds)) {
+    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite accumulated haste seconds.");
+    GAMESTATE->m_fAccumulatedHasteSeconds = 0.0f;
   }
   if (GAMESTATE->m_Position.m_fMusicSeconds <
           GAMESTATE->m_fLastHasteUpdateMusicSeconds ||  // new song
@@ -3837,10 +3945,16 @@ void ScreenGameplay::UpdateHasteRate() {
       continue;
     }
     if (bSharedSidesStyle && m_pCombinedLifeMeter != nullptr) {
-      fMaxLife = std::max(
-          fMaxLife, m_pCombinedLifeMeter->GetLife(pi->GetStepsAndTrailIndex()));
+      const float life =
+          m_pCombinedLifeMeter->GetLife(pi->GetStepsAndTrailIndex());
+      if (std::isfinite(life)) {
+        fMaxLife = std::max(fMaxLife, life);
+      }
     } else if (pi->m_pLifeMeter) {
-      fMaxLife = std::max(fMaxLife, pi->m_pLifeMeter->GetLife());
+      const float life = pi->m_pLifeMeter->GetLife();
+      if (std::isfinite(life)) {
+        fMaxLife = std::max(fMaxLife, life);
+      }
     } else {
       // In Battle/Rave mode, the players don't have individual life meters.
       fMaxLife = 1;
@@ -4030,6 +4144,7 @@ void ScreenGameplay::SendCrossedMessages() {
       GAMESTATE->m_pCurSong == nullptr) {
     return;
   }
+  constexpr int kMaxCrossedRowsPerUpdate = 4096;
   {
     float fPositionSeconds = GAMESTATE->m_Position.m_fMusicSeconds;
     float fSongBeat =
@@ -4039,7 +4154,12 @@ void ScreenGameplay::SendCrossedMessages() {
     int iRowNow = BeatToNoteRowNotRounded(fSongBeat);
     iRowNow = std::max(0, iRowNow);
 
-    for (int r = m_iBeatRowLastCrossed + 1; r <= iRowNow; r++) {
+    const int firstRow = std::max(
+        m_iBeatRowLastCrossed < std::numeric_limits<int>::max()
+            ? m_iBeatRowLastCrossed + 1
+            : m_iBeatRowLastCrossed,
+        iRowNow - std::min(iRowNow, kMaxCrossedRowsPerUpdate));
+    for (int r = firstRow; r <= iRowNow; r++) {
       if (GetNoteType(r) == NOTE_TYPE_4TH) {
         BroadcastGameplayMessage(Message_BeatCrossed);
       }
@@ -4087,9 +4207,15 @@ void ScreenGameplay::SendCrossedMessages() {
       int iRowNow = BeatToNoteRowNotRounded(fSongBeat);
       iRowNow = std::max(0, iRowNow);
       int& iRowLastCrossed = m_iNoteRowLastCrossed[i];
+      const int firstRow = std::max(
+          iRowLastCrossed < std::numeric_limits<int>::max()
+              ? iRowLastCrossed + 1
+              : iRowLastCrossed,
+          iRowNow - std::min(iRowNow, kMaxCrossedRowsPerUpdate));
 
       FOREACH_NONEMPTY_ROW_ALL_TRACKS_RANGE(
-          nd, r, iRowLastCrossed + 1, iRowNow + 1) {
+          nd, r, firstRow,
+          iRowNow < std::numeric_limits<int>::max() ? iRowNow + 1 : iRowNow) {
         int iNumTracksWithTapOrHoldHead = 0;
         for (int t = 0; t < nd.GetNumTracks(); t++) {
           if (nd.GetTapNote(t, r).type == TapNoteType_Empty) {
@@ -4104,7 +4230,8 @@ void ScreenGameplay::SendCrossedMessages() {
               currentGame->m_PlayersHaveSeparateStyles) {
             FOREACH_EnabledPlayerNumberInfo(m_vPlayerInfo, pi) {
               const Style* pStyle = GAMESTATE->GetCurrentStyle(pi->m_pn);
-              if (pStyle == nullptr) {
+              if (pStyle == nullptr || t < 0 ||
+                  t >= pStyle->m_iColsPerPlayer) {
                 continue;
               }
               std::string sButton = pStyle->ColToButtonName(t);
@@ -4116,7 +4243,8 @@ void ScreenGameplay::SendCrossedMessages() {
             }
           } else {
             const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
-            if (pStyle == nullptr) {
+            if (pStyle == nullptr || t < 0 ||
+                t >= pStyle->m_iColsPerPlayer) {
               continue;
             }
             std::string sButton = pStyle->ColToButtonName(t);
@@ -4225,11 +4353,6 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
       return false;
   }
 
-  Message msg("");
-  if (input.type == IET_FIRST_PRESS && m_Codes.InputMessage(input, msg)) {
-    this->HandleMessage(msg);
-  }
-
   if (m_bPaused) {
     /* If we're paused, only accept GAME_BUTTON_START to unpause. */
     if (GAMESTATE->IsHumanPlayer(input.pn) &&
@@ -4249,6 +4372,11 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
   if (input.MenuI == GAME_BUTTON_RESTART && input.type == IET_FIRST_PRESS &&
       GAMESTATE->IsEventMode() && !GAMESTATE->IsCourseMode()) {
     return MenuRestart(input);
+  }
+
+  Message msg("");
+  if (input.type == IET_FIRST_PRESS && m_Codes.InputMessage(input, msg)) {
+    this->HandleMessage(msg);
   }
 
   if (m_DancingState != STATE_OUTRO && GAMESTATE->IsHumanPlayer(input.pn) &&
@@ -4672,6 +4800,10 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
     LOG->Trace(
         "Stage finished at index %i/%i", GAMESTATE->GetCourseSongIndex(),
         (int)m_apSongsQueue.size());
+    Song* const playedSong = GAMESTATE->m_pCurSong;
+    Steps* playedSteps[NUM_PLAYERS]{};
+    FOREACH_PlayerNumber(pn) { playedSteps[pn] = GAMESTATE->m_pCurSteps[pn]; }
+
     // +1 to skip the current song; that song has already passed.
     for (unsigned i = GAMESTATE->GetCourseSongIndex() + 1;
          i < m_apSongsQueue.size(); ++i) {
@@ -4683,6 +4815,7 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
             i);
         continue;
       }
+      GAMESTATE->m_pCurSong.Set(m_apSongsQueue[i]);
       FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
         if (pi->m_pPlayer != nullptr) {
           pi->m_pPlayer->ApplyWaitingTransforms();
@@ -4690,6 +4823,8 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
       }
       SongFinished();
     }
+    GAMESTATE->m_pCurSong.Set(playedSong);
+    FOREACH_PlayerNumber(pn) { GAMESTATE->m_pCurSteps[pn].Set(playedSteps[pn]); }
   }
 
   if (bBackedOut) {
@@ -5058,6 +5193,9 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       }
       // Set a new stage seed so the order will be different.
       GAMESTATE->SetNewStageSeed();
+      for (const RepeatTrailSnapshot& snapshot : trailSnapshots) {
+        GAMESTATE->m_pCurTrail[snapshot.pn].Set(nullptr);
+      }
       course->InvalidateTrailCache();
       course->RegenerateNonFixedTrails();
       for (const RepeatTrailSnapshot& snapshot : trailSnapshots) {
@@ -5082,34 +5220,80 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         LOG->Warn("SRC_AUDIT_FIX: Repeat course missing master trail.");
         return;
       }
+      std::vector<Song*> repeatedSongs;
+      repeatedSongs.reserve(master_trail->m_vEntries.size());
+      bool repeatQueuesValid = !master_trail->m_vEntries.empty();
       for (const TrailEntry& entry : master_trail->m_vEntries) {
         if (entry.pSong == nullptr) {
-          continue;
+          repeatQueuesValid = false;
+          break;
         }
-        m_apSongsQueue.push_back(entry.pSong);
-        STATSMAN->m_CurStageStats.m_vpPossibleSongs.push_back(entry.pSong);
+        repeatedSongs.push_back(entry.pSong);
       }
+
+      struct RepeatPlayerQueue {
+        PlayerInfo* info;
+        std::vector<Steps*> steps;
+        std::vector<AttackArray> modifiers;
+      };
+      std::vector<RepeatPlayerQueue> repeatedPlayerQueues;
       FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
         if (!IsUsableStepsAndTrailIndex(
                 *pi, "ScreenGameplay::repeat course new trail")) {
-          continue;
+          repeatQueuesValid = false;
+          break;
         }
         Trail* trail = GAMESTATE->m_pCurTrail[pi->GetStepsAndTrailIndex()];
-        if (trail == nullptr) {
-          continue;
+        if (trail == nullptr || trail->m_vEntries.size() != repeatedSongs.size()) {
+          repeatQueuesValid = false;
+          break;
         }
-        for (const TrailEntry& entry : trail->m_vEntries) {
-          if (entry.pSteps == nullptr) {
-            continue;
+        RepeatPlayerQueue queue{&*pi, {}, {}};
+        queue.steps.reserve(trail->m_vEntries.size());
+        queue.modifiers.reserve(trail->m_vEntries.size());
+        for (size_t entryIndex = 0; entryIndex < trail->m_vEntries.size();
+             ++entryIndex) {
+          const TrailEntry& entry = trail->m_vEntries[entryIndex];
+          if (entry.pSong != repeatedSongs[entryIndex] || entry.pSteps == nullptr ||
+              entry.pSteps->m_pSong != entry.pSong) {
+            repeatQueuesValid = false;
+            break;
           }
-          pi->m_vpStepsQueue.push_back(entry.pSteps);
+          queue.steps.push_back(entry.pSteps);
           AttackArray a;
           entry.GetAttackArray(a);
-          pi->m_asModifiersQueue.push_back(a);
-          if (pi->GetPlayerStageStats()) {
-            pi->GetPlayerStageStats()->m_vpPossibleSteps.push_back(
-                entry.pSteps);
-          }
+          queue.modifiers.push_back(a);
+        }
+        if (!repeatQueuesValid) {
+          break;
+        }
+        repeatedPlayerQueues.push_back(std::move(queue));
+      }
+
+      if (!repeatQueuesValid || repeatedPlayerQueues.empty()) {
+        LOG->Warn(
+            "SRC_AUDIT_FIX: Repeat course regeneration produced incomplete "
+            "or mismatched queues; leaving gameplay before appending them.");
+        HandleScreenMessage(SM_LeaveGameplay);
+        return;
+      }
+
+      m_apSongsQueue.insert(
+          m_apSongsQueue.end(), repeatedSongs.begin(), repeatedSongs.end());
+      STATSMAN->m_CurStageStats.m_vpPossibleSongs.insert(
+          STATSMAN->m_CurStageStats.m_vpPossibleSongs.end(),
+          repeatedSongs.begin(), repeatedSongs.end());
+      for (RepeatPlayerQueue& queue : repeatedPlayerQueues) {
+        PlayerInfo* pi = queue.info;
+        pi->m_vpStepsQueue.insert(
+            pi->m_vpStepsQueue.end(), queue.steps.begin(), queue.steps.end());
+        pi->m_asModifiersQueue.insert(
+            pi->m_asModifiersQueue.end(), queue.modifiers.begin(),
+            queue.modifiers.end());
+        if (PlayerStageStats* stats = pi->GetPlayerStageStats()) {
+          stats->m_vpPossibleSteps.insert(
+              stats->m_vpPossibleSteps.end(), queue.steps.begin(),
+              queue.steps.end());
         }
         // In a survival course, override stored mods
         if (course->GetCourseType() == COURSE_TYPE_SURVIVAL &&
@@ -5524,30 +5708,18 @@ void ScreenGameplay::SaveReplay() {
       // the timings.
       p->AppendChild(pi->m_pPlayer->GetNoteData().CreateNode());
 
-      // Find a file name for the replay
-      std::vector<std::string> files;
-      GetDirListing("Save/Replays/replay*", files, false, false);
-      sort(files.begin(), files.end());
-
-      // Files should be of the form "replay#####.xml".
-      int iIndex = 0;
-
-      for (int i = static_cast<int>(files.size()) - 1; i >= 0; --i) {
-        static Regex re("^replay([0-9]{5})\\....$");
-        std::vector<std::string> matches;
-        if (!re.Compare(files[i], matches)) {
-          continue;
-        }
-
-        ASSERT(matches.size() == 1);
-        iIndex = StringToInt(matches[0]) + 1;
+      const std::string replayDirectory = "Save/Replays/";
+      const std::string sFileName =
+          Profile::MakeUniqueFileNameNoExtension(replayDirectory, "replay") +
+          ".xml";
+      const bool saved =
+          XmlFileUtil::SaveToFile(p, replayDirectory + sFileName);
+      RageUtil::SafeDelete(p);
+      if (!saved) {
+        LOG->Warn("SRC_AUDIT_FIX: Failed to save replay for player %i to '%s'.",
+                  static_cast<int>(pn), sFileName.c_str());
         break;
       }
-
-      std::string sFileName = ssprintf("replay%05d.xml", iIndex);
-
-      XmlFileUtil::SaveToFile(p, "Save/Replays/" + sFileName);
-      RageUtil::SafeDelete(p);
       savedForPlayer = true;
       break;
     }

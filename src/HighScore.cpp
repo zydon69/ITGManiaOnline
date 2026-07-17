@@ -246,10 +246,10 @@ bool IsValidMD5(const std::string& md5) {
           std::all_of(md5.begin(), md5.end(), IsHexChar));
 }
 
-bool NearlyEqualHighScoreFloat(float lhs, float rhs, const char* field) {
+bool EqualCanonicalHighScoreFloat(float lhs, float rhs, const char* field) {
   lhs = SanitizeFiniteNonNegativeFloat(lhs, field);
   rhs = SanitizeFiniteNonNegativeFloat(rhs, field);
-  return std::fabs(lhs - rhs) <= 0.000001f;
+  return lhs == rhs;
 }
 }  // namespace
 
@@ -310,10 +310,10 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   if (peakComboAward != other.peakComboAward) {
     return false;
   }
-  if (!NearlyEqualHighScoreFloat(fPercentDP, other.fPercentDP, "PercentDP")) {
+  if (!EqualCanonicalHighScoreFloat(fPercentDP, other.fPercentDP, "PercentDP")) {
     return false;
   }
-  if (!NearlyEqualHighScoreFloat(
+  if (!EqualCanonicalHighScoreFloat(
           fSurviveSeconds, other.fSurviveSeconds, "SurviveSeconds")) {
     return false;
   }
@@ -345,7 +345,7 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   if (radarValues != other.radarValues) {
     return false;
   }
-  if (!NearlyEqualHighScoreFloat(
+  if (!EqualCanonicalHighScoreFloat(
           fLifeRemainingSeconds,
           other.fLifeRemainingSeconds,
           "LifeRemainingSeconds")) {
@@ -367,7 +367,7 @@ bool HighScoreImpl::operator==(const HighScoreImpl& other) const {
   }
   for (size_t i = 0; i < playerPercentDPs.size(); ++i) {
     if (i >= other.playerPercentDPs.size() ||
-        !NearlyEqualHighScoreFloat(
+        !EqualCanonicalHighScoreFloat(
             playerPercentDPs[i], other.playerPercentDPs[i],
             "Routine PercentDP")) {
       return false;

@@ -181,7 +181,11 @@ void ScreenOptionsMaster::Init() {
 
   if (GetOptionsMasterMetricB(m_sName, "ForceAllPlayers")) {
     if (GAMESTATE != nullptr) {
-      FOREACH_PlayerNumber(pn) GAMESTATE->JoinPlayer(pn);
+      FOREACH_PlayerNumber(pn) {
+        if (!GAMESTATE->IsHumanPlayer(pn)) {
+          GAMESTATE->JoinPlayer(pn);
+        }
+      }
     } else {
       WarnScreenOptionsMaster(
           ssprintf("%s: cannot force players without GameState",
@@ -290,7 +294,10 @@ bool ScreenOptionsMaster::ExportOptionsInternal(
     return false;
   }
 
-  const int changeMask = row->ExportOptions(validPlayers, bRowHasFocus);
+  const int changeMask =
+      accumulateChangeMask
+          ? row->ExportOptions(validPlayers, bRowHasFocus)
+          : row->ExportOptionsForPreview(validPlayers, bRowHasFocus);
   if (changeMaskOut != nullptr) {
     *changeMaskOut = changeMask;
   }

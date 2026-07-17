@@ -35,6 +35,15 @@ foreach(REQUIRED_SNIPPET
   endif()
 endforeach()
 
+foreach(REQUIRED_SNIPPET
+    "this->downloadWorkerQueue.swap(emptyQueue);"
+    "this->downloadWorkerQueue.size() >= kMaxDownloadWorkerQueue")
+  string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "NetworkManager worker invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
 if(NOT NETWORK_MANAGER_TEXT MATCHES
    "useDownloadClient[ \t\r\n]*\\?[ \t\r\n]*effectiveMaxDownloadBytes")
   message(

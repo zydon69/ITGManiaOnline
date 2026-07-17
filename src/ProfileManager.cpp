@@ -385,6 +385,12 @@ ProfileLoadResult ProfileManager::LoadProfile(
     }
     profile->LoadCustomFunction(sProfileDir, pn);
     profile->LoadSongsFromDir(sProfileDir, ProfileSlot(pn));
+  } else {
+    // A failed candidate may leave diagnostics set, but it must never make the
+    // slot look persistent or become eligible for a later save.
+    m_sProfileDir[pn].clear();
+    m_bWasLoadedFromMemoryCard[pn] = false;
+    m_bNeedToBackUpLastLoad[pn] = false;
   }
 
   LOG->Trace("Done loading profile - result %d", lr);
@@ -1269,10 +1275,23 @@ bool ProfileManager::RenameLocalProfile(
         sProfileID.c_str());
     return false;
   }
-  pProfile->m_sDisplayName = sNewName;
-
   std::string sProfileDir = LocalProfileIDToDir(sProfileID);
-  return pProfile->SaveAllToDir(sProfileDir, ShouldSignProfiles());
+  const std::string oldName = pProfile->m_sDisplayName;
+  pProfile->m_sDisplayName = sNewName;
+  if (!pProfile->SaveAllToDir(sProfileDir, ShouldSignProfiles())) {
+    pProfile->m_sDisplayName = oldName;
+    return false;
+  }
+
+  if (GetProfileSortOrder() == ProfileSortOrder_Alphabetical) {
+    for (size_t i = 0; i < g_vLocalProfile.size(); ++i) {
+      if (g_vLocalProfile[i].sDir == sProfileDir) {
+        MoveProfileSorted(static_cast<int>(i), GetProfileSortAscending());
+        break;
+      }
+    }
+  }
+  return true;
 }
 
 bool ProfileManager::DeleteLocalProfile(std::string sProfileID) {
@@ -1439,7 +1458,7 @@ bool ProfileManager::LastLoadWasTamperedOrCorrupt(PlayerNumber pn) const {
           pn, "ProfileManager::LastLoadWasTamperedOrCorrupt")) {
     return false;
   }
-  return !m_sProfileDir[pn].empty() && m_bLastLoadWasTamperedOrCorrupt[pn];
+  return m_bLastLoadWasTamperedOrCorrupt[pn];
 }
 
 bool ProfileManager::LastLoadWasFromLastGood(PlayerNumber pn) const {
@@ -1818,7 +1837,8 @@ void ProfileManager::AddCourseScore(
   const float min_machine_score =
       PREFSMAN != nullptr ? PREFSMAN->m_fMinPercentageForMachineCourseHighScore
                           : 0.0f;
-  if (hs.GetPercentDP() >= min_machine_score) {
+  if (hs.GetPercentDP() >= min_machine_score &&
+      hs.GetGrade() != Grade_Failed) {
     Profile* machine_profile = GetMachineProfile();
     if (machine_profile != nullptr) {
       machine_profile->AddCourseHighScore(
@@ -1981,11 +2001,39 @@ void ProfileManager::SetStatsPrefix(const std::string& prefix) {
     return;
   }
 
+  if (prefix == m_stats_prefix) {
+    return;
+  }
+
+  const std::string previousPrefix = m_stats_prefix;
+  std::vector<std::pair<Profile*, Profile>> profileBackups;
+  profileBackups.reserve(g_vLocalProfile.size() + NUM_PLAYERS + 1);
+  auto backUpProfile = [&profileBackups](Profile* profile) {
+    if (profile == nullptr ||
+        std::any_of(
+            profileBackups.begin(), profileBackups.end(),
+            [profile](const auto& entry) { return entry.first == profile; })) {
+      return;
+    }
+    profileBackups.emplace_back(profile, *profile);
+  };
+  for (auto& localProfile : g_vLocalProfile) {
+    backUpProfile(&localProfile.profile);
+  }
+  FOREACH_PlayerNumber(pn) {
+    if (ProfileWasLoadedFromMemoryCard(pn)) {
+      backUpProfile(GetProfile(pn));
+    }
+  }
+  backUpProfile(m_pMachineProfile);
+
   m_stats_prefix = prefix;
   const bool sign_profiles = ShouldSignProfiles();
+  bool succeeded = true;
   for (size_t i = 0; i < g_vLocalProfile.size(); ++i) {
-    g_vLocalProfile[i].profile.HandleStatsPrefixChange(
-        g_vLocalProfile[i].sDir, sign_profiles);
+    succeeded = g_vLocalProfile[i].profile.HandleStatsPrefixChange(
+                    g_vLocalProfile[i].sDir, sign_profiles) &&
+                succeeded;
   }
   FOREACH_PlayerNumber(pn) {
     if (ProfileWasLoadedFromMemoryCard(pn)) {
@@ -1998,12 +2046,27 @@ void ProfileManager::SetStatsPrefix(const std::string& prefix) {
       }
       Profile* profile = GetProfile(pn);
       if (profile != nullptr) {
-        profile->HandleStatsPrefixChange(m_sProfileDir[pn], sign_profiles);
+        succeeded = profile->HandleStatsPrefixChange(
+                        m_sProfileDir[pn], sign_profiles) &&
+                    succeeded;
       }
     }
   }
   if (m_pMachineProfile != nullptr) {
-    m_pMachineProfile->HandleStatsPrefixChange(MACHINE_PROFILE_DIR, false);
+    succeeded = m_pMachineProfile->HandleStatsPrefixChange(
+                    MACHINE_PROFILE_DIR, false) &&
+                succeeded;
+  }
+
+  if (!succeeded) {
+    for (auto& entry : profileBackups) {
+      *entry.first = entry.second;
+    }
+    m_stats_prefix = previousPrefix;
+    LOG->Warn(
+        "ProfileManager::SetStatsPrefix: prefix '%s' could not be applied to "
+        "every profile; restored prefix '%s' and all in-memory profiles.",
+        prefix.c_str(), previousPrefix.c_str());
   }
 }
 

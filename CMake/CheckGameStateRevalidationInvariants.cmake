@@ -31,6 +31,18 @@ require_contains(
   "joining reports whether it committed")
 require_contains(
   "${source}"
+  "if (m_bSideIsJoined[pn])"
+  "duplicate direct joins are rejected")
+require_contains(
+  "${source}"
+  "styleAfterJoin = GAMEMAN->GetFirstCompatibleStyle("
+  "join style compatibility is resolved before state mutation")
+require_contains(
+  "${source}"
+  "if (styleAfterJoin == nullptr)"
+  "an incompatible join is rejected before commit")
+require_contains(
+  "${source}"
   "if (!state->JoinPlayer(pn))"
   "coin input only charges a successful join")
 require_contains(
@@ -105,5 +117,9 @@ require_contains(
   "${source}"
   "if (m_iCurrentStageIndex < INT_MAX)"
   "stage index increment cannot overflow")
+require_contains(
+  "${source}"
+  "if (m_pMultiPlayerState[p] != nullptr)"
+  "reset tolerates an incomplete multiplayer state array")
 
 message(STATUS "GameState revalidation invariants passed")

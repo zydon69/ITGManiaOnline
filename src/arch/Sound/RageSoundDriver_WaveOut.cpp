@@ -101,7 +101,7 @@ bool RageSoundDriver_WaveOut::GetData() {
   MMRESULT ret =
       waveOutWrite(waveout_handle_, &wo_buffers_[b], sizeof(wo_buffers_[b]));
   if (ret != MMSYSERR_NOERROR) {
-    LOG->Warn(wo_ssprintf(ret, "waveOutWrite failed").c_str());
+    LOG->Warn("%s", wo_ssprintf(ret, "waveOutWrite failed").c_str());
     wo_shutdown_.store(true, std::memory_order_release);
     if (soundevent_handle_ != nullptr) {
       SetEvent(soundevent_handle_);
@@ -133,7 +133,7 @@ int64_t RageSoundDriver_WaveOut::GetPosition() const {
   tm.wType = TIME_SAMPLES;
   MMRESULT ret = waveOutGetPosition(waveout_handle_, &tm, sizeof(tm));
   if (ret != MMSYSERR_NOERROR) {
-    LOG->Warn(wo_ssprintf(ret, "waveOutGetPosition failed").c_str());
+    LOG->Warn("%s", wo_ssprintf(ret, "waveOutGetPosition failed").c_str());
     return wo_last_hardware_position_.load(std::memory_order_acquire);
   }
 

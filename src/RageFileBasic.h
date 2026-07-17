@@ -14,7 +14,7 @@
  * only want to implement RageFileObj. */
 class RageFileBasic {
  public:
-  virtual ~RageFileBasic() {}
+  virtual ~RageFileBasic() = default;
 
   virtual std::string GetError() const = 0;
   virtual void ClearError() = 0;
@@ -35,7 +35,8 @@ class RageFileBasic {
   virtual int Read(std::string& buffer, int bytes = -1) = 0;
   virtual int Read(void* buffer, size_t bytes, int nmemb) = 0;
 
-  /* Write iSize bytes of data from pBuf.  Return 0 on success, -1 on error. */
+  /* Write iBytes bytes from pBuffer. Return the number of bytes written, or
+   * -1 on error. */
   virtual int Write(const void* pBuffer, size_t iBytes) = 0;
   virtual int Write(const std::string& sString) = 0;
   virtual int Write(const void* buffer, size_t bytes, int nmemb) = 0;
@@ -70,39 +71,39 @@ class RageFileObj : public RageFileBasic {
  public:
   RageFileObj();
   RageFileObj(const RageFileObj& cpy);
-  virtual ~RageFileObj();
+  ~RageFileObj() override;
 
-  virtual std::string GetError() const { return m_sError; }
-  virtual void ClearError() { SetError(""); }
+  std::string GetError() const override { return m_sError; }
+  void ClearError() override { SetError(""); }
 
-  bool AtEOF() const { return m_bEOF; }
+  bool AtEOF() const override { return m_bEOF; }
 
-  int Seek(int iOffset);
-  int Seek(int offset, int whence);
-  int Tell() const { return m_iFilePos; }
+  int Seek(int iOffset) override;
+  int Seek(int offset, int whence) override;
+  int Tell() const override { return m_iFilePos; }
 
-  int Read(void* pBuffer, size_t iBytes);
-  int Read(std::string& buffer, int bytes = -1);
-  int Read(void* buffer, size_t bytes, int nmemb);
+  int Read(void* pBuffer, size_t iBytes) override;
+  int Read(std::string& buffer, int bytes = -1) override;
+  int Read(void* buffer, size_t bytes, int nmemb) override;
 
-  int Write(const void* pBuffer, size_t iBytes);
-  int Write(const std::string& sString) {
+  int Write(const void* pBuffer, size_t iBytes) override;
+  int Write(const std::string& sString) override {
     return Write(sString.data(), sString.size());
   }
-  int Write(const void* buffer, size_t bytes, int nmemb);
+  int Write(const void* buffer, size_t bytes, int nmemb) override;
 
-  int Flush();
+  int Flush() override;
 
-  int GetLine(std::string& out);
-  int PutLine(const std::string& str);
+  int GetLine(std::string& out) override;
+  int PutLine(const std::string& str) override;
 
-  void EnableCRC32(bool on = true);
-  bool GetCRC32(uint32_t* iRet);
+  void EnableCRC32(bool on = true) override;
+  bool GetCRC32(uint32_t* iRet) override;
 
-  virtual int GetFileSize() const = 0;
-  virtual int GetFD() { return -1; }
-  virtual std::string GetDisplayPath() const { return std::string(); }
-  virtual RageFileBasic* Copy() const { FAIL_M("Copying unimplemented"); }
+  int GetFileSize() const override = 0;
+  int GetFD() override { return -1; }
+  std::string GetDisplayPath() const override { return std::string(); }
+  RageFileBasic* Copy() const override { FAIL_M("Copying unimplemented"); }
 
  protected:
   virtual int SeekInternal(int /* iOffset */) {
@@ -163,8 +164,7 @@ class RageFileObj : public RageFileBasic {
   bool m_bCRC32Enabled;
   uint32_t m_iCRC32;
 
-  // Swallow up warnings. If they must be used, define them.
-  RageFileObj& operator=(const RageFileObj& rhs);
+  RageFileObj& operator=(const RageFileObj& rhs) = delete;
 };
 
 #endif

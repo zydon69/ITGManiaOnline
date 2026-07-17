@@ -557,9 +557,9 @@ bool Song::LoadFromSongDir(
     // If cache loading failed entirely (e.g. stale dir cache says cache file
     // exists after it was removed), fall back to parsing source files.
     if (!bLoadedFromCache) {
-      LOG->Warn(
-          "Couldn't load cache for '%s'; falling back to source simfiles.",
-          m_sSongDir.c_str());
+      LOG->UserLog(
+          "Song cache", m_sSongDir,
+          "couldn't be loaded; falling back to source simfiles.");
       Reset();
       m_sSongDir = sDir;
       if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
@@ -575,11 +575,10 @@ bool Song::LoadFromSongDir(
 
     if (use_cache && (m_sMainTitle == "" ||
                       (m_sMusicFile == "" && m_vsKeysoundFile.empty()))) {
-      LOG->Warn(
-          "Main title or music file for '%s' came up blank, forced to fall "
-          "back on TidyUpData to fix title and paths.  Do not use # or ; in a "
-          "song title.",
-          m_sSongDir.c_str());
+      LOG->UserLog(
+          "Song cache", m_sSongDir,
+          "contained a blank title or music path; rebuilding metadata from "
+          "source files. Do not use # or ; in a song title.");
       // Tell TidyUpData that it's not loaded from the cache because it needs
       // to hit the song folder to find the files that weren't found. -Kyz
       TidyUpData(false);

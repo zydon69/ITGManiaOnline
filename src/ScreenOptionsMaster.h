@@ -12,7 +12,7 @@ class OptionRowHandler;
 class ScreenOptionsMaster : public ScreenOptions {
  public:
   ScreenOptionsMaster();
-  virtual void Init();
+  void Init() override;
 
  private:
   int m_iChangeMask;
@@ -21,10 +21,10 @@ class ScreenOptionsMaster : public ScreenOptions {
       bool accumulateChangeMask, int* changeMaskOut);
 
  protected:
-  virtual void HandleScreenMessage(const ScreenMessage SM);
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
-  virtual void ImportOptions(int iRow, const std::vector<PlayerNumber>& vpns);
-  virtual void ExportOptions(int iRow, const std::vector<PlayerNumber>& vpns);
+  void ImportOptions(int iRow, const std::vector<PlayerNumber>& vpns) override;
+  void ExportOptions(int iRow, const std::vector<PlayerNumber>& vpns) override;
   bool ExportOptionsAndGetChangeMask(
       int iRow, const std::vector<PlayerNumber>& vpns,
       int* changeMaskOut);

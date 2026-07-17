@@ -223,6 +223,13 @@ class OptionRowHandler {
       const std::vector<bool> vbSelected[NUM_PLAYERS]) const {
     return 0;
   }
+  // Preview exports are opt-in because regular exports may save preferences,
+  // invoke Lua callbacks, broadcast messages, or otherwise mutate state.
+  virtual int ExportOptionForPreview(
+      const std::vector<PlayerNumber>&,
+      const std::vector<bool> vbSelected[NUM_PLAYERS]) const {
+    return 0;
+  }
   virtual void GetIconTextAndGameCommand(
       int iFirstSelection, std::string& sIconTextOut, GameCommand& gcOut) const;
   virtual std::string GetScreen(int /* iChoice */) const {

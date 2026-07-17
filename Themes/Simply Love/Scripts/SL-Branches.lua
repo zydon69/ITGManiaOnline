@@ -256,20 +256,32 @@ local OnlineRoomPhase = function(room)
 end
 
 local OnlineEvaluationBranchState = function(room)
-	local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
-	local screenName = screen and screen.GetName and screen:GetName() or "nil"
-	local playState = ITGOnline and IsCallable(ITGOnline.CurrentUserPlayState)
-		and ITGOnline:CurrentUserPlayState(room)
-		or "nil"
-	local roundKey = ITGOnline and IsCallable(ITGOnline.PlayStateKey)
-		and ITGOnline:PlayStateKey()
-		or ""
-	local summary = ITGOnline and IsCallable(ITGOnline.PlayStateSummary)
-		and ITGOnline:PlayStateSummary(room)
-		or nil
-	local userHasFinalResult = ITGOnline and IsCallable(ITGOnline.CurrentUserHasFinalResult)
-		and ITGOnline:CurrentUserHasFinalResult(room)
-		or false
+	local _, screen = SafeCall("SCREENMAN.GetTopScreen", function()
+		return SCREENMAN and SCREENMAN.GetTopScreen and SCREENMAN:GetTopScreen() or nil
+	end)
+	local _, screenName = SafeCall("Screen.GetName", function()
+		return screen and screen.GetName and screen:GetName() or "nil"
+	end)
+	local okPlayState, playState = SafeCall("ITGOnline.CurrentUserPlayState", function()
+		return ITGOnline and IsCallable(ITGOnline.CurrentUserPlayState)
+			and ITGOnline:CurrentUserPlayState(room) or "nil"
+	end)
+	local okRoundKey, roundKey = SafeCall("ITGOnline.PlayStateKey", function()
+		return ITGOnline and IsCallable(ITGOnline.PlayStateKey)
+			and ITGOnline:PlayStateKey() or ""
+	end)
+	local okSummary, summary = SafeCall("ITGOnline.PlayStateSummary", function()
+		return ITGOnline and IsCallable(ITGOnline.PlayStateSummary)
+			and ITGOnline:PlayStateSummary(room) or nil
+	end)
+	local okFinalResult, userHasFinalResult = SafeCall("ITGOnline.CurrentUserHasFinalResult", function()
+		return ITGOnline and IsCallable(ITGOnline.CurrentUserHasFinalResult)
+			and ITGOnline:CurrentUserHasFinalResult(room) or false
+	end)
+	playState = okPlayState and playState or "nil"
+	roundKey = okRoundKey and roundKey or ""
+	summary = okSummary and summary or nil
+	userHasFinalResult = okFinalResult and userHasFinalResult == true
 	return " topScreen=" .. tostring(screenName)
 		.. " playState=" .. tostring(playState)
 		.. " roundKey=" .. tostring(roundKey)

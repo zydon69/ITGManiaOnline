@@ -57,7 +57,7 @@ void DSound::SetPrimaryBufferMode() {
   IDirectSoundBuffer* pBuffer;
   HRESULT hr = this->GetDS()->CreateSoundBuffer(&format, &pBuffer, nullptr);
   if (FAILED(hr)) {
-    LOG->Warn(hr_ssprintf(hr, "Couldn't create primary buffer").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "Couldn't create primary buffer").c_str());
     return;
   }
 
@@ -80,13 +80,13 @@ void DSound::SetPrimaryBufferMode() {
   // Set the primary buffer's format
   hr = IDirectSoundBuffer_SetFormat(pBuffer, &waveformat);
   if (FAILED(hr)) {
-    LOG->Warn(hr_ssprintf(hr, "SetFormat on primary buffer").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "SetFormat on primary buffer").c_str());
   }
 
   DWORD got;
   hr = pBuffer->GetFormat(&waveformat, sizeof(waveformat), &got);
   if (FAILED(hr)) {
-    LOG->Warn(hr_ssprintf(hr, "GetFormat on primary buffer").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "GetFormat on primary buffer").c_str());
   } else if (waveformat.nSamplesPerSec != 44100) {
     LOG->Warn(
         "Primary buffer set to %i instead of 44100", waveformat.nSamplesPerSec);
@@ -136,7 +136,7 @@ std::string DSound::Init() {
     DSCAPS Caps;
     Caps.dwSize = sizeof(Caps);
     if (FAILED(hr = m_pDS->GetCaps(&Caps))) {
-      LOG->Warn(hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str());
+      LOG->Warn("%s", hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str());
     } else {
       LOG->Info(
           "DirectSound sample rates: %i..%i %s", Caps.dwMinSecondarySampleRate,
@@ -167,7 +167,7 @@ bool DSound::IsEmulated() const {
   Caps.dwSize = sizeof(Caps);
   HRESULT hr;
   if (FAILED(hr = m_pDS->GetCaps(&Caps))) {
-    LOG->Warn(hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str());
+      LOG->Warn("%s", hr_ssprintf(hr, "m_pDS->GetCaps failed").c_str());
     /* This is strange, so let's be conservative. */
     return true;
   }
@@ -297,7 +297,7 @@ std::string DSoundBuf::Init(
   DWORD got;
   hr = m_pBuffer->GetFormat(&waveformat, sizeof(waveformat), &got);
   if (FAILED(hr)) {
-    LOG->Warn(hr_ssprintf(hr, "GetFormat on secondary buffer").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "GetFormat on secondary buffer").c_str());
   } else if ((int)waveformat.nSamplesPerSec != m_iSampleRate) {
     LOG->Warn(
         "Secondary buffer set to %i instead of %i", waveformat.nSamplesPerSec,
@@ -644,7 +644,7 @@ int64_t DSoundBuf::GetPosition() const {
     hr = m_pBuffer->GetCurrentPosition(&iCursor, &iJunk);
   }
   if (hr != DS_OK) {
-    LOG->Warn(hr_ssprintf(hr, "DirectSound::GetPosition failed").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "DirectSound::GetPosition failed").c_str());
     iCursor = 0;
   }
 

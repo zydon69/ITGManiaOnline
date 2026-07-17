@@ -19,6 +19,8 @@
 #include "StageStats.h"
 #include "ThemeMetric.h"
 
+class GameState;
+
 /**
  * @brief How many songs are shown at the end?
  *
@@ -54,15 +56,15 @@ enum DetailLine {
 class ScreenEvaluation : public ScreenWithMenuElements {
  public:
   ScreenEvaluation();
-  virtual ~ScreenEvaluation();
-  virtual void Init();
-  virtual bool Input(const InputEventPlus& input);
-  virtual void HandleScreenMessage(const ScreenMessage SM);
+  ~ScreenEvaluation() override;
+  void Init() override;
+  bool Input(const InputEventPlus& input) override;
+  void HandleScreenMessage(const ScreenMessage SM) override;
 
-  virtual bool MenuBack(const InputEventPlus& input);
-  virtual bool MenuStart(const InputEventPlus& input);
-  virtual bool MenuRestart(const InputEventPlus& input);
-  virtual void PushSelf(lua_State* L);
+  bool MenuBack(const InputEventPlus& input) override;
+  bool MenuStart(const InputEventPlus& input) override;
+  bool MenuRestart(const InputEventPlus& input) override;
+  void PushSelf(lua_State* L) override;
   StageStats* GetStageStats() const { return m_pStageStats; }
 
  protected:
@@ -70,6 +72,8 @@ class ScreenEvaluation : public ScreenWithMenuElements {
   void HandleMenuStart();
 
   bool m_bSummary = false;
+  GameState* m_pTokenAdjustmentGameState = nullptr;
+  bool m_bPreviousTokenAdjustment = true;
   StageStats* m_pStageStats = nullptr;
   StageStats m_FinalEvalStageStats;
 

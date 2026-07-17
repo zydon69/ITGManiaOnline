@@ -114,17 +114,8 @@ const Steps* GetPrimaryScoreSteps(const PlayerStageStats& pss) {
   return nullptr;
 }
 
-bool IsRoutineSharedStyleActive() {
-  if (GAMESTATE == nullptr) {
-    return false;
-  }
-
-  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  if (!IsValidPlayerNumber(master)) {
-    return false;
-  }
-
-  const Style* style = GAMESTATE->GetCurrentStyle(master);
+bool IsRoutineSharedStyleActive(const StageStats& stats) {
+  const Style* style = stats.m_RoutinePlayer.m_pStyle;
   return style != nullptr &&
          style->m_StyleType == StyleType_TwoPlayersSharedSides;
 }
@@ -218,6 +209,7 @@ StageStats::StageStats() {
   m_vpPossibleSongs.clear();
   m_pPlayedCourse = nullptr;
   FOREACH_PlayerNumber(pn) { m_pPlayedTrails[pn] = nullptr; }
+  m_sStageGuid.clear();
   m_EarnedExtraStage = EarnedExtraStage_No;
   m_bGaveUp = false;
   m_bUsedAutoplay = false;
@@ -386,16 +378,14 @@ void StageStats::AddStats(const StageStats& other) {
 }
 
 void StageStats::SynchronizeRoutineScoreToPlayers() {
-  if (!IsRoutineSharedStyleActive() ||
+  if (!IsRoutineSharedStyleActive(*this) ||
       !HasRecordedPlayerStats(m_RoutinePlayer)) {
     return;
   }
 
-  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  const Style* style = IsValidPlayerNumber(master)
-                           ? GAMESTATE->GetCurrentStyle(master)
-                           : nullptr;
-  if (style == nullptr) {
+  const PlayerNumber master = m_RoutinePlayer.m_player_number;
+  const Style* style = m_RoutinePlayer.m_pStyle;
+  if (!IsValidPlayerNumber(master) || style == nullptr) {
     LOG->Warn(
         "Routine score synchronization skipped because the shared style is "
         "missing.");
@@ -452,7 +442,8 @@ void StageStats::SynchronizeRoutineScoreToPlayers() {
 }
 
 bool StageStats::OnePassed() const {
-  if (IsRoutineSharedStyleActive() && HasRecordedPlayerStats(m_RoutinePlayer)) {
+  if (IsRoutineSharedStyleActive(*this) &&
+      HasRecordedPlayerStats(m_RoutinePlayer)) {
     return !m_RoutinePlayer.m_bFailed;
   }
 
@@ -465,7 +456,8 @@ bool StageStats::OnePassed() const {
 }
 
 bool StageStats::AllFailed() const {
-  if (IsRoutineSharedStyleActive() && HasRecordedPlayerStats(m_RoutinePlayer)) {
+  if (IsRoutineSharedStyleActive(*this) &&
+      HasRecordedPlayerStats(m_RoutinePlayer)) {
     return m_RoutinePlayer.m_bFailed;
   }
 
@@ -800,10 +792,8 @@ void StageStats::FinalizeScores(bool bSummary) {
         sSongOptions, sMachineGuid, PREFSMAN->m_iProductID);
     bMultiPlayerScoreFilled[mp] = true;
   }
-  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  const Style* pMasterStyle = IsValidPlayerNumber(master)
-                                  ? GAMESTATE->GetCurrentStyle(master)
-                                  : nullptr;
+  const PlayerNumber master = m_RoutinePlayer.m_player_number;
+  const Style* pMasterStyle = m_RoutinePlayer.m_pStyle;
   const bool bRoutineSharedStyle =
       pMasterStyle != nullptr &&
       pMasterStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
@@ -892,7 +882,7 @@ void StageStats::FinalizeScores(bool bSummary) {
 
       int iRankingMeter = GetAverageMeter(p);
       if (bCourseMode) {
-        const Trail* pTrail = GAMESTATE->m_pCurTrail[p];
+        const Trail* pTrail = m_pPlayedTrails[p];
         if (pTrail != nullptr) {
           iRankingMeter = ClampMeterForAverage(
               pTrail->GetMeter(), "StageStats::FinalizeScores");
@@ -1031,17 +1021,16 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
         pn);
     return false;
   }
-  if (GAMESTATE == nullptr || PROFILEMAN == nullptr || PREFSMAN == nullptr) {
+  if (PROFILEMAN == nullptr || PREFSMAN == nullptr) {
     LOG->Warn(
         "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore skipped because a "
-        "manager is missing: GAMESTATE=%p PROFILEMAN=%p PREFSMAN=%p.",
-        static_cast<void*>(GAMESTATE), static_cast<void*>(PROFILEMAN),
-        static_cast<void*>(PREFSMAN));
+        "manager is missing: PROFILEMAN=%p PREFSMAN=%p.",
+        static_cast<void*>(PROFILEMAN), static_cast<void*>(PREFSMAN));
     return false;
   }
 
-  const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
-  const bool bRoutineSharedScore = IsRoutineSharedStyleActive() &&
+  const PlayerNumber master = m_RoutinePlayer.m_player_number;
+  const bool bRoutineSharedScore = IsRoutineSharedStyleActive(*this) &&
                                    pn == master &&
                                    HasRecordedPlayerStats(m_RoutinePlayer);
   const PlayerStageStats& scoreStats =
@@ -1057,9 +1046,14 @@ bool StageStats::PlayerHasHighScore(PlayerNumber pn) const {
 
   const Song* pSong = GetPrimaryScoreSong(*this);
   const Steps* pSteps = GetPrimaryScoreSteps(scoreStats);
-  const bool bCourseMode = IsValidPlayMode(m_playMode)
-                               ? IsCoursePlayMode(m_playMode)
-                               : GAMESTATE->IsCourseMode();
+  if (!IsValidPlayMode(m_playMode)) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: StageStats::PlayerHasHighScore rejected invalid play "
+        "mode %i.",
+        m_playMode);
+    return false;
+  }
+  const bool bCourseMode = IsCoursePlayMode(m_playMode);
   const Course* pCourse = m_pPlayedCourse;
   const Trail* pTrail = m_pPlayedTrails[pn];
   Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();

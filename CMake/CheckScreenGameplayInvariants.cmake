@@ -50,6 +50,18 @@ foreach(REQUIRED_SNIPPET
   endif()
 endforeach()
 
+string(FIND
+    "${SCREEN_GAMEPLAY_TEXT}"
+    "if (m_bPaused) {\n    /* If we're paused"
+    PAUSE_GATE_OFFSET)
+string(FIND "${SCREEN_GAMEPLAY_TEXT}" "Message msg(\"\");" CODE_INPUT_OFFSET)
+if(PAUSE_GATE_OFFSET EQUAL -1 OR CODE_INPUT_OFFSET EQUAL -1 OR
+   CODE_INPUT_OFFSET LESS PAUSE_GATE_OFFSET)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay input invariant failed: gameplay codes must run after the pause gate")
+endif()
+
 foreach(REQUIRED_SNIPPET
     "p.m_fSpeed <= 0.0f"
     "UpdateSongPosition rejected audio position/adjustment"
@@ -61,6 +73,64 @@ foreach(REQUIRED_SNIPPET
     message(
         FATAL_ERROR
         "ScreenGameplay numeric invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "THEME->IsThemeLoaded() && LUA != nullptr"
+    "IncrementGameplayCount"
+    "AccumulateGameplaySeconds"
+    "AccumulateSignedGameplaySeconds"
+    "ScreenGameplay::SetupSong preflight"
+    "const double lengthSeconds ="
+    "const double lastStepWithJudgment ="
+    "const float musicLength = FiniteNonNegativeOr"
+    "const double transitionForFade =")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay hardening invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+string(FIND
+    "${SCREEN_GAMEPLAY_TEXT}"
+    "ASSERT(!m_pSoundMusic->IsPlaying())"
+    PLAYING_SOUND_ASSERT_OFFSET)
+if(NOT PLAYING_SOUND_ASSERT_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay hardening invariant failed: playing sounds must be recovered at runtime")
+endif()
+
+foreach(REQUIRED_SNIPPET
+    "HasCoreGameplayManagers(\"ScreenGameplay::Update\")"
+    "GetPathS(m_sName, \"oni die\", true)"
+    "constexpr int kMaxCrossedRowsPerUpdate"
+    "t >= pStyle->m_iColsPerPlayer"
+    "Song* const playedSong = GAMESTATE->m_pCurSong"
+    "GAMESTATE->m_pCurSong.Set(playedSong)"
+    "GAMESTATE->m_pCurTrail[snapshot.pn].Set(nullptr)")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay lifecycle invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "std::vector<RepeatPlayerQueue> repeatedPlayerQueues"
+    "entry.pSong != repeatedSongs[entryIndex]"
+    "leaving gameplay before appending them"
+    "Profile::MakeUniqueFileNameNoExtension(replayDirectory, \"replay\")"
+    "const bool saved =")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay repeat/replay invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 
@@ -113,7 +183,8 @@ endforeach()
 
 foreach(REQUIRED_SNIPPET
     "IsLiveScoreFinalizedForCurrentRound(\"track_online_score_push\")"
-    "tracker_stop reason=final_score_already_accepted")
+    "tracker_stop reason=final_score_already_accepted"
+    "judgment_skipped reason=inactive_online_context")
   string(FIND "${TRACK_ONLINE_SCORE_PUSH_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
@@ -121,6 +192,16 @@ foreach(REQUIRED_SNIPPET
         "Online score tracker invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+string(FIND
+    "${TRACK_ONLINE_SCORE_PUSH_TEXT}"
+    "judgment_skipped reason=missing_context"
+    LOCAL_JUDGMENT_NOISE_OFFSET)
+if(NOT LOCAL_JUDGMENT_NOISE_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "Online score tracker invariant failed: local judgments must not emit online missing-context traces")
+endif()
 
 string(FIND "${ONLINE_CLIENT_TEXT}" "and self:SecondsUntilScheduledStart() == nil" NIL_SCHEDULE_HOLD_OFFSET)
 if(NOT NIL_SCHEDULE_HOLD_OFFSET EQUAL -1)

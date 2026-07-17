@@ -380,17 +380,25 @@ Song* GetPrimaryPlayedSong(StageStats* stageStats) {
 }
 
 bool IsEvaluationCourseMode(const StageStats* stageStats) {
-  if (stageStats != nullptr) {
-    switch (stageStats->m_playMode) {
-      case PLAY_MODE_NONSTOP:
-      case PLAY_MODE_ONI:
-      case PLAY_MODE_ENDLESS:
-        return true;
-      default:
-        break;
-    }
+  if (stageStats == nullptr) {
+    return false;
   }
-  return GAMESTATE != nullptr && GAMESTATE->IsCourseMode();
+  switch (stageStats->m_playMode) {
+    case PLAY_MODE_NONSTOP:
+    case PLAY_MODE_ONI:
+    case PLAY_MODE_ENDLESS:
+      return true;
+    case PLAY_MODE_REGULAR:
+    case PLAY_MODE_BATTLE:
+    case PLAY_MODE_RAVE:
+      return false;
+    default:
+      LOG->Warn(
+          "SRC_AUDIT_FIX: ScreenEvaluation treated invalid recorded play "
+          "mode %i as non-course.",
+          stageStats->m_playMode);
+      return false;
+  }
 }
 
 float GetBannerMetric(
@@ -524,13 +532,17 @@ bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
 
 ScreenEvaluation::ScreenEvaluation() {
   if (GAMESTATE != nullptr) {
+    m_pTokenAdjustmentGameState = GAMESTATE;
+    m_bPreviousTokenAdjustment =
+        GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck;
     GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = false;
   }
 }
 
 ScreenEvaluation::~ScreenEvaluation() {
-  if (GAMESTATE != nullptr) {
-    GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck = true;
+  if (GAMESTATE != nullptr && GAMESTATE == m_pTokenAdjustmentGameState) {
+    GAMESTATE->m_AdjustTokensBySongCostForFinalStageCheck =
+        m_bPreviousTokenAdjustment;
   }
 }
 
@@ -716,7 +728,8 @@ void ScreenEvaluation::Init() {
         "can clean up properly.");
     STATSMAN->m_vPlayedStageStats.push_back(STATSMAN->m_CurStageStats);
   }
-  m_pStageStats = &STATSMAN->m_vPlayedStageStats.back();
+  m_FinalEvalStageStats = STATSMAN->m_vPlayedStageStats.back();
+  m_pStageStats = &m_FinalEvalStageStats;
 
   ZERO(m_bSavedScreenshot);
 
@@ -818,13 +831,10 @@ void ScreenEvaluation::Init() {
         this->AddChild(m_sprSmallBannerFrame[i]);
       }
     } else {
-      if (isCourseMode && GAMESTATE != nullptr && GAMESTATE->m_pCurCourse) {
-        m_LargeBanner.LoadFromCourse(GAMESTATE->m_pCurCourse);
+      if (isCourseMode && m_pStageStats->m_pPlayedCourse != nullptr) {
+        m_LargeBanner.LoadFromCourse(m_pStageStats->m_pPlayedCourse);
       } else {
         Song* pSong = GetPrimaryPlayedSong(m_pStageStats);
-        if (pSong == nullptr && GAMESTATE != nullptr) {
-          pSong = GAMESTATE->m_pCurSong;
-        }
         if (pSong != nullptr) {
           m_LargeBanner.LoadFromSong(pSong);
         } else {
@@ -956,10 +966,6 @@ void ScreenEvaluation::Init() {
       size_t courseEntries = m_pStageStats != nullptr
                                  ? m_pStageStats->m_vpPlayedSongs.size()
                                  : 0;
-      if (courseEntries == 0 && GAMESTATE != nullptr &&
-          GAMESTATE->m_pCurCourse) {
-        courseEntries = GAMESTATE->m_pCurCourse->m_vEntries.size();
-      }
       if (courseEntries > 0) {
         fDivider = 1.0f / static_cast<float>(courseEntries);
       } else {

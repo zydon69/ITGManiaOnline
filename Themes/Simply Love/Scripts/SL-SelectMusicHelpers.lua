@@ -213,22 +213,29 @@ end
 
 local function online_preview_find_song(songInfo)
 	if not (SONGMAN and SONGMAN.FindSong) then return nil end
+	local function find_song(path)
+		if type(path) ~= "string" or path == "" then return nil end
+		local ok, song = safe_call("SONGMAN.FindSong online preview", function()
+			return SONGMAN:FindSong(path)
+		end)
+		return ok and song or nil
+	end
 	local songPath = online_preview_song_path(songInfo)
 	if songPath == "" then return nil end
 
-	local song = SONGMAN:FindSong(songPath)
+	local song = find_song(songPath)
 	if song then return song end
 
 	local relative = songPath:match("^[^/]+/(.+)$")
 	if relative then
-		song = SONGMAN:FindSong(relative)
+		song = find_song(relative)
 		if song then return song end
 	end
 
 	local pack = online_preview_trim(songInfo.pack or songInfo.group or songInfo.group_name)
 	local title = online_preview_trim(songInfo.title or songInfo.song or songInfo.name or songInfo.folder_name)
 	if pack ~= "" and title ~= "" then
-		return SONGMAN:FindSong(pack .. "/" .. title)
+		return find_song(pack .. "/" .. title)
 	end
 
 	return nil

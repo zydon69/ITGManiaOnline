@@ -193,10 +193,10 @@ local function safe_ini_write(path, contents)
 	if type(path) ~= "string" or path == "" or type(contents) ~= "table" or not IniFile or type(IniFile.WriteFile) ~= "function" then
 		return false
 	end
-	local ok = safe_call("IniFile.WriteFile " .. path, function()
-		IniFile.WriteFile(path, contents)
+	local ok, result = safe_call("IniFile.WriteFile " .. path, function()
+		return IniFile.WriteFile(path, contents)
 	end)
-	return ok == true
+	return ok == true and result ~= false
 end
 
 local function theme_display_name()
@@ -363,7 +363,6 @@ LoadGuest = function(player)
 	end)
 	SL[pn].Stages = stages
 	migrate_deprecated_profile_modifiers(pn)
-	migrate_deprecated_profile_modifiers(pn)
 	apply_hard_ex_exclusivity(pn)
 	return true
 end
@@ -396,9 +395,15 @@ LoadProfileCustom = function(profile, dir)
 			SL[pn].Stages = stages
 		end
 
-		safe_call("ParseGrooveStatsIni", function() ParseGrooveStatsIni(player) end)
-		safe_call("ParseArrowCloudIni", function() ParseArrowCloudIni(player) end)
-		safe_call("ReadItlFile", function() ReadItlFile(player) end)
+		if type(ParseGrooveStatsIni) == "function" then
+			safe_call("ParseGrooveStatsIni", function() ParseGrooveStatsIni(player) end)
+		end
+		if type(ParseArrowCloudIni) == "function" then
+			safe_call("ParseArrowCloudIni", function() ParseArrowCloudIni(player) end)
+		end
+		if type(ReadItlFile) == "function" then
+			safe_call("ReadItlFile", function() ReadItlFile(player) end)
+		end
 	end
 
 	if pn and safe_file_exists(path) then
@@ -456,14 +461,20 @@ SaveProfileCustom = function(profile, dir)
 
 			ok = safe_ini_write(path, {[theme_name]=output}) and ok
 
-			local grooveOk, grooveResult = safe_call("WriteGrooveStatsIni", function() return WriteGrooveStatsIni(player) end)
-			ok = grooveOk and grooveResult ~= false and ok
-			local arrowOk, arrowResult = safe_call("WriteArrowCloudIni", function() return WriteArrowCloudIni(player) end)
-			ok = arrowOk and arrowResult ~= false and ok
+			if type(WriteGrooveStatsIni) == "function" then
+				local grooveOk, grooveResult = safe_call("WriteGrooveStatsIni", function() return WriteGrooveStatsIni(player) end)
+				ok = grooveOk and grooveResult ~= false and ok
+			end
+			if type(WriteArrowCloudIni) == "function" then
+				local arrowOk, arrowResult = safe_call("WriteArrowCloudIni", function() return WriteArrowCloudIni(player) end)
+				ok = arrowOk and arrowResult ~= false and ok
+			end
 			-- Write to the ITL file if we need to.
 			-- This is relevant for memory cards.
-			local itlOk, itlResult = safe_call("WriteItlFile", function() return WriteItlFile(player) end)
-			ok = itlOk and itlResult ~= false and ok
+			if type(WriteItlFile) == "function" then
+				local itlOk, itlResult = safe_call("WriteItlFile", function() return WriteItlFile(player) end)
+				ok = itlOk and itlResult ~= false and ok
+			end
 			break
 		end
 	end

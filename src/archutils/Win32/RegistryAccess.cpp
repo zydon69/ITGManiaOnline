@@ -62,7 +62,7 @@ static HKEY OpenRegKey(
       &hRetKey);
   if (retval != ERROR_SUCCESS) {
     if (bWarnOnError) {
-      LOG->Warn(werr_ssprintf(
+      LOG->Warn("%s", werr_ssprintf(
                     retval, "RegOpenKeyEx(%x,%s) error", hType, sSubkey.c_str())
                     .c_str());
     }
@@ -161,7 +161,7 @@ bool RegistryAccess::GetRegSubKeys(
     }
 
     if (iRet != ERROR_SUCCESS) {
-      LOG->Warn(werr_ssprintf(iRet, "GetRegSubKeys(%p,%i) error", hKey, index)
+      LOG->Warn("%s", werr_ssprintf(iRet, "GetRegSubKeys(%p,%i) error", hKey, index)
                     .c_str());
       bError = true;
       break;

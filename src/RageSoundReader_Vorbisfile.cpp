@@ -488,7 +488,13 @@ RageSoundReader_Vorbisfile* RageSoundReader_Vorbisfile::Copy() const {
   if (pFile == nullptr) {
     return nullptr;
   }
-  pFile->Seek(0);
+  if (pFile->Seek(0) == -1) {
+    const std::string error =
+        "SRC_AUDIT_FIX SRC-3320: Vorbis copy could not rewind its file";
+    TraceReviewSrcError(error);
+    delete pFile;
+    return nullptr;
+  }
   RageSoundReader_Vorbisfile* ret = nullptr;
   try {
     ret = new RageSoundReader_Vorbisfile;

@@ -78,12 +78,14 @@ void ScreenPlayerOptions::Init() {
   FOREACH_PlayerNumber(p) {
     m_sprDisqualify[p].Load(
         HasPlayerOptionsTheme() ? THEME->GetPathG(m_sName, "disqualify") : "");
-    m_sprDisqualify[p]->SetName(ssprintf("DisqualifyP%i", p + 1));
-    LOAD_ALL_COMMANDS_AND_SET_XY(m_sprDisqualify[p]);
-    m_sprDisqualify[p]->SetVisible(
-        false);  // unhide later if handicapping options are discovered
-    m_sprDisqualify[p]->SetDrawOrder(2);
-    m_frameContainer.AddChild(m_sprDisqualify[p]);
+    if (m_sprDisqualify[p].IsLoaded()) {
+      m_sprDisqualify[p]->SetName(ssprintf("DisqualifyP%i", p + 1));
+      LOAD_ALL_COMMANDS_AND_SET_XY(m_sprDisqualify[p]);
+      m_sprDisqualify[p]->SetVisible(
+          false);  // unhide later if handicapping options are discovered
+      m_sprDisqualify[p]->SetDrawOrder(2);
+      m_frameContainer.AddChild(m_sprDisqualify[p]);
+    }
   }
 
   const Maybe showSongOptions =
@@ -267,7 +269,6 @@ void ScreenPlayerOptions::UpdateDisqualified(int row, PlayerNumber pn) {
       Init);
   std::vector<PlayerNumber> v;
   v.push_back(pn);
-  LuaThreadVariable previewExport("ScreenOptionsPreviewExport", "1");
   ExportOptionsForPreview(row, v);
   bool bRowCausesDisqualified = GAMESTATE->CurrentOptionsDisqualifyPlayer(pn);
 

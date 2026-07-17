@@ -141,6 +141,18 @@ require_contains(
   "${audio_unit_cpp}"
   "constexpr int decodeBufferFrames = 4096;"
   "AudioUnit uses the decoder scheduler's effective lead size")
+require_contains(
+  "${audio_unit_cpp}"
+  "AudioObjectHasProperty(OutputDevice, &LatencyAddr)"
+  "AudioUnit checks optional latency properties before reading them")
+require_not_contains(
+  "${audio_unit_cpp}"
+  "Couldn't get device latency"
+  "unsupported optional AudioUnit latency properties must not emit warnings")
+require_contains(
+  "${rage_sound_cpp}"
+  "LogPlayOnceDiagnosticsEnabled() || LogContentLoadDiagnosticsEnabled()"
+  "per-sound load traces follow the targeted diagnostic switches")
 require_not_contains(
   "${audio_unit_cpp}"
   "std::max(decodeBufferFrames, PREFSMAN->m_iSoundWriteAhead.Get())"
@@ -536,6 +548,10 @@ require_contains(
   "RageSoundReader_Extend accounts for stream-to-source ratios")
 require_not_contains(
   "${rage_sound_reader_extend_cpp}"
+  "pSource->GetNextSourceFrame();"
+  "RageSoundReader_Extend must not truncate upstream 64-bit positions")
+require_not_contains(
+  "${rage_sound_reader_extend_cpp}"
   "SaturatingAddFrames"
   "RageSoundReader_Extend must not silently saturate frame arithmetic")
 require_contains(
@@ -679,6 +695,10 @@ require_contains(
   "GetSourcePath().c_str()"
   "RageSoundReader_Vorbisfile reports source paths in decoder diagnostics")
 require_contains(
+  "${rage_sound_reader_vorbis_cpp}"
+  "SRC_AUDIT_FIX SRC-3320"
+  "RageSoundReader_Vorbisfile refuses copies that cannot rewind")
+require_contains(
   "${rage_sound_reader_mp3_h}"
   "RageSoundReader_MP3(const RageSoundReader_MP3&) = delete;"
   "RageSoundReader_MP3 forbids unsafe implicit copying")
@@ -779,6 +799,10 @@ require_contains(
   "SRC_AUDIT_FIX SRC-2830"
   "PitchChange rejects unsafe speed and pitch ratios before resampling")
 require_contains(
+  "${rage_sound_reader_pitch_change_cpp}"
+  "SRC_AUDIT_FIX SRC-3321"
+  "PitchChange propagates transactional resampler rate failures")
+require_contains(
   "${rage_sound_cpp}"
   "const std::string setupError ="
   "RageSound::Load surfaces filter-chain setup errors immediately")
@@ -850,6 +874,14 @@ require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
   "std::int64_t iNextSourceFrame = 0;"
   "ThreadedBuffer reads 64-bit source-frame metadata")
+require_not_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "pSource->GetNextSourceFrame();"
+  "ThreadedBuffer must not truncate its initial source frame")
+require_contains(
+  "${rage_sound_reader_threaded_buffer_cpp}"
+  "SRC_AUDIT_FIX SRC-3323"
+  "ThreadedBuffer guards 64-bit source-frame accumulation")
 require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
   "MAX_THREADED_BUFFER_CHANNELS"

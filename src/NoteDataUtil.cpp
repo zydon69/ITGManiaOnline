@@ -424,9 +424,10 @@ static void LoadFromSMNoteDataStringWithPlayer(
   }
 
   if (unmatchedHoldTailCount > 0) {
-    LOG->Warn(
-        "Ignored %u unmatched hold tail(s) while parsing note data for player "
-        "%d; first at measure=%u measure_line=%u row=%d track=%d line=\"%s\".",
+    LOG->UserLog(
+        "Note data", "",
+        "ignored %u unmatched hold tail(s) for player %d; first at "
+        "measure=%u measure_line=%u row=%d track=%d line=\"%s\".",
         unmatchedHoldTailCount, static_cast<int>(pn), firstUnmatchedMeasure,
         firstUnmatchedMeasureLine, firstUnmatchedRow, firstUnmatchedTrack,
         firstUnmatchedLine.c_str());

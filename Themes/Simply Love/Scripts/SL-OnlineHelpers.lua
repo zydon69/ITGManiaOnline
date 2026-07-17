@@ -133,13 +133,20 @@ function remove_online_input_callbacks()
 end
 
 function replace_online_input_callback(screen, key, handler)
-	if not screen or not handler then return end
+	if not (screen and screen.AddInputCallback and type(handler) == "function") then
+		return false
+	end
 	local callback = onlineInputCallbacks[key]
 	if callback and callback.screen and callback.handler and callback.screen.RemoveInputCallback then
 		pcall(function() callback.screen:RemoveInputCallback(callback.handler) end)
 	end
-	screen:AddInputCallback(handler)
+	onlineInputCallbacks[key] = nil
+	local ok = safe_online_call("add input callback " .. tostring(key), function()
+		screen:AddInputCallback(handler)
+	end)
+	if not ok then return false end
 	onlineInputCallbacks[key] = { screen = screen, handler = handler }
+	return true
 end
 
 function ready_debug_enabled()
@@ -850,7 +857,7 @@ local lastGameplayPauseState = nil
 SetGameplayPaused = function(screen, paused)
 	if not screen then return end
 
-	local screenName = screen.GetName and screen:GetName() or ""
+	local screenName = screen_name(screen)
 	local isGameplay = gameplayScreens[screenName] == true
 	local screenKey = tostring(screen)
 	paused = paused == true
@@ -880,7 +887,7 @@ end
 ReleaseOnlineGameplay = function(screen, secondsUntilStart)
 	local lateBy = secondsUntilStart and math.max(0, -secondsUntilStart) or 0
 	if online_trace then
-		online_trace("FLOW release_gameplay screen=" .. tostring(screen and screen:GetName() or "nil")
+		online_trace("FLOW release_gameplay screen=" .. tostring(screen_name(screen))
 			.. " secondsUntilStart=" .. tostring(secondsUntilStart)
 			.. " lateBy=" .. tostring(lateBy)
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "no-room"))
@@ -904,12 +911,21 @@ InputHandler = function(event)
 	if not event then return false end
 	local topScreen = current_top_screen()
 	if topScreen and isWaiting and event.PlayerNumber then
-		local pn = ToEnumShortString(event.PlayerNumber)
+		local okPn, pn = safe_online_call("normalize waiting input player", function()
+			return ToEnumShortString(event.PlayerNumber)
+		end)
+		pn = okPn and tostring(pn or "") or ""
+		if startHoldTime[pn] == nil then
+			online_flow_trace_throttled("waiting_input_invalid_player:" .. pn, 5.0,
+				"waiting_input_ignored reason=invalid_player player=" .. tostring(pn))
+			return true
+		end
+		local topScreenName = screen_name(topScreen)
 		if event.type == "InputEventType_FirstPress" and event.GameButton == "Back" then
 			if ITGOnline and ITGOnline.ShouldBlockEvaluationExit and ITGOnline:ShouldBlockEvaluationExit("sync_input_back") then
 				if online_trace then
 					online_trace("FLOW sync_input_back_blocked reason=awaiting_results_ready"
-						.. " screen=" .. tostring(topScreen:GetName())
+						.. " screen=" .. tostring(topScreenName)
 						.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or ITGOnline.currentRoomPhase))
 				end
 				return true
@@ -919,14 +935,14 @@ InputHandler = function(event)
 			if ITGOnline and ITGOnline.MarkReturnedToLobby then
 				ITGOnline:MarkReturnedToLobby()
 			end
-			if topScreen:GetName() ~= "ScreenOnlineLobbies" then
+			if topScreenName ~= "ScreenOnlineLobbies" then
 				transition_screen(topScreen, "ScreenOnlineLobbies", "SM_GoToNextScreen", "sync_input_back")
 			end
 			return true
 		elseif event.type == "InputEventType_FirstPress" and event.GameButton == "Start" then
 			startHoldTime[pn] = GetTimeSinceStart()
 			lastDisconnectCountdown = nil
-			if topScreen:GetName() == "ScreenGameplay" then
+			if topScreenName == "ScreenGameplay" then
 				readyState[pn] = true
 				safe_broadcast("UpdateMachineState")
 			end
@@ -945,7 +961,7 @@ InputHandler = function(event)
 					lastDisconnectCountdown = nil
 						isWaiting = false
 						local topScreen = current_top_screen()
-						if topScreen and topScreen:GetName() == "ScreenGameplay" then
+						if topScreen and screen_name(topScreen) == "ScreenGameplay" then
 							SetGameplayPaused(topScreen, false)
 						end
 						if ITGOnline and ITGOnline.MarkReturnedToLobby then
@@ -3157,16 +3173,24 @@ CreateOnlineHandler = function()
 					local screen = current_top_screen()
 					local screenName = screen_name(screen)
 					local wsConnected = self.connected and self.socket ~= nil
-					online_flow_trace("screen_changed_message top=" .. tostring(screenName)
-						.. " currentScreenName=" .. tostring(ITGOnline and ITGOnline.currentScreenName or "nil")
-						.. " inLobby=" .. tostring(screenName == "ScreenOnlineLobbies")
-						.. " connected=" .. tostring(self.connected == true)
-						.. " wsConnected=" .. tostring(wsConnected == true)
-						.. " isWaiting=" .. tostring(isWaiting == true)
-						.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-						.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-						.. " pendingOnlineStartRoomId=" .. tostring(pendingOnlineStartRoomId or "nil")
-						.. " pendingConfigReady=" .. tostring(pendingConfigReady ~= nil))
+					local hasOnlineScreenContext = self.connected
+						or wsConnected
+						or screenName == "ScreenOnlineLobbies"
+						or (ITGOnline and (ITGOnline.currentRoomId or ITGOnline.currentRoom))
+						or pendingOnlineStartRoomId ~= nil
+						or pendingConfigReady ~= nil
+					if hasOnlineScreenContext then
+						online_flow_trace("screen_changed_message top=" .. tostring(screenName)
+							.. " currentScreenName=" .. tostring(ITGOnline and ITGOnline.currentScreenName or "nil")
+							.. " inLobby=" .. tostring(screenName == "ScreenOnlineLobbies")
+							.. " connected=" .. tostring(self.connected == true)
+							.. " wsConnected=" .. tostring(wsConnected == true)
+							.. " isWaiting=" .. tostring(isWaiting == true)
+							.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+							.. " pendingOnlineStartRoomId=" .. tostring(pendingOnlineStartRoomId or "nil")
+							.. " pendingConfigReady=" .. tostring(pendingConfigReady ~= nil))
+					end
 					remove_online_input_callbacks()
 					if self.inLobby and screen and screen.AddInputCallback then
 						local activityHandler = function(event)

@@ -23,11 +23,11 @@
 #include "RageUtil/RandomNumbers.h"
 #include "Screen.h"
 #include "ScreenAttract.h"
-#include "ScreenManager.h"
 #include "ScreenMessage.h"
 #include "Song.h"
 #include "SongManager.h"
 #include "StatsManager.h"
+#include "Style.h"
 #include "ThemeManager.h"
 
 namespace {
@@ -42,12 +42,13 @@ bool IsTestInitialScreenRequested() {
   return PREFSMAN != nullptr && !PREFSMAN->m_sTestInitialScreen.Get().empty();
 }
 
-Steps* GetFirstPlayableSteps(Song* song) {
-  if (song == nullptr) {
+Steps* GetFirstPlayableSteps(Song* song, const Style* style) {
+  if (song == nullptr || style == nullptr) {
     return nullptr;
   }
 
-  const std::vector<Steps*>& steps = song->GetAllSteps();
+  const std::vector<Steps*>& steps =
+      song->GetStepsByStepsType(style->m_StepsType);
   for (Steps* candidate : steps) {
     if (candidate != nullptr) {
       return candidate;
@@ -140,7 +141,7 @@ void ScreenEnding::SetupTestInitialScreen() {
           ? GAMEMAN->GameAndStringToStyle(defaultGame, "versus")
           : nullptr;
   Song* song = SONGMAN->GetRandomSong();
-  Steps* steps = GetFirstPlayableSteps(song);
+  Steps* steps = GetFirstPlayableSteps(song, style);
   if (style == nullptr || song == nullptr || steps == nullptr) {
     WarnScreenEnding(
         "test ending setup skipped because style, song, or steps are missing.");

@@ -38,13 +38,14 @@ bool DIDevice::Open() {
   HRESULT hr =
       g_dinput->CreateDevice(JoystickInst.guidInstance, &tmpdevice, nullptr);
   if (hr != DI_OK) {
-    LOG->Info(hr_ssprintf(hr, "OpenDevice: IDirectInput_CreateDevice").c_str());
+    LOG->Info(
+        "%s", hr_ssprintf(hr, "OpenDevice: IDirectInput_CreateDevice").c_str());
     return false;
   }
   hr = tmpdevice->QueryInterface(IID_IDirectInputDevice8, (LPVOID*)&Device);
   tmpdevice->Release();
   if (hr != DI_OK) {
-    LOG->Info(hr_ssprintf(
+    LOG->Info("%s", hr_ssprintf(
                   hr, "OpenDevice(%s): IDirectInputDevice::QueryInterface",
                   m_sName.c_str())
                   .c_str());
@@ -58,7 +59,7 @@ bool DIDevice::Open() {
 
   hr = Device->SetCooperativeLevel(GraphicsWindow::GetHwnd(), coop);
   if (hr != DI_OK) {
-    LOG->Info(hr_ssprintf(
+    LOG->Info("%s", hr_ssprintf(
                   hr,
                   "OpenDevice(%s): IDirectInputDevice2::SetCooperativeLevel",
                   m_sName.c_str())
@@ -78,7 +79,7 @@ bool DIDevice::Open() {
       break;
   }
   if (hr != DI_OK) {
-    LOG->Info(hr_ssprintf(
+    LOG->Info("%s", hr_ssprintf(
                   hr, "OpenDevice(%s): IDirectInputDevice2::SetDataFormat",
                   m_sName.c_str())
                   .c_str());
@@ -124,7 +125,7 @@ bool DIDevice::Open() {
        * to use less reliable polling. */
       buffered = false;
     } else if (hr != DI_OK) {
-      LOG->Info(hr_ssprintf(
+      LOG->Info("%s", hr_ssprintf(
                     hr, "OpenDevice(%s): IDirectInputDevice2::SetProperty",
                     m_sName.c_str())
                     .c_str());

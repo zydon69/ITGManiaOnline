@@ -36,6 +36,7 @@
 #include "Steps.h"
 #include "Style.h"
 #include "ThemeMetric.h"
+#include "ThemeManager.h"
 #include "TimingData.h"
 #include "TimingSegments.h"
 #include "global.h"
@@ -353,6 +354,12 @@ void ScoreKeeperNormal::Load(
         static_cast<void*>(GAMESTATE), m_pPlayerState->m_PlayerNumber);
     return;
   }
+  if (THEME == nullptr || !THEME->IsThemeLoaded() || LUA == nullptr) {
+    LOG->Warn(
+        "SRC_AUDIT_FIX: ScoreKeeperNormal::Load aborted without theme/Lua "
+        "runtime.");
+    return;
+  }
 
   if (apSongs.size() != apSteps.size() ||
       apSongs.size() != asModifiers.size()) {
@@ -374,11 +381,14 @@ void ScoreKeeperNormal::Load(
   }
   for (size_t i = 0; i < apSongs.size(); ++i) {
     if (apSongs[i] == nullptr || apSteps[i] == nullptr ||
+        apSteps[i]->m_pSong != apSongs[i] ||
         apSteps[i]->GetTimingData() == nullptr) {
       LOG->Warn(
           "SRC_AUDIT_FIX: ScoreKeeperNormal::Load rejected invalid entry %zu: "
-          "song=%p steps=%p timing=%p.",
+          "song=%p steps=%p steps_song=%p timing=%p.",
           i, static_cast<void*>(apSongs[i]), static_cast<void*>(apSteps[i]),
+          apSteps[i] == nullptr ? nullptr
+                                : static_cast<void*>(apSteps[i]->m_pSong),
           apSteps[i] == nullptr
               ? nullptr
               : static_cast<void*>(apSteps[i]->GetTimingData()));

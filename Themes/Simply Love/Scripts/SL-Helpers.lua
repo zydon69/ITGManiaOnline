@@ -524,6 +524,15 @@ IsOnlineScoreLoggingEnabled = function()
 	return IsOnlineDiagnosticLoggingEnabled("ITGOnlineScoreLogs")
 end
 
+local online_layout_trace_keys = {}
+local function TraceOnlineLayoutState(name, key, message)
+	if not (Trace and IsOnlineGameplayLayoutLoggingEnabled()) then return end
+	key = tostring(key or "")
+	if online_layout_trace_keys[name] == key then return end
+	online_layout_trace_keys[name] = key
+	Trace(message)
+end
+
 GetOnlineGameplayLayout = function()
 	local margin = clamp(_screen.w * 0.055, 44, 120)
 	local usable_width = math.max(1, _screen.w - (margin * 2))
@@ -551,8 +560,7 @@ GetOnlineGameplayLayout = function()
 		},
 	}
 
-	if Trace and IsOnlineGameplayLayoutLoggingEnabled() then
-		Trace("SL_ONLINE_LAYOUT_CALC"
+	local layout_trace = "SL_ONLINE_LAYOUT_CALC"
 			.. " screen_w=" .. tostring(_screen.w)
 			.. " screen_h=" .. tostring(_screen.h)
 			.. " screen_cx=" .. tostring(_screen.cx)
@@ -565,8 +573,8 @@ GetOnlineGameplayLayout = function()
 			.. " leaderboard_width=" .. tostring(column_width * leaderboard_ratio)
 			.. " left_x=" .. tostring(columns.left.x)
 			.. " center_x=" .. tostring(columns.center.x)
-			.. " right_x=" .. tostring(columns.right.x))
-	end
+			.. " right_x=" .. tostring(columns.right.x)
+	TraceOnlineLayoutState("layout", layout_trace, layout_trace)
 
 	return {
 		margin = margin,
@@ -598,8 +606,7 @@ IsUsingOnlineGameplayColumns = function()
 		and style
 		and style:GetName() == "single"
 
-	if Trace and IsOnlineGameplayLayoutLoggingEnabled() then
-		Trace("SL_ONLINE_COLUMNS_CHECK"
+	local columns_trace = "SL_ONLINE_COLUMNS_CHECK"
 			.. " result=" .. tostring(result == true)
 			.. " screen=" .. tostring(screen_name)
 			.. " style=" .. tostring(style and style:GetName() or "nil")
@@ -614,8 +621,8 @@ IsUsingOnlineGameplayColumns = function()
 			.. " has_current_song_payload=" .. tostring(ITGOnline and ITGOnline.currentSongPayload ~= nil)
 			.. " has_active_gameplay_song=" .. tostring(ITGOnline and ITGOnline.activeGameplaySongPayload ~= nil)
 			.. " active_round_key=" .. tostring(ITGOnline and ITGOnline.activeGameplayRoundKey or "nil")
-			.. " room_round_key=" .. tostring(ITGOnline and ITGOnline.currentRoomRoundKey or "nil"))
-	end
+			.. " room_round_key=" .. tostring(ITGOnline and ITGOnline.currentRoomRoundKey or "nil")
+	TraceOnlineLayoutState("columns", columns_trace, columns_trace)
 
 	return result
 end
@@ -628,7 +635,7 @@ end
 GetOnlineGameplayStatsColumn = function(player)
 	if not player then return "center" end
 
-	if #GAMESTATE:GetHumanPlayers() > 1 then
+	if #safe_human_players() > 1 then
 		return player == PLAYER_1 and "left" or "right"
 	end
 
@@ -646,10 +653,19 @@ GetNotefieldX = function(player)
 		useOnlineColumns = ok and result == true
 	end
 	if useOnlineColumns then
-		local pn = player and ToEnumShortString(player) or ""
-		local player_offset = (SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.NoteFieldOffsetX or 0)
+		local pn = safe_enum_short(player, "")
+		local player_offset = finite_number_or(
+			SL and SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.NoteFieldOffsetX,
+			0)
 			* (player == PLAYER_1 and -1 or 1)
-		return GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player)) + player_offset
+		local columnX = nil
+		if type(GetOnlineGameplayColumnX) == "function" then
+			local okColumn, value = safe_call("GetOnlineGameplayColumnX", function()
+				return GetOnlineGameplayColumnX(GetOnlineGameplayPlayerColumn(player))
+			end)
+			columnX = okColumn and finite_number_or(value, nil) or nil
+		end
+		if columnX ~= nil then return columnX + player_offset end
 	end
 
 	return BaseNotefieldX(player)
@@ -1005,7 +1021,7 @@ GetStepsCredit = function(player)
 			if not steps then return t end
 
 			local rawStepsType = safe_method("Steps.GetStepsType", steps, "GetStepsType")
-			local stepsType = rawStepsType and ToEnumShortString(rawStepsType):gsub("_", "-"):lower() or ""
+			local stepsType = tostring(safe_enum_short(rawStepsType, "")):gsub("_", "-"):lower()
 			if stepsType == "dance-couple" then
 				t[#t+1] = player == PLAYER_2 and "Stats techniques joueur 2" or "Stats techniques joueur 1"
 				return t
@@ -1754,6 +1770,9 @@ end
 -- If the banner is missing, use the VisualStyle fallback banner according to selected color.
 GetFallbackBanner = function()
 	local visualStyle = tostring(safe_theme_pref("VisualStyle", "Arrows") or "Arrows")
+	-- Technique intentionally reuses the neutral Arrows fallback artwork; it
+	-- does not ship a redundant set of twelve identical banner assets.
+	local bannerStyle = visualStyle == "Technique" and "Arrows" or visualStyle
 	local bannerIndex = math.max(1, math.floor(finite_number_or(SL and SL.Global and SL.Global.ActiveColorIndex, 1)))
 	local bannerName = "banner" .. tostring(bannerIndex) .. " (doubleres).png"
 	local function theme_graphic_path(relativePath)
@@ -1773,21 +1792,21 @@ GetFallbackBanner = function()
 		return ok and result == true
 	end
 
-	local path = theme_graphic_path("_FallbackBanners/" .. visualStyle .. "/" .. bannerName)
+	local path = theme_graphic_path("_FallbackBanners/" .. bannerStyle .. "/" .. bannerName)
 	if file_exists(path) then
-		Trace(("Simply Love fallback banner VisualStyle=%s index=%d path=%s"):format(visualStyle, bannerIndex, path))
 		return path
 	end
 
 	local fallback = theme_graphic_path("_FallbackBanners/Arrows/" .. bannerName)
 	if file_exists(fallback) then
-		Trace(("Simply Love fallback banner missing VisualStyle=%s index=%d path=%s; using %s"):format(visualStyle, bannerIndex, path, fallback))
 		return fallback
 	end
 
 	-- Last resort: keep returning a theme-resolved path so the caller never
 	-- receives a screen-relative "Themes/..." path that breaks LoadActor().
-	Trace(("Simply Love fallback banner missing VisualStyle=%s index=%d path=%s fallback=%s"):format(visualStyle, bannerIndex, path, fallback))
+	if PREFSMAN and PREFSMAN:GetPreference("LogThemeLuaDiagnostics") then
+		Trace(("Simply Love fallback banner unavailable VisualStyle=%s index=%d path=%s fallback=%s"):format(visualStyle, bannerIndex, path, fallback))
+	end
 	return fallback
 end
 

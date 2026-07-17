@@ -493,6 +493,8 @@ void ThemeManager::RunLuaScripts(const std::string& sMask, bool bUseThemeDir) {
 
   /* TODO: verify whether this final check is necessary. */
   const std::string sCurThemeName = m_sCurThemeName;
+  const bool logScriptSummary = LogThemeLuaDiagnosticsEnabled();
+  size_t totalScriptsLoaded = 0;
 
   std::deque<Theme>::const_iterator iter = g_vThemes.end();
   do {
@@ -531,15 +533,24 @@ void ThemeManager::RunLuaScripts(const std::string& sMask, bool bUseThemeDir) {
     // get regular Lua files
     GetDirListing(sScriptDir + "Scripts/" + sMask, asElementPaths, false, true);
 
-    // load Lua files
-    for (unsigned i = 0; i < asElementPaths.size(); ++i) {
-      const std::string& sPath = asElementPaths[i];
-      if (LogThemeLuaDiagnosticsEnabled()) {
-        LOG->Trace("THEME_TRACE: lua_script_load path='%s'", sPath.c_str());
-      }
+    // Load scripts in deterministic order.  A per-file trace made normal
+    // startup unreadable; failures already report the offending path.
+    for (const std::string& sPath : asElementPaths) {
       LuaHelpers::RunScriptFile(sPath);
     }
+    totalScriptsLoaded += asElementPaths.size();
+    if (logScriptSummary && !asElementPaths.empty()) {
+      LOG->Trace(
+          "THEME_TRACE: lua_scripts_loaded theme='%s' count=%zu mask='%s'",
+          m_sCurThemeName.c_str(), asElementPaths.size(), sMask.c_str());
+    }
   } while (iter != g_vThemes.begin());
+
+  if (logScriptSummary) {
+    LOG->Trace(
+        "THEME_TRACE: lua_script_load_complete count=%zu mask='%s'",
+        totalScriptsLoaded, sMask.c_str());
+  }
 
   /* TODO: verify whether this final check is necessary. */
   if (sCurThemeName != m_sCurThemeName) {

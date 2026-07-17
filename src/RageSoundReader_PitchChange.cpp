@@ -199,7 +199,12 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
      * we tell it to use.  The actual ratio used is fActualPitchRatio. */
 
       if (m_bPreservePitch) {
-        m_pResample->SetRate(m_fPitchRatio);
+        if (!m_pResample->SetRate(m_fPitchRatio)) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-3321: PitchChange resampler refused pitch "
+              "ratio");
+          return RageSoundReader::ERROR;
+        }
         float fActualPitchRatio = m_pResample->GetRate();
         if (!std::isfinite(fActualPitchRatio) || fActualPitchRatio <= 0.0f ||
             m_pSpeedChange == nullptr) {
@@ -218,7 +223,12 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
         m_fLastSetPitchRatio = m_fPitchRatio;
         m_fLastSetSpeedRatio = m_fSpeedRatio;
       } else {
-        m_pResample->SetRate(m_fSpeedRatio);
+        if (!m_pResample->SetRate(m_fSpeedRatio)) {
+          SetError(
+              "SRC_AUDIT_FIX SRC-3321: PitchChange resampler refused speed "
+              "ratio");
+          return RageSoundReader::ERROR;
+        }
         float fActualSpeedRatio = m_pResample->GetRate();
         if (!std::isfinite(fActualSpeedRatio) || fActualSpeedRatio <= 0.0f) {
           SetError(

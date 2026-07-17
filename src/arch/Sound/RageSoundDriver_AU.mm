@@ -1,4 +1,5 @@
 #include "RageSoundDriver_AU.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageLog.h"
 #include "RageSoundConstants.h"
@@ -283,12 +284,15 @@ float RageSoundDriver_AU::GetPlayLatency() const {
       kAudioObjectPropertyElementWildcard};
 
   size = sizeof(UInt32);
-  if ((error =
-           AudioObjectGetPropertyData(OutputDevice, &LatencyAddr, 0, nullptr, &size, &frames))) {
-    static bool s_warnedDeviceLatencyUnavailable = false;
-    if (!s_warnedDeviceLatencyUnavailable) {
-      LOG->Warn("Couldn't get device latency: %s", FormatOSError(error));
-      s_warnedDeviceLatencyUnavailable = true;
+  if (!AudioObjectHasProperty(OutputDevice, &LatencyAddr)) {
+    frames = 0;
+  } else if ((error = AudioObjectGetPropertyData(
+                  OutputDevice, &LatencyAddr, 0, nullptr, &size, &frames))) {
+    if (LogAudioUnderrunDiagnosticsEnabled()) {
+      LOG->Trace(
+          "AudioUnit device latency unavailable; using buffer/stream "
+          "fallback: %s",
+          FormatOSError(error));
     }
     frames = 0;
   }

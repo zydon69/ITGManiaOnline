@@ -16,6 +16,7 @@ local snapshot = {
 	values = {0, 0, 0, 0},
 	thresholds = {1000, 1000, 1000, 1000},
 }
+local next_refresh_at = 0
 
 local function clamp(value, low, high)
 	return math.max(low, math.min(high, value))
@@ -70,6 +71,9 @@ end
 af.OnCommand=function(self)
 	refresh_snapshot()
 	self:SetUpdateFunction(function()
+		local now = GetTimeSinceStart()
+		if now < next_refresh_at then return end
+		next_refresh_at = now + 0.04
 		refresh_snapshot()
 		self:playcommand("UpdateFsr")
 	end)

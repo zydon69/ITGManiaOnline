@@ -164,14 +164,14 @@ class OptionRowHandlerList : public OptionRowHandler {
   std::vector<std::string> m_vsBroadcastOnExport;
 
   OptionRowHandlerList() { Init(); }
-  virtual void Init() {
+  void Init() override {
     OptionRowHandler::Init();
     m_aListEntries.clear();
     m_Default.Init();
     m_bUseModNameForIcon = false;
     m_vsBroadcastOnExport.clear();
   }
-  virtual bool LoadInternal(const Commands& cmds) {
+  bool LoadInternal(const Commands& cmds) override {
     const Command& command = cmds.v[0];
     std::string sParam = command.GetArg(1).s;
 
@@ -275,7 +275,7 @@ class OptionRowHandlerList : public OptionRowHandler {
   }
   void ImportOption(
       OptionRow* pRow, const std::vector<PlayerNumber>& vpns,
-      std::vector<bool> vbSelectedOut[NUM_PLAYERS]) const {
+      std::vector<bool> vbSelectedOut[NUM_PLAYERS]) const override {
     for (const PlayerNumber& p : vpns) {
       std::vector<bool>& vbSelOut = vbSelectedOut[p];
 
@@ -336,12 +336,13 @@ class OptionRowHandlerList : public OptionRowHandler {
 
   int ExportOption(
       const std::vector<PlayerNumber>& vpns,
-      const std::vector<bool> vbSelected[NUM_PLAYERS]) const {
+      const std::vector<bool> vbSelected[NUM_PLAYERS]) const override {
     for (const PlayerNumber& p : vpns) {
       const std::vector<bool>& vbSel = vbSelected[p];
 
       m_Default.Apply(p);
-      for (unsigned i = 0; i < vbSel.size(); i++) {
+      const size_t choiceCount = std::min(vbSel.size(), m_aListEntries.size());
+      for (size_t i = 0; i < choiceCount; ++i) {
         if (vbSel[i]) {
           m_aListEntries[i].Apply(p);
         }
@@ -353,23 +354,47 @@ class OptionRowHandlerList : public OptionRowHandler {
     return 0;
   }
 
-  virtual int GetDefaultOption() const { return m_Def.m_iDefault; }
+  int ExportOptionForPreview(
+      const std::vector<PlayerNumber>& vpns,
+      const std::vector<bool> vbSelected[NUM_PLAYERS]) const override {
+    for (const PlayerNumber& p : vpns) {
+      const std::vector<bool>& vbSel = vbSelected[p];
+      if (GAMESTATE == nullptr || p < PLAYER_1 || p >= NUM_PLAYERS ||
+          GAMESTATE->m_pPlayerState[p] == nullptr) {
+        continue;
+      }
+      if (!m_Default.m_sPreferredModifiers.empty()) {
+        GAMESTATE->ApplyPreferredModifiers(
+            p, m_Default.m_sPreferredModifiers);
+      }
+      const size_t choiceCount = std::min(vbSel.size(), m_aListEntries.size());
+      for (size_t i = 0; i < choiceCount; ++i) {
+        if (vbSel[i] && !m_aListEntries[i].m_sPreferredModifiers.empty()) {
+          GAMESTATE->ApplyPreferredModifiers(
+              p, m_aListEntries[i].m_sPreferredModifiers);
+        }
+      }
+    }
+    return 0;
+  }
 
-  virtual void GetIconTextAndGameCommand(
+  int GetDefaultOption() const override { return m_Def.m_iDefault; }
+
+  void GetIconTextAndGameCommand(
       int iFirstSelection, std::string& sIconTextOut,
-      GameCommand& gcOut) const {
+      GameCommand& gcOut) const override {
     sIconTextOut = m_bUseModNameForIcon
                        ? m_aListEntries[iFirstSelection].m_sPreferredModifiers
                        : m_Def.m_vsChoices[iFirstSelection];
 
     gcOut = m_aListEntries[iFirstSelection];
   }
-  virtual std::string GetScreen(int iChoice) const {
+  std::string GetScreen(int iChoice) const override {
     const GameCommand& gc = m_aListEntries[iChoice];
     return gc.m_sScreen;
   }
 
-  virtual ReloadChanged Reload() {
+  ReloadChanged Reload() override {
     // HACK: always reload "speed", to update the BPM text in the name of the
     // speed line
     if (!CompareNoCase(m_Def.m_sName, "speed")) {

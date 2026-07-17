@@ -920,6 +920,17 @@ void OptionRow::ImportOptions(const std::vector<PlayerNumber>& vpns) {
 
 int OptionRow::ExportOptions(
     const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS]) {
+  return ExportOptionsInternal(vpns, bRowHasFocus, false);
+}
+
+int OptionRow::ExportOptionsForPreview(
+    const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS]) {
+  return ExportOptionsInternal(vpns, bRowHasFocus, true);
+}
+
+int OptionRow::ExportOptionsInternal(
+    const std::vector<PlayerNumber>& vpns, bool bRowHasFocus[NUM_PLAYERS],
+    bool preview) {
   ASSERT(m_pHand->m_Def.m_vsChoices.size() > 0);
 
   int iChangeMask = 0;
@@ -935,18 +946,22 @@ int OptionRow::ExportOptions(
     // SELECT_NONE rows get exported if they have focus when the user presses
     // Start.
     int iChoice = GetChoiceInRowWithFocus(p);
-    if (m_pHand->m_Def.m_selectType == SELECT_NONE && bFocus) {
+    if (m_pHand->m_Def.m_selectType == SELECT_NONE && bFocus && iChoice >= 0 &&
+        iChoice < static_cast<int>(m_vbSelected[p].size())) {
       m_vbSelected[p][iChoice] = true;
     }
   }
 
-  iChangeMask |= m_pHand->ExportOption(vpns, m_vbSelected);
+  iChangeMask |= preview
+                     ? m_pHand->ExportOptionForPreview(vpns, m_vbSelected)
+                     : m_pHand->ExportOption(vpns, m_vbSelected);
 
   for (const PlayerNumber& p : vpns) {
     bool bFocus = bRowHasFocus[p];
 
     int iChoice = GetChoiceInRowWithFocus(p);
-    if (m_pHand->m_Def.m_selectType == SELECT_NONE && bFocus) {
+    if (m_pHand->m_Def.m_selectType == SELECT_NONE && bFocus && iChoice >= 0 &&
+        iChoice < static_cast<int>(m_vbSelected[p].size())) {
       m_vbSelected[p][iChoice] = false;
     }
 

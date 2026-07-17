@@ -203,7 +203,7 @@ std::string ArchHooks_Win32::GetClipboard() {
 
   hgl = GetClipboardData(CF_TEXT);
   if (unlikely(hgl == nullptr)) {
-    LOG->Warn(werr_ssprintf(
+    LOG->Warn("%s", werr_ssprintf(
                   GetLastError(),
                   "InputHandler_DirectInput: GetClipboardData() failed")
                   .c_str());

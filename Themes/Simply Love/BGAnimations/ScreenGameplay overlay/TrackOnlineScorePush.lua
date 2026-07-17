@@ -130,7 +130,11 @@ return Def.Actor{
 	end,
 	JudgmentMessageCommand=function(self, params)
 		if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
-			online_score_trace("judgment_skipped reason=missing_context")
+			-- Local gameplay can emit thousands of judgments.  It is not an
+			-- online failure and must not fill the online diagnostic log.
+			if ITGOnline and (ITGOnline.currentRoomId or ITGOnline.currentRoom) then
+				online_score_trace("judgment_skipped reason=inactive_online_context")
+			end
 			return
 		end
 

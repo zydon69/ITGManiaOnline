@@ -265,18 +265,6 @@ void CompactLifeRecord(std::map<float, float>& lifeRecord) {
       originalSize, lifeRecord.size());
 }
 
-bool CurrentCourseIsEndless(const char* context) {
-  if (GAMESTATE == nullptr) {
-    LOG->Warn(
-        "SRC_AUDIT_FIX: %s could not inspect current course because "
-        "GAMESTATE is unavailable.",
-        context);
-    return false;
-  }
-  return GAMESTATE->m_pCurCourse != nullptr &&
-         GAMESTATE->m_pCurCourse->IsEndless();
-}
-
 void PushSaneNumber(lua_State* L, float value, const char* field) {
   lua_pushnumber(L, ClampFiniteNonNegativeFloat(value, field));
 }
@@ -844,11 +832,6 @@ void PlayerStageStats::ResetScoreForLesson() {
 }
 
 void PlayerStageStats::SetLifeRecordAt(float fLife, float fStepsSecond) {
-  // Don't save life stats in endless courses, or could run OOM in a few hours.
-  if (CurrentCourseIsEndless("PlayerStageStats::SetLifeRecordAt")) {
-    return;
-  }
-
   if (!std::isfinite(fLife) || !std::isfinite(fStepsSecond)) {
     LOG->Warn(
         "SRC_AUDIT_FIX: PlayerStageStats::SetLifeRecordAt ignored "
@@ -1039,11 +1022,6 @@ float PlayerStageStats::GetCurrentLife() const {
 /* If bRollover is true, we're being called before gameplay begins, so we can
  * record the amount of the first combo that comes from the previous song. */
 void PlayerStageStats::UpdateComboList(float fSecond, bool bRollover) {
-  // Don't save combo stats in endless courses, or could run OOM in a few hours.
-  if (CurrentCourseIsEndless("PlayerStageStats::UpdateComboList")) {
-    return;
-  }
-
   if (!std::isfinite(fSecond) || fSecond < 0.0f) {
     LOG->Warn(
         "SRC_AUDIT_FIX: PlayerStageStats::UpdateComboList ignored invalid "
@@ -1260,6 +1238,7 @@ void PlayerStageStats::CalcAwards(
     PlayerNumber p, bool bGaveUp, bool bUsedAutoplay) {
   // LOG->Trace( "hand out awards" );
 
+  m_StageAward = StageAward_Invalid;
   m_PeakComboAward = PeakComboAward_Invalid;
 
   if (!IsValidPlayerNumber(p)) {
@@ -1275,6 +1254,11 @@ void PlayerStageStats::CalcAwards(
         "GAMESTATE is unavailable.");
     return;
   }
+
+  std::deque<StageAward>& vPdas = GAMESTATE->m_vLastStageAwards[p];
+  std::deque<PeakComboAward>& vPeak = GAMESTATE->m_vLastPeakComboAwards[p];
+  vPdas.clear();
+  vPeak.clear();
 
   if (bGaveUp || bUsedAutoplay) {
     return;
@@ -1322,8 +1306,6 @@ void PlayerStageStats::CalcAwards(
   }
 
   m_StageAward = stageAward;
-  std::deque<StageAward>& vPdas = GAMESTATE->m_vLastStageAwards[p];
-  vPdas.clear();
   if (stageAward != StageAward_Invalid) {
     vPdas.push_back(stageAward);
   }
@@ -1346,8 +1328,6 @@ void PlayerStageStats::CalcAwards(
   }
 
   m_PeakComboAward = peakAward;
-  std::deque<PeakComboAward>& vPeak = GAMESTATE->m_vLastPeakComboAwards[p];
-  vPeak.clear();
   if (peakAward != PeakComboAward_Invalid) {
     vPeak.push_back(peakAward);
   }

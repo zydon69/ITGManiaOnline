@@ -9,6 +9,14 @@ local function DebugPathToRealPath( p )
 	return string.sub( Path, 1, pos )
 end
 
+local function ContentLoadTraceEnabled()
+	if not (PREFSMAN and PREFSMAN.GetPreference) then return false end
+	local ok, enabled = pcall(function()
+		return PREFSMAN:GetPreference("LogContentLoadDiagnostics")
+	end)
+	return ok and enabled == true
+end
+
 local function MergeTables( left, right )
 	local ret = { }
 	for key, val in pairs(left) do
@@ -118,7 +126,9 @@ function LoadActorFunc( path, level )
 	path = ResolvedPath
 
 	local Type = ActorUtil.GetFileType( path )
-	Trace( "Loading " .. path .. ", type " .. tostring(Type) )
+	if ContentLoadTraceEnabled() then
+		Trace( "Loading " .. path .. ", type " .. tostring(Type) )
+	end
 
 	if Type == "FileType_Lua" then
 		-- Load the file.

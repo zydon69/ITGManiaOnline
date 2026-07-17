@@ -550,7 +550,11 @@ void GameState::Reset() {
   m_pCurCourse.Set(nullptr);
   m_pPreferredCourse = nullptr;
 
-  FOREACH_MultiPlayer(p) m_pMultiPlayerState[p]->Reset();
+  FOREACH_MultiPlayer(p) {
+    if (m_pMultiPlayerState[p] != nullptr) {
+      m_pMultiPlayerState[p]->Reset();
+    }
+  }
 
   m_SongOptions.Init();
 
@@ -611,29 +615,51 @@ void GameState::Reset() {
 }
 
 bool GameState::JoinPlayer(PlayerNumber pn) {
-  if (!IsValidPlayerNumber(pn)) {
+  if (!HasUsablePlayerState(this, pn)) {
     LOG->Warn(
         "SRC_AUDIT_FIX GameState: JoinPlayer ignored invalid player %d.", pn);
     return false;
   }
+  if (m_bSideIsJoined[pn]) {
+    // Joining is an idempotent request at screen boundaries.  Returning false
+    // preserves the transaction contract without treating normal re-entry as
+    // a runtime warning.
+    return false;
+  }
 
   // Make sure the join will be successful before doing it. -Kyz
-  {
-    int players_joined = 0;
-    for (int i = 0; i < NUM_PLAYERS; ++i) {
-      players_joined += m_bSideIsJoined[i];
+  int playersJoined = 0;
+  for (int i = 0; i < NUM_PLAYERS; ++i) {
+    playersJoined += m_bSideIsJoined[i];
+  }
+  const Style* currentStyle = GetCurrentStyle(PLAYER_INVALID);
+  const bool preservePendingTwoPlayerStyle =
+      currentStyle != nullptr && pn == PLAYER_1 && playersJoined == 0 &&
+      (currentStyle->m_StyleType == StyleType_TwoPlayersTwoSides ||
+       currentStyle->m_StyleType == StyleType_TwoPlayersSharedSides);
+  const Style* styleAfterJoin = nullptr;
+  if (currentStyle != nullptr && !preservePendingTwoPlayerStyle) {
+    if (GAMEMAN == nullptr || m_pCurGame == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX GameState: JoinPlayer cannot resolve style without "
+          "GAMEMAN and a current game.");
+      return false;
     }
-    if (players_joined > 0) {
-      const Style* cur_style = GetCurrentStyle(PLAYER_INVALID);
-      if (cur_style) {
-        if (GAMEMAN != nullptr) {
-          const Style* new_style = GAMEMAN->GetFirstCompatibleStyle(
-              m_pCurGame, players_joined + 1, cur_style->m_StepsType);
-          if (new_style == nullptr) {
-            return false;
-          }
-        }
-      }
+    int compatiblePlayers = playersJoined + 1;
+    if (currentStyle->m_StyleType == StyleType_OnePlayerTwoSides ||
+        currentStyle->m_StepsType == StepsType_dance_solo ||
+        currentStyle->m_StepsType == StepsType_dance_threepanel ||
+        currentStyle->m_StepsType == StepsType_popn_nine) {
+      compatiblePlayers = 1;
+    }
+    styleAfterJoin = GAMEMAN->GetFirstCompatibleStyle(
+        m_pCurGame, compatiblePlayers, currentStyle->m_StepsType);
+    if (styleAfterJoin == nullptr) {
+      LOG->Warn(
+          "SRC_AUDIT_FIX GameState: JoinPlayer found no compatible style for "
+          "%d joined players and steps type %d.",
+          compatiblePlayers, currentStyle->m_StepsType);
+      return false;
     }
   }
   /* If joint premium and we're not taking away a credit for the 2nd join,
@@ -675,33 +701,9 @@ bool GameState::JoinPlayer(PlayerNumber pn) {
   // player is being joined and the current styletype is for two players,
   // assume that the second player will be joined immediately afterwards and
   // don't try to change the style. -Kyz
-  const Style* cur_style = GetCurrentStyle(PLAYER_INVALID);
-  if (cur_style != nullptr &&
-      !(pn == PLAYER_1 &&
-        (cur_style->m_StyleType == StyleType_TwoPlayersTwoSides ||
-         cur_style->m_StyleType == StyleType_TwoPlayersSharedSides))) {
-    const Style* pStyle;
-    // Only use one player for StyleType_OnePlayerTwoSides and StepsTypes
-    // that can only be played by one player (e.g. dance-solo,
-    // dance-threepanel, popn-nine). -aj
-    // XXX?: still shows joined player as "Insert Card". May not be an issue?
-    // -aj
-    if (cur_style->m_StyleType == StyleType_OnePlayerTwoSides ||
-        cur_style->m_StepsType == StepsType_dance_solo ||
-        cur_style->m_StepsType == StepsType_dance_threepanel ||
-        cur_style->m_StepsType == StepsType_popn_nine) {
-      pStyle = GAMEMAN != nullptr ? GAMEMAN->GetFirstCompatibleStyle(
-                                        m_pCurGame, 1, cur_style->m_StepsType)
-                                  : nullptr;
-    } else {
-      pStyle = GAMEMAN != nullptr ? GAMEMAN->GetFirstCompatibleStyle(
-                                        m_pCurGame, GetNumSidesJoined(),
-                                        cur_style->m_StepsType)
-                                  : nullptr;
-    }
-
+  if (styleAfterJoin != nullptr) {
     // use SetCurrentStyle in case of StyleType_OnePlayerTwoSides
-    SetCurrentStyle(pStyle, pn);
+    SetCurrentStyle(styleAfterJoin, pn);
   }
 
   Message msg(MessageIDToString(Message_PlayerJoined));
@@ -1127,6 +1129,9 @@ void GameState::BeginStage() {
   }
   m_bEarnedExtraStage = false;
   m_sStageGUID = CryptManager::GenerateRandomUUID();
+  if (STATSMAN != nullptr) {
+    STATSMAN->m_CurStageStats.m_sStageGuid = m_sStageGUID;
+  }
 }
 
 void GameState::CancelStage() {

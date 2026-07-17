@@ -32,9 +32,9 @@ class RageFile : public RageFileBasic {
   };
 
   RageFile();
-  ~RageFile() { Close(); }
+  ~RageFile() override { Close(); }
   RageFile(const RageFile& cpy);
-  RageFile* Copy() const;
+  RageFile* Copy() const override;
 
   /*
    * Use GetRealPath to get the path this file was opened with; use that if you
@@ -52,35 +52,35 @@ class RageFile : public RageFileBasic {
   bool IsOpen() const { return m_File != nullptr; }
   int GetMode() const { return m_Mode; }
 
-  bool AtEOF() const;
-  std::string GetError() const;
-  void ClearError();
+  bool AtEOF() const override;
+  std::string GetError() const override;
+  void ClearError() override;
 
-  int Tell() const;
-  int Seek(int offset);
-  int GetFileSize() const;
-  int GetFD();
+  int Tell() const override;
+  int Seek(int offset) override;
+  int GetFileSize() const override;
+  int GetFD() override;
 
   /* Raw I/O: */
-  int Read(void* buffer, size_t bytes);
-  int Read(std::string& buffer, int bytes = -1);
-  int Write(const void* buffer, size_t bytes);
-  int Write(const std::string& string) {
+  int Read(void* buffer, size_t bytes) override;
+  int Read(std::string& buffer, int bytes = -1) override;
+  int Write(const void* buffer, size_t bytes) override;
+  int Write(const std::string& string) override {
     return Write(string.data(), string.size());
   }
-  int Flush();
+  int Flush() override;
 
   /* These are just here to make wrappers (eg. vorbisfile, SDL_rwops) easier. */
-  int Write(const void* buffer, size_t bytes, int nmemb);
-  int Read(void* buffer, size_t bytes, int nmemb);
-  int Seek(int offset, int whence);
+  int Write(const void* buffer, size_t bytes, int nmemb) override;
+  int Read(void* buffer, size_t bytes, int nmemb) override;
+  int Seek(int offset, int whence) override;
 
   /* Line-based I/O: */
-  int GetLine(std::string& out);
-  int PutLine(const std::string& str);
+  int GetLine(std::string& out) override;
+  int PutLine(const std::string& str) override;
 
-  void EnableCRC32(bool on = true);
-  bool GetCRC32(uint32_t* iRet);
+  void EnableCRC32(bool on = true) override;
+  bool GetCRC32(uint32_t* iRet) override;
 
   // Lua
   virtual void PushSelf(lua_State* L);
@@ -96,8 +96,7 @@ class RageFile : public RageFileBasic {
   std::string m_sError;
   int m_Mode;
 
-  // Swallow up warnings. If they must be used, define them.
-  RageFile& operator=(const RageFile& rhs);
+  RageFile& operator=(const RageFile& rhs) = delete;
 };
 
 /** @brief Convenience wrappers for reading binary files. */

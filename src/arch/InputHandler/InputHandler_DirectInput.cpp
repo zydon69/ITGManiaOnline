@@ -276,7 +276,7 @@ static int GetNumJoysticksSlow() {
   HRESULT hr = g_dinput->EnumDevices(
       DI8DEVCLASS_GAMECTRL, CountDevicesCallback, &iCount, DIEDFL_ATTACHEDONLY);
   if (hr != DI_OK) {
-    LOG->Warn(hr_ssprintf(hr, "g_dinput->EnumDevices").c_str());
+    LOG->Warn("%s", hr_ssprintf(hr, "g_dinput->EnumDevices").c_str());
   }
   return iCount;
 }
@@ -457,7 +457,7 @@ static HRESULT GetDeviceState(LPDIRECTINPUTDEVICE8 dev, int size, void* ptr) {
   if (hr == DIERR_INPUTLOST || hr == DIERR_NOTACQUIRED) {
     hr = dev->Acquire();
     if (hr != DI_OK) {
-      LOG->Trace(hr_ssprintf(hr, "?").c_str());
+      LOG->Trace("%s", hr_ssprintf(hr, "?").c_str());
       return hr;
     }
 
@@ -1049,7 +1049,7 @@ bool InputHandler_DInput::DevicesChanged() {
 
 void InputHandler_DInput::InputThreadMain() {
   if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST)) {
-    LOG->Warn(werr_ssprintf(
+    LOG->Warn("%s", werr_ssprintf(
                   GetLastError(), "Failed to set DirectInput thread priority")
                   .c_str());
   }
@@ -1082,7 +1082,7 @@ void InputHandler_DInput::InputThreadMain() {
 
       int ret = WaitForSingleObjectEx(Handle, 50, true);
       if (ret == -1) {
-        LOG->Trace(werr_ssprintf(GetLastError(), "WaitForSingleObjectEx failed")
+        LOG->Trace("%s", werr_ssprintf(GetLastError(), "WaitForSingleObjectEx failed")
                        .c_str());
         continue;
       }

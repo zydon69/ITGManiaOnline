@@ -156,32 +156,34 @@ void ArchHooks_MacOSX::DumpDebugInfo() {
   size_t size;
 #define GET_PARAM(name, var) (size = sizeof(var), sysctlbyname(name, &var, &size, nil, 0))
   // Get memory
-  float fRam;
-  char ramPower;
+  float fRam = 0.0f;
+  char ramPower = 'G';
+  bool hasRam = false;
   {
     uint64_t iRam = 0;
-    GET_PARAM("hw.memsize", iRam);
-
-    fRam = float(double(iRam) / 1073741824.0);
-    ramPower = 'G';
+    if (GET_PARAM("hw.memsize", iRam) == 0 && iRam > 0) {
+      fRam = float(double(iRam) / 1073741824.0);
+      hasRam = true;
+    }
   }
 
   // Get processor information
   int iMaxCPUs = 0;
   int iCPUs = 0;
-  float fFreq;
-  char freqPower;
+  float fFreq = 0.0f;
+  char freqPower = 'G';
+  bool hasFrequency = false;
   std::string sModel("Unknown");
   do {
-    char szModel[128];
-    uint64_t iFreq;
+    char szModel[128] = {};
+    uint64_t iFreq = 0;
 
     GET_PARAM("hw.logicalcpu_max", iMaxCPUs);
     GET_PARAM("hw.logicalcpu", iCPUs);
-    GET_PARAM("hw.cpufrequency", iFreq);
-
-    fFreq = float(double(iFreq) / 1000000000.0);
-    freqPower = 'G';
+    if (GET_PARAM("hw.cpufrequency", iFreq) == 0 && iFreq > 0) {
+      fFreq = float(double(iFreq) / 1000000000.0);
+      hasFrequency = true;
+    }
 
     if (GET_PARAM("hw.model", szModel) != 0) {
       break;
@@ -207,9 +209,17 @@ void ArchHooks_MacOSX::DumpDebugInfo() {
 
   // Send all of the information to the log
   LOG->Info("Model: %s (%d/%d)", sModel.c_str(), iCPUs, iMaxCPUs);
-  LOG->Info("Clock speed %.2f %cHz", fFreq, freqPower);
+  if (hasFrequency) {
+    LOG->Info("Clock speed %.2f %cHz", fFreq, freqPower);
+  } else {
+    LOG->Info("Clock speed unavailable");
+  }
   LOG->Info("%s", SystemVersion.c_str());
-  LOG->Info("Memory: %.2f %cB", fRam, ramPower);
+  if (hasRam) {
+    LOG->Info("Memory: %.2f %cB", fRam, ramPower);
+  } else {
+    LOG->Info("Memory size unavailable");
+  }
 }
 
 bool ArchHooks_MacOSX::SetTime(tm newtime) {

@@ -247,10 +247,18 @@ local traceCounts = {
 	updated = 0,
 }
 
+local function score_trace_enabled()
+	if not (Trace and PREFSMAN and PREFSMAN.GetPreference) then return false end
+	local ok, enabled = pcall(function()
+		return PREFSMAN:GetPreference("LogThemeLuaDiagnostics")
+	end)
+	return ok and enabled == true
+end
+
 local function trace_count(reason, params, tns, hns, exScore, hardExScore, actualPoints, actualPossible, hardExPoints, hardExPossible)
-	if not Trace then return end
+	if not score_trace_enabled() then return end
 	traceCounts[reason] = (traceCounts[reason] or 0) + 1
-	if reason == "updated" and traceCounts[reason] > 20 and traceCounts[reason] % 50 ~= 0 then return end
+	if reason == "updated" and traceCounts[reason] > 3 and traceCounts[reason] % 250 ~= 0 then return end
 	if reason ~= "updated" and traceCounts[reason] > 8 then return end
 
 	local counts = storage.ex_counts or {}

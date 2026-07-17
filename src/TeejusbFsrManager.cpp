@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cctype>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
@@ -34,11 +36,12 @@ constexpr auto kDeviceScanInterval = std::chrono::milliseconds(1000);
 constexpr auto kValuePollInterval = std::chrono::milliseconds(40);
 constexpr auto kNoticeDuration = std::chrono::milliseconds(3500);
 constexpr auto kCommandResponseTimeout = std::chrono::milliseconds(2500);
+constexpr auto kReconnectDelay = std::chrono::milliseconds(5000);
+constexpr auto kSerialWriteTimeout = std::chrono::milliseconds(100);
+constexpr std::size_t kMaxReadBufferBytes = 8192;
+constexpr std::size_t kMaxReadBytesPerPoll = 16384;
 const std::string kAssignmentsPath = "Save/TeejusbFsr.ini";
 const std::string kWindowsTeensyVidPid = "VID_16C0&PID_0487";
-
-std::chrono::steady_clock::time_point g_LastDeviceScan =
-    std::chrono::steady_clock::time_point::min();
 
 template <typename Fn>
 bool WithLua(Fn fn) {
@@ -59,6 +62,44 @@ bool WithLua(Fn fn) {
 bool StartsWith(const std::string& value, const std::string& prefix) {
   return value.size() >= prefix.size() &&
          value.compare(0, prefix.size(), prefix) == 0;
+}
+
+bool ParseTeejusbFsrSerialLine(
+    std::string line, std::string& command,
+    std::array<int, TeejusbFsrManager::NUM_SENSORS>& values) {
+  Trim(line);
+  if (line.empty()) {
+    return false;
+  }
+
+  std::vector<std::string> parts;
+  split(line, " ", parts, true);
+  if (parts.size() != TeejusbFsrManager::NUM_SENSORS + 1) {
+    return false;
+  }
+
+  command = parts[0];
+  if (command.size() != 1) {
+    return false;
+  }
+  command[0] = static_cast<char>(
+      std::tolower(static_cast<unsigned char>(command[0])));
+  if (command != "v" && command != "t" && command != "s") {
+    return false;
+  }
+
+  for (int i = 1; i <= TeejusbFsrManager::NUM_SENSORS; ++i) {
+    char* end = nullptr;
+    errno = 0;
+    const long value = std::strtol(parts[i].c_str(), &end, 10);
+    if (end == parts[i].c_str() || *end != '\0' || value < 0 ||
+        value > 1023 || errno == ERANGE) {
+      return false;
+    }
+    values[i - 1] = static_cast<int>(value);
+  }
+
+  return true;
 }
 
 std::string PlayerAssignmentKey(int playerIndexOneBased) {
@@ -138,8 +179,10 @@ bool ConfigureSerialPort(int fd) {
   attrs.c_cc[VMIN] = 0;
   attrs.c_cc[VTIME] = 0;
 
-  cfsetispeed(&attrs, B115200);
-  cfsetospeed(&attrs, B115200);
+  if (cfsetispeed(&attrs, B115200) != 0 ||
+      cfsetospeed(&attrs, B115200) != 0) {
+    return false;
+  }
 
   if (tcsetattr(fd, TCSANOW, &attrs) != 0) {
     return false;
@@ -246,49 +289,6 @@ void AddWindowsPortName(
     port = "\\\\.\\" + port;
   }
   ports.push_back(port);
-}
-
-bool IsWindowsComDeviceName(const std::wstring& name) {
-  if (name.size() < 4 || name.compare(0, 3, L"COM") != 0) {
-    return false;
-  }
-
-  for (std::size_t i = 3; i < name.size(); ++i) {
-    if (name[i] < L'0' || name[i] > L'9') {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool IsTeejusbFsrSerialLine(std::string line) {
-  Trim(line);
-  if (line.empty()) {
-    return false;
-  }
-
-  std::vector<std::string> parts;
-  split(line, " ", parts, true);
-  if (parts.size() != TeejusbFsrManager::NUM_SENSORS + 1) {
-    return false;
-  }
-
-  const std::string& command = parts[0];
-  if (command != "v" && command != "V" && command != "t" &&
-      command != "T" && command != "s" && command != "S") {
-    return false;
-  }
-
-  for (int i = 1; i <= TeejusbFsrManager::NUM_SENSORS; ++i) {
-    char* end = nullptr;
-    const long value = std::strtol(parts[i].c_str(), &end, 10);
-    if (end == parts[i].c_str() || *end != '\0' || value < 0 ||
-        value > 1023) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 void AddWindowsTeensyPortsFromInstance(
@@ -411,110 +411,6 @@ bool ConfigureWindowsSerialPort(HANDLE handle) {
   return true;
 }
 
-bool ProbeWindowsTeejusbPort(const std::string& port) {
-  const std::wstring widePort = Utf8ToWide(port);
-  if (widePort.empty()) {
-    return false;
-  }
-
-  HANDLE handle = CreateFileW(
-      widePort.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) {
-    return false;
-  }
-
-  if (!ConfigureWindowsSerialPort(handle)) {
-    CloseHandle(handle);
-    return false;
-  }
-
-  const char request[] = "t\n";
-  DWORD written = 0;
-  if (!WriteFile(
-          handle, request, static_cast<DWORD>(sizeof(request) - 1), &written,
-          nullptr)) {
-    CloseHandle(handle);
-    return false;
-  }
-
-  std::string readBuffer;
-  bool matched = false;
-  for (int attempt = 0; attempt < 20 && !matched; ++attempt) {
-    Sleep(10);
-
-    DWORD errors = 0;
-    COMSTAT status;
-    ZeroMemory(&status, sizeof(status));
-    if (!ClearCommError(handle, &errors, &status)) {
-      break;
-    }
-    if (status.cbInQue == 0) {
-      continue;
-    }
-
-    char buffer[512];
-    DWORD bytesRead = 0;
-    const DWORD bytesToRead =
-        std::min<DWORD>(status.cbInQue, static_cast<DWORD>(sizeof(buffer)));
-    if (!ReadFile(handle, buffer, bytesToRead, &bytesRead, nullptr)) {
-      break;
-    }
-    if (bytesRead == 0) {
-      continue;
-    }
-
-    readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
-    std::size_t newline = std::string::npos;
-    while ((newline = readBuffer.find('\n')) != std::string::npos) {
-      std::string line = readBuffer.substr(0, newline);
-      readBuffer.erase(0, newline + 1);
-      if (IsTeejusbFsrSerialLine(line)) {
-        matched = true;
-        break;
-      }
-    }
-  }
-
-  CloseHandle(handle);
-  return matched;
-}
-
-void AddWindowsComPortsFromDosDevices(std::vector<std::string>& ports) {
-  std::vector<wchar_t> devices(65536, L'\0');
-  const DWORD chars = QueryDosDeviceW(
-      nullptr, devices.data(), static_cast<DWORD>(devices.size()));
-  if (chars == 0) {
-    return;
-  }
-
-  const wchar_t* device = devices.data();
-  while (*device != L'\0') {
-    const std::wstring deviceName = device;
-    if (IsWindowsComDeviceName(deviceName)) {
-      AddWindowsPortName(deviceName, ports);
-    }
-    device += deviceName.size() + 1;
-  }
-}
-
-void AddWindowsResponsiveTeejusbPorts(std::vector<std::string>& ports) {
-  std::vector<std::string> candidates;
-  AddWindowsComPortsFromDosDevices(candidates);
-
-  std::sort(candidates.begin(), candidates.end());
-  candidates.erase(
-      std::unique(candidates.begin(), candidates.end()), candidates.end());
-
-  for (const std::string& candidate : candidates) {
-    if (std::find(ports.begin(), ports.end(), candidate) != ports.end()) {
-      continue;
-    }
-    if (ProbeWindowsTeejusbPort(candidate)) {
-      ports.push_back(candidate);
-    }
-  }
-}
 #endif
 }  // namespace
 
@@ -534,9 +430,6 @@ std::vector<std::string> TeejusbFsrManager::GetDevicePorts() const {
   std::vector<std::string> ports;
 #if defined(_WIN32)
   AddWindowsTeensyPortsFromRegistry(ports);
-  if (ports.empty()) {
-    AddWindowsResponsiveTeejusbPorts(ports);
-  }
 #elif defined(MACOSX)
   AddMatchingDevicePorts("/dev", {"cu.usbmodem"}, ports);
 #elif defined(UNIX)
@@ -552,7 +445,6 @@ bool TeejusbFsrManager::ConnectAuto() {
   for (DeviceState& device : m_vDevices) {
     if (OpenDevice(device)) {
       m_sActivePort = device.port;
-      RequestThresholdsForPort(device.port);
       return true;
     }
   }
@@ -560,7 +452,8 @@ bool TeejusbFsrManager::ConnectAuto() {
 }
 
 bool TeejusbFsrManager::Connect(const std::string& port) {
-  DeviceState* device = FindOrCreateDevice(port);
+  SyncDeviceList();
+  DeviceState* device = FindDevice(port);
   if (device == nullptr) {
     return false;
   }
@@ -570,7 +463,6 @@ bool TeejusbFsrManager::Connect(const std::string& port) {
   }
 
   m_sActivePort = port;
-  RequestThresholdsForPort(port);
   return true;
 }
 
@@ -584,7 +476,7 @@ void TeejusbFsrManager::Disconnect() {
 
 bool TeejusbFsrManager::IsConnected() const {
   const DeviceState* device = GetActiveDevice();
-  return device != nullptr && device->fd >= 0;
+  return device != nullptr && device->fd >= 0 && device->protocolVerified;
 }
 
 void TeejusbFsrManager::Poll() {
@@ -597,10 +489,10 @@ void TeejusbFsrManager::Poll() {
 
 void TeejusbFsrManager::PollAll() {
   const auto now = std::chrono::steady_clock::now();
-  if (g_LastDeviceScan == std::chrono::steady_clock::time_point::min() ||
-      now - g_LastDeviceScan >= kDeviceScanInterval) {
+  if (m_LastDeviceScan == std::chrono::steady_clock::time_point::min() ||
+      now - m_LastDeviceScan >= kDeviceScanInterval) {
     SyncDeviceList();
-    g_LastDeviceScan = now;
+    m_LastDeviceScan = now;
   }
 
   for (DeviceState& device : m_vDevices) {
@@ -625,12 +517,21 @@ void TeejusbFsrManager::PollAll() {
         SetStatus(device, "Threshold load timed out");
         SetNotice(device, "aucune reponse du pad recue");
       }
+      const bool handshakeFailed =
+          device.pendingThresholdLoad && !device.protocolVerified;
       ResetPendingEepromSave(device);
       device.pendingThresholdLoad = false;
       device.pendingCommandDeadline =
           std::chrono::steady_clock::time_point::min();
+      if (handshakeFailed) {
+        CloseDevice(device);
+        device.reconnectAfter = now + kReconnectDelay;
+        SetStatus(device, "Unsupported or unresponsive serial device");
+      }
     }
-    if (device.fd < 0) {
+    const bool shouldOpen =
+        IsPortAssigned(device.port) || m_sActivePort == device.port;
+    if (device.fd < 0 && shouldOpen && now >= device.reconnectAfter) {
       OpenDevice(device);
     }
     if (device.fd >= 0) {
@@ -664,12 +565,15 @@ bool TeejusbFsrManager::SaveThresholds() {
 }
 
 bool TeejusbFsrManager::SetActivePort(const std::string& port) {
-  DeviceState* device = FindOrCreateDevice(port);
+  DeviceState* device = FindDevice(port);
   if (device == nullptr) {
     return false;
   }
+  if (!OpenDevice(*device)) {
+    return false;
+  }
   m_sActivePort = port;
-  return OpenDevice(*device);
+  return true;
 }
 
 bool TeejusbFsrManager::RequestValuesForPort(const std::string& port) {
@@ -680,6 +584,10 @@ bool TeejusbFsrManager::RequestValuesForPort(const std::string& port) {
 bool TeejusbFsrManager::RequestThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
   if (device == nullptr) {
+    return false;
+  }
+  if (IsOperationPending(*device)) {
+    SetNotice(*device, "une autre operation est deja en cours");
     return false;
   }
 
@@ -706,6 +614,10 @@ bool TeejusbFsrManager::SetThresholdForPort(
   if (device == nullptr) {
     return false;
   }
+  if (IsOperationPending(*device)) {
+    SetNotice(*device, "une autre operation est deja en cours");
+    return false;
+  }
 
   if (sensorIndexOneBased < 1 || sensorIndexOneBased > NUM_SENSORS) {
     SetStatus(*device, "Invalid sensor index");
@@ -713,16 +625,23 @@ bool TeejusbFsrManager::SetThresholdForPort(
   }
 
   rage_clamp(threshold, 0, 1023);
-  device->thresholds[sensorIndexOneBased - 1] = threshold;
 
   std::ostringstream command;
   command << (sensorIndexOneBased - 1) << " " << threshold;
-  return WriteCommand(*device, command.str());
+  if (!WriteCommand(*device, command.str())) {
+    return false;
+  }
+  device->thresholds[sensorIndexOneBased - 1] = threshold;
+  return true;
 }
 
 bool TeejusbFsrManager::SaveThresholdsForPort(const std::string& port) {
   DeviceState* device = FindDevice(port);
   if (device == nullptr) {
+    return false;
+  }
+  if (IsOperationPending(*device)) {
+    SetNotice(*device, "une autre operation est deja en cours");
     return false;
   }
 
@@ -744,7 +663,12 @@ bool TeejusbFsrManager::AssignPlayer(
     return false;
   }
 
+  const auto previousAssignments = m_sAssignedPorts;
+  const std::string previousActivePort = m_sActivePort;
   if (!port.empty()) {
+    if (FindDevice(port) == nullptr || !SetActivePort(port)) {
+      return false;
+    }
     for (std::string& assignedPort : m_sAssignedPorts) {
       if (assignedPort == port) {
         assignedPort.clear();
@@ -752,10 +676,12 @@ bool TeejusbFsrManager::AssignPlayer(
     }
   }
   m_sAssignedPorts[playerIndexOneBased - 1] = port;
-  if (!port.empty()) {
-    SetActivePort(port);
+  if (!SaveAssignments()) {
+    m_sAssignedPorts = previousAssignments;
+    m_sActivePort = previousActivePort;
+    return false;
   }
-  return SaveAssignments();
+  return true;
 }
 
 std::string TeejusbFsrManager::GetAssignedPort(int playerIndexOneBased) const {
@@ -783,6 +709,16 @@ void TeejusbFsrManager::LoadAssignments() {
     std::string port;
     if (ini.GetValue("Assignments", PlayerAssignmentKey(i), port)) {
       m_sAssignedPorts[i - 1] = port;
+    }
+  }
+  for (std::size_t i = 0; i < m_sAssignedPorts.size(); ++i) {
+    if (m_sAssignedPorts[i].empty()) {
+      continue;
+    }
+    for (std::size_t j = i + 1; j < m_sAssignedPorts.size(); ++j) {
+      if (m_sAssignedPorts[j] == m_sAssignedPorts[i]) {
+        m_sAssignedPorts[j].clear();
+      }
     }
   }
 }
@@ -941,6 +877,8 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   }
 
   device.fd = fd;
+  device.protocolVerified = false;
+  device.reconnectAfter = std::chrono::steady_clock::time_point::min();
   device.readBuffer.clear();
   device.lastResponse.clear();
   device.pendingThresholdLoad = true;
@@ -953,6 +891,7 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
     device.pendingThresholdLoad = false;
     device.pendingCommandDeadline =
         std::chrono::steady_clock::time_point::min();
+    return false;
   }
   return true;
 #elif defined(_WIN32)
@@ -973,6 +912,8 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
   }
 
   device.fd = reinterpret_cast<intptr_t>(handle);
+  device.protocolVerified = false;
+  device.reconnectAfter = std::chrono::steady_clock::time_point::min();
   device.readBuffer.clear();
   device.lastResponse.clear();
   device.pendingThresholdLoad = true;
@@ -985,6 +926,7 @@ bool TeejusbFsrManager::OpenDevice(DeviceState& device) {
     device.pendingThresholdLoad = false;
     device.pendingCommandDeadline =
         std::chrono::steady_clock::time_point::min();
+    return false;
   }
   return true;
 #else
@@ -1004,6 +946,7 @@ void TeejusbFsrManager::CloseDevice(DeviceState& device) {
   }
 #endif
   device.fd = -1;
+  device.protocolVerified = false;
   device.readBuffer.clear();
   device.pendingThresholdLoad = false;
   ResetPendingEepromSave(device);
@@ -1021,7 +964,8 @@ void TeejusbFsrManager::CloseAllDevices() {
 
 bool TeejusbFsrManager::WriteCommand(
     DeviceState& device, const std::string& command) {
-  if (device.fd < 0 && !OpenDevice(device)) {
+  if (device.fd < 0) {
+    SetStatus(device, "Write failed: serial port is not open");
     return false;
   }
 
@@ -1037,16 +981,36 @@ bool TeejusbFsrManager::WriteCommand(
   }
 
   std::size_t offset = 0;
+  const auto deadline = std::chrono::steady_clock::now() + kSerialWriteTimeout;
   while (offset < payload.size()) {
     const ssize_t written =
         write(static_cast<int>(device.fd), payload.data() + offset,
               payload.size() - offset);
     if (written < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        continue;
+      if (errno == EINTR) {
+        if (std::chrono::steady_clock::now() < deadline) {
+          continue;
+        }
+      } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        const int fd = static_cast<int>(device.fd);
+        if (fd >= 0 && fd < FD_SETSIZE &&
+            std::chrono::steady_clock::now() < deadline) {
+          fd_set writeSet;
+          FD_ZERO(&writeSet);
+          FD_SET(fd, &writeSet);
+          timeval timeout{0, 10000};
+          const int ready =
+              select(fd + 1, nullptr, &writeSet, nullptr, &timeout);
+          if (ready > 0 || (ready < 0 && errno == EINTR)) {
+            continue;
+          }
+        }
       }
 
-      const std::string error = std::strerror(errno);
+      const std::string error =
+          (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+              ? "serial write timed out"
+              : std::strerror(errno);
       CloseDevice(device);
       SetStatus(device, "Write failed: " + error);
       return false;
@@ -1158,8 +1122,14 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
     return;
   }
 
+  std::size_t bytesConsumed = 0;
   for (;;) {
     const int fd = static_cast<int>(device.fd);
+    if (fd >= FD_SETSIZE) {
+      CloseDevice(device);
+      SetStatus(device, "Serial descriptor exceeds select capacity");
+      return;
+    }
     fd_set readSet;
     FD_ZERO(&readSet);
     FD_SET(fd, &readSet);
@@ -1178,6 +1148,18 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
         read(static_cast<int>(device.fd), buffer, sizeof(buffer));
     if (bytesRead > 0) {
       device.readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
+      bytesConsumed += static_cast<std::size_t>(bytesRead);
+      if (device.readBuffer.size() > kMaxReadBufferBytes) {
+        LOG->Warn(
+            "TeejusbFsr: discarded oversized serial input on %s",
+            device.port.c_str());
+        device.readBuffer.clear();
+        SetNotice(device, "flux serie invalide ignore");
+        break;
+      }
+      if (bytesConsumed >= kMaxReadBytesPerPoll) {
+        break;
+      }
       continue;
     }
 
@@ -1206,6 +1188,7 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
   }
 
   HANDLE handle = reinterpret_cast<HANDLE>(device.fd);
+  std::size_t bytesConsumed = 0;
   for (;;) {
     DWORD errors = 0;
     COMSTAT status;
@@ -1236,6 +1219,18 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
       break;
     }
     device.readBuffer.append(buffer, static_cast<std::size_t>(bytesRead));
+    bytesConsumed += static_cast<std::size_t>(bytesRead);
+    if (device.readBuffer.size() > kMaxReadBufferBytes) {
+      LOG->Warn(
+          "TeejusbFsr: discarded oversized serial input on %s",
+          device.port.c_str());
+      device.readBuffer.clear();
+      SetNotice(device, "flux serie invalide ignore");
+      break;
+    }
+    if (bytesConsumed >= kMaxReadBytesPerPoll) {
+      break;
+    }
   }
 
   std::size_t newline = std::string::npos;
@@ -1251,55 +1246,45 @@ void TeejusbFsrManager::ReadAvailableLines(DeviceState& device) {
 }
 
 void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line) {
-  device.lastResponse = line;
-
-  std::vector<std::string> parts;
-  split(line, " ", parts, true);
-  if (parts.size() == 2 && (parts[0] == "s" || parts[0] == "S")) {
-    LOG->Trace(
-        "TeejusbFsr: read EEPROM ack port=%s line=\"%s\"",
-        device.port.c_str(), line.c_str());
-    SetStatus(device, "Thresholds saved");
-    if (device.pendingEepromSave) {
-      ResetPendingEepromSave(device);
-      device.pendingCommandDeadline =
-          std::chrono::steady_clock::time_point::min();
-      SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
-    }
-    return;
-  }
-
-  if (parts.size() != NUM_SENSORS + 1) {
+  std::string command;
+  std::array<int, NUM_SENSORS> parsed{};
+  if (!ParseTeejusbFsrSerialLine(line, command, parsed)) {
     LOG->Trace(
         "TeejusbFsr: ignored serial line port=%s line=\"%s\"",
         device.port.c_str(), line.c_str());
     return;
   }
+  device.lastResponse = line;
 
-  std::array<int, NUM_SENSORS> parsed{};
-  for (int i = 0; i < NUM_SENSORS; ++i) {
-    parsed[i] = StringToInt(parts[i + 1]);
-  }
-
-  const std::string& command = parts[0];
-  if (command == "v" || command == "V") {
+  if (command == "v") {
+    if (!device.protocolVerified) {
+      return;
+    }
     device.values = parsed;
     if (!device.pendingEepromSave && !device.pendingThresholdLoad) {
       SetStatus(device, "Connected");
     }
-  } else if (command == "t" || command == "T" || command == "s" ||
-             command == "S") {
+  } else if (command == "t" || command == "s") {
     LOG->Trace(
         "TeejusbFsr: read %s response port=%s line=\"%s\"",
         command.c_str(), device.port.c_str(), line.c_str());
-    device.thresholds = parsed;
-    if (command == "s" || command == "S") {
+    if (command == "s") {
+      if (!device.pendingEepromSave || !device.pendingEepromFinalCommand ||
+          parsed != device.pendingEepromThresholds) {
+        ResetPendingEepromSave(device);
+        SetStatus(device, "EEPROM confirmation mismatch");
+        SetNotice(device, "les valeurs EEPROM confirmees sont incorrectes");
+        return;
+      }
+      device.thresholds = parsed;
       ResetPendingEepromSave(device);
       device.pendingCommandDeadline =
           std::chrono::steady_clock::time_point::min();
       SetStatus(device, "Thresholds saved");
       SetNotice(device, "nouvelles valeurs enregistrees dans EEPROM");
     } else {
+      device.protocolVerified = true;
+      device.reconnectAfter = std::chrono::steady_clock::time_point::min();
       if (device.pendingEepromSave) {
         if (device.pendingEepromFinalCommand) {
           LOG->Trace(
@@ -1307,10 +1292,21 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
               "response port=%s",
               device.port.c_str());
         } else {
+          const int acknowledgedSensor = device.pendingEepromNextSensor - 1;
+          if (acknowledgedSensor < 0 || acknowledgedSensor >= NUM_SENSORS ||
+              parsed[acknowledgedSensor] !=
+                  device.pendingEepromThresholds[acknowledgedSensor]) {
+            ResetPendingEepromSave(device);
+            SetStatus(device, "Threshold update mismatch");
+            SetNotice(device, "le pad n'a pas confirme le seuil demande");
+            return;
+          }
+          device.thresholds = parsed;
           SendNextEepromSaveCommand(device);
         }
         return;
       }
+      device.thresholds = parsed;
       if (device.pendingThresholdLoad) {
         device.pendingThresholdLoad = false;
         device.pendingCommandDeadline =
@@ -1325,6 +1321,9 @@ void TeejusbFsrManager::ProcessLine(DeviceState& device, const std::string& line
 }
 
 void TeejusbFsrManager::MaybeRequestValues(DeviceState& device) {
+  if (!device.protocolVerified || IsOperationPending(device)) {
+    return;
+  }
   const auto now = std::chrono::steady_clock::now();
   if (device.lastValueRequest != std::chrono::steady_clock::time_point::min() &&
       now - device.lastValueRequest < kValuePollInterval) {
@@ -1334,6 +1333,17 @@ void TeejusbFsrManager::MaybeRequestValues(DeviceState& device) {
   if (WriteCommand(device, "v")) {
     device.lastValueRequest = now;
   }
+}
+
+bool TeejusbFsrManager::IsPortAssigned(const std::string& port) const {
+  return !port.empty() &&
+         std::find(m_sAssignedPorts.begin(), m_sAssignedPorts.end(), port) !=
+             m_sAssignedPorts.end();
+}
+
+bool TeejusbFsrManager::IsOperationPending(
+    const DeviceState& device) const {
+  return device.pendingThresholdLoad || device.pendingEepromSave;
 }
 
 void TeejusbFsrManager::SetStatus(
@@ -1350,7 +1360,9 @@ void TeejusbFsrManager::SetNotice(
 void TeejusbFsrManager::PushDeviceSnapshot(
     lua_State* L, const DeviceState* device) const {
   lua_newtable(L);
-  PushBoolField(L, "connected", device != nullptr && device->fd >= 0);
+  PushBoolField(
+      L, "connected",
+      device != nullptr && device->fd >= 0 && device->protocolVerified);
   PushStringField(L, "port", device == nullptr ? "" : device->port);
   PushStringField(
       L, "status", device == nullptr ? "Not connected" : device->status);

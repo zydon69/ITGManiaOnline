@@ -216,6 +216,11 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckJukeboxRevalidationInvariants.cmake)
   add_test(
+    NAME ending_lesson_revalidation_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckEndingLessonRevalidationInvariants.cmake)
+  add_test(
     NAME timing_core_revalidation_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
@@ -240,6 +245,16 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckStageStatsGradeRevalidationInvariants.cmake)
+  add_test(
+    NAME high_score_revalidation_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckHighScoreRevalidationInvariants.cmake)
+  add_test(
+    NAME profile_revalidation_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckProfileRevalidationInvariants.cmake)
   add_test(
     NAME life_meter_score_display_revalidation_invariants
     COMMAND ${CMAKE_COMMAND}
@@ -375,4 +390,29 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckLegacyLoaderInvariants.cmake)
+  add_test(
+    NAME log_hygiene_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckLogHygieneInvariants.cmake)
+  add_test(
+    NAME rage_file_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckRageFileInvariants.cmake)
+  add_test(
+    NAME steps_reload_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckStepsReloadInvariants.cmake)
+  add_test(
+    NAME macos_debug_info_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckMacOSDebugInfoInvariants.cmake)
+  add_test(
+    NAME teejusb_fsr_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTeejusbFsrInvariants.cmake)
 endif()

@@ -140,7 +140,7 @@ RageSoundReader_Extend::RageSoundReader_Extend(RageSoundReader* pSource)
     return;
   }
 
-  m_iPositionFrames = pSource->GetNextSourceFrame();
+  m_iPositionFrames = pSource->GetNextSourceFrame64();
 }
 
 RageSoundReader_Extend* RageSoundReader_Extend::Copy() const {
@@ -344,7 +344,7 @@ int RageSoundReader_Extend::GetData(
     return iFramesToRead;
   }
 
-  const std::int64_t iSourceStartFrame = m_pSource->GetNextSourceFrame();
+  const std::int64_t iSourceStartFrame = m_pSource->GetNextSourceFrame64();
   const float fSourceRatio = m_pSource->GetStreamToSourceRatio();
   int iRet = RageSoundReader_Filter::Read(pBuffer, iFramesToRead);
 

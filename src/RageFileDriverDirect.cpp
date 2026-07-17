@@ -425,15 +425,18 @@ int RageFileObjDirect::WriteInternal(const void* pBuf, size_t iBytes) {
     return -1;
   }
 
-  /* The buffer is cleared. If we still don't have space, it's bigger than
-   * the buffer size, so just write it directly. */
-  int iRet = RetriedWrite(m_iFD, pBuf, iBytes);
-  if (iRet == -1) {
-    SetError(strerror(errno));
-    m_bWriteFailed = true;
-    return -1;
+  size_t written = 0;
+  while (written < iBytes) {
+    const int iRet = RetriedWrite(
+        m_iFD, static_cast<const char*>(pBuf) + written, iBytes - written);
+    if (iRet <= 0) {
+      SetError(iRet == 0 ? "write returned no progress" : strerror(errno));
+      m_bWriteFailed = true;
+      return -1;
+    }
+    written += static_cast<size_t>(iRet);
   }
-  return iBytes;
+  return static_cast<int>(written);
 }
 
 int RageFileObjDirect::SeekInternal(int iOffset) {
