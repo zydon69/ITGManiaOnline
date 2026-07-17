@@ -369,7 +369,7 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 			self:GetParent():playcommand("Refresh")
 		end,
 		["Set" .. pn .. "VariantCommand"]=function(self)
-			local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant or SL[pn].ActiveModifiers.NoteSkin
+			local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant or SL[pn].ActiveModifiers.NoteSkin or ""
 			-- Get all text after first _ to get the variant name
 			current_variant = current_variant:match("_(.*)") or current_variant
 			if VariantBMTs[pn] then
