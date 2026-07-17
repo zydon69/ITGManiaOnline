@@ -159,6 +159,8 @@ foreach(REQUIRED_SNIPPET
     "ready_request_phase_race_fetch_result"
     "terminal_skipped_failed_final_score_accepted"
     "mark_failed_early_confirmed_without_terminal_post"
+    "those indexes are positions, never user identifiers"
+    "resultUserId ~= \"\" and resultUserId == userId"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
     "if scoreMode == \"itg\" then"
     "itgScorePercent = outgoingPercent")
@@ -170,9 +172,21 @@ foreach(REQUIRED_SNIPPET
   endif()
 endforeach()
 
+string(FIND
+    "${ONLINE_CLIENT_TEXT}"
+    "tostring(key or \"\") == userId"
+    FINAL_RESULT_INDEX_AS_USER_ID_OFFSET)
+if(NOT FINAL_RESULT_INDEX_AS_USER_ID_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "Online score identity invariant failed: final result list indexes must not be treated as user IDs")
+endif()
+
 foreach(REQUIRED_SNIPPET
     "live_score_finalized_for_runtime"
-    "not live_score_finalized_for_runtime()")
+    "not live_score_finalized_for_runtime()"
+    "ITGOnlineRealtimeReconnectScheduledMessageCommand"
+    "realtime_reconnect_handler_armed")
   string(FIND "${ONLINE_HELPERS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

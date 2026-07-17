@@ -2337,6 +2337,14 @@ function ITGOnline:ScheduleRealtimeReconnect(reason)
 		.. " nextAt=" .. string.format("%.3f", self.realtimeReconnectNextAttemptAt)
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	-- The persistent handler may have reused a socket whose active callbacks
+	-- still belong to the login screen.  Notify it explicitly so its mirrored
+	-- connection state cannot remain true after the transport has closed.
+	safe_broadcast("ITGOnlineRealtimeReconnectScheduled", {
+		delay = delay,
+		reason = tostring(reason or "unknown"),
+		attempt = attempt,
+	})
 	return true
 end
 
@@ -10959,14 +10967,15 @@ function ITGOnline:CurrentUserHasFinalResult(room)
 	if userId == "" then return false end
 
 	local playState = room and room.play_state or {}
-	for key, result in pairs(playState.final_results or room and room.final_results or {}) do
-		if tostring(key or "") == userId then
-			return true
-		end
+	-- The server contract exposes final_results as a JSON list.  Lua therefore
+	-- indexes it from 1; those indexes are positions, never user identifiers.
+	-- Comparing the key with userId made user 2 appear finalized as soon as any
+	-- other player occupied the second result row.
+	for _, result in pairs(playState.final_results or room and room.final_results or {}) do
 		if type(result) == "table" then
 			local user = result.user or result.player or {}
 			local resultUserId = tostring(user.id or result.user_id or result.player_id or result.playerId or "")
-			if resultUserId == userId then
+			if resultUserId ~= "" and resultUserId == userId then
 				return true
 			end
 		end

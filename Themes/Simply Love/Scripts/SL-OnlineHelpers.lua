@@ -2866,6 +2866,22 @@ CreateOnlineHandler = function()
 						if online_trace then online_trace("FLOW reconnect_online_broadcast_connect") end
 						safe_broadcast("ConnectOnline")
 					end,
+					ITGOnlineRealtimeReconnectScheduledMessageCommand=function(self, params)
+						if onlineHandlerShuttingDown or (ITGOnline and ITGOnline.disconnecting) then
+							return
+						end
+						local delay = math.max(0.05, tonumber(params and params.delay) or 1)
+						self.connecting = false
+						self.connected = false
+						self.socket = nil
+						if online_trace then
+							online_trace("FLOW realtime_reconnect_handler_armed"
+								.. " reason=" .. tostring(params and params.reason or "unknown")
+								.. " attempt=" .. tostring(params and params.attempt or "nil")
+								.. " delay=" .. tostring(delay))
+						end
+						schedule_named_timer(self, "ReconnectTimer", delay, "Fire")
+					end,
 						ITGOnlineLobbyRefreshDeferredMessageCommand=function(self, params)
 							if onlineHandlerShuttingDown or not self.connected then return end
 							local reason = tostring(params and params.reason or "unknown")
