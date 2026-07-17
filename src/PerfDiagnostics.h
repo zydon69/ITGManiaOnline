@@ -17,6 +17,7 @@ bool LogContentLoadDiagnosticsEnabled();
 bool LogVerboseContentLoadDiagnosticsEnabled();
 bool LogThemeLuaDiagnosticsEnabled();
 bool LogGlobalOffsetDiagnosticsEnabled();
+bool LogWindowsEventDiagnosticsEnabled();
 bool ReviewSrcDiagnosticsEnabled();
 void LogReviewSrcDiagnostics(const char* fmt, ...) PRINTF(1, 2);
 

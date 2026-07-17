@@ -372,8 +372,8 @@ PrefsManager::PrefsManager()
       m_bShowLogOutput("ShowLogOutput", true),
 #endif
       m_bShowPopups("ShowPopups", false),
-      m_bLogSkips("LogSkips", true),
-      m_bLogCheckpoints("LogCheckpoints", true),
+      m_bLogSkips("LogSkips", false),
+      m_bLogCheckpoints("LogCheckpoints", false),
       m_bShowLoadingWindow("ShowLoadingWindow", true),
       m_bPseudoLocalize("PseudoLocalize", false),
       m_show_theme_errors("ShowThemeErrors", false),

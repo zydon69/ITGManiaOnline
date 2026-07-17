@@ -34,7 +34,14 @@ read_source("src/ScreenOptionsMaster.cpp" options_master)
 read_source("src/NoteDataUtil.cpp" note_data_util)
 read_source("src/Steps.cpp" steps)
 read_source("src/PerfDiagnostics.h" perf_diagnostics_header)
+read_source("src/PerfDiagnostics.cpp" perf_diagnostics)
 read_source("src/PrefsManager.cpp" prefs_manager)
+read_source("src/SongManager.cpp" song_manager)
+read_source("src/SongCacheIndex.cpp" song_cache_index)
+read_source("src/NotesLoaderSSC.cpp" notes_loader_ssc)
+read_source("src/TeejusbFsrManager.cpp" teejusb_fsr_manager)
+read_source("src/archutils/Win32/GraphicsWindow.cpp" graphics_window_win32)
+read_source("Themes/Simply Love/metrics.ini" simply_love_metrics)
 read_source(
   "src/arch/LowLevelWindow/LowLevelWindow_Win32.cpp"
   low_level_window_win32)
@@ -72,9 +79,44 @@ require_contains(
   "${perf_diagnostics_header}" "PRINTF(1, 2)"
   "review-src diagnostics must retain compile-time format checking")
 require_contains(
+  "${perf_diagnostics}" "LogWindowsEventDiagnosticsEnabled()"
+  "Win32 event diagnostics must have a dedicated gate")
+require_not_contains(
+  "${graphics_window_win32}"
+  "CHECKPOINT_M(ssprintf(\"%p, %u, %08x, %08x\""
+  "Win32 window messages must not flood generic checkpoint logs")
+require_contains(
+  "${graphics_window_win32}" "WIN32_EVENT_TRACE"
+  "opt-in Win32 event traces must remain identifiable")
+require_contains(
+  "${simply_love_metrics}"
+  "LineLogWindowsEventDiagnostics=\"conf,LogWindowsEventDiagnostics\""
+  "Win32 event diagnostics must remain configurable")
+require_contains(
   "${prefs_manager}"
   "TranslateDeprecatedFlags();\n  RefreshPerfDiagnosticsPreferenceCache();\n  InitializeGlobalOffsetProfiles();"
   "factory reset must refresh diagnostic preference caches")
+require_contains(
+  "${prefs_manager}" "m_bLogSkips(\"LogSkips\", false)"
+  "frame-skip logging must be opt-in by default")
+require_contains(
+  "${prefs_manager}" "m_bLogCheckpoints(\"LogCheckpoints\", false)"
+  "generic checkpoint logging must be opt-in by default")
+require_not_contains(
+  "${song_manager}" "skipped invalid course file"
+  "unavailable dynamic courses must not be reported as invalid files")
+require_contains(
+  "${song_manager}" "CONTENT_TRACE: skipped unavailable or invalid course"
+  "unplayable course diagnostics must be content-gated")
+require_contains(
+  "${song_cache_index}" "bCacheIndexExists || LogContentLoadDiagnosticsEnabled()"
+  "an absent first-run song cache index must stay quiet by default")
+require_contains(
+  "${notes_loader_ssc}" "if (LogContentLoadDiagnosticsEnabled())"
+  "invalid external scroll ratios must be content-gated and rate-limited")
+require_contains(
+  "${teejusb_fsr_manager}" "if (!DoesFileExist(kAssignmentsPath))"
+  "the optional FSR assignment file must not emit a failed-read trace")
 require_not_contains(
   "${low_level_window_win32}"
   "const char* errToPrint = hr_ssprintf"

@@ -16,9 +16,9 @@
 #include "FontManager.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
-#include "RageThreads.h"
 #include "RageTimer.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
@@ -280,7 +280,10 @@ void BitmapText::LoadFromNode(const XNode* node) {
 }
 
 bool BitmapText::LoadFromFont(const std::string& sFontFilePath) {
-  CHECKPOINT_M(ssprintf("BitmapText::LoadFromFont(%s)", sFontFilePath.c_str()));
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: bitmap_font_load path='%s'", sFontFilePath.c_str());
+  }
 
   if (m_pFont) {
     if (FONT != nullptr) {
@@ -311,9 +314,11 @@ bool BitmapText::LoadFromFont(const std::string& sFontFilePath) {
 
 bool BitmapText::LoadFromTextureAndChars(
     const std::string& sTexturePath, const std::string& sChars) {
-  CHECKPOINT_M(ssprintf(
-      "BitmapText::LoadFromTextureAndChars(\"%s\",\"%s\")",
-      sTexturePath.c_str(), sChars.c_str()));
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: bitmap_texture_font_load path='%s' chars=%zu",
+        sTexturePath.c_str(), sChars.size());
+  }
 
   if (m_pFont) {
     if (FONT != nullptr) {

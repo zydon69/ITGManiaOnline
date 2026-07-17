@@ -64,7 +64,12 @@ static std::string GetNewWindow() {
 
 static LRESULT CALLBACK
 GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-  CHECKPOINT_M(ssprintf("%p, %u, %08x, %08x", hWnd, msg, wParam, lParam));
+  if (LogWindowsEventDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "WIN32_EVENT_TRACE hwnd=%p message=%u wparam=0x%llx lparam=0x%llx",
+        hWnd, msg, static_cast<unsigned long long>(wParam),
+        static_cast<unsigned long long>(lParam));
+  }
 
   if (g_bDestroyingWindow) {
     switch (msg) {
@@ -210,8 +215,6 @@ GraphicsWindow_WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
       break;
     }
   }
-
-  CHECKPOINT_M(ssprintf("%p, %u, %08x, %08x", hWnd, msg, wParam, lParam));
 
   if (m_bWideWindowClass) {
     return DefWindowProcW(hWnd, msg, wParam, lParam);

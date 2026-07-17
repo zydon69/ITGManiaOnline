@@ -32,6 +32,8 @@ static Preference<bool> g_bLogThemeLuaDiagnostics(
     "LogThemeLuaDiagnostics", false);
 static Preference<bool> g_bLogGlobalOffsetDiagnostics(
     "LogGlobalOffsetDiagnostics", false);
+static Preference<bool> g_bLogWindowsEventDiagnostics(
+    "LogWindowsEventDiagnostics", false);
 static Preference<bool> g_bReviewSrc("review_src", true);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
@@ -46,6 +48,7 @@ static std::atomic<bool> g_bLogMemoryCardDiagnosticsCached{false};
 static std::atomic<bool> g_bLogContentLoadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
 static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
+static std::atomic<bool> g_bLogWindowsEventDiagnosticsCached{false};
 static std::atomic<bool> g_bReviewSrcCached{true};
 
 static bool EnvFlagEnabled(const char* name) {
@@ -71,6 +74,8 @@ static const bool g_bEnvLogThemeLua = EnvFlagEnabled("ITG_LOG_THEME_LUA");
 static const bool g_bEnvLogBackground = EnvFlagEnabled("ITG_LOG_BACKGROUND");
 static const bool g_bEnvLogGlobalOffset =
     EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
+static const bool g_bEnvWindowsEvents =
+    EnvFlagEnabled("ITG_LOG_WINDOWS_EVENTS");
 static const bool g_bEnvReviewSrc = EnvFlagEnabled("ITG_REVIEW_SRC") ||
                                     EnvFlagEnabled("ITG_LOG_REVIEW_SRC");
 static const bool g_bEnvLegacyTraceGlUploads =
@@ -106,6 +111,8 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogThemeLuaDiagnostics.Get(), std::memory_order_release);
   g_bLogGlobalOffsetDiagnosticsCached.store(
       g_bLogGlobalOffsetDiagnostics.Get(), std::memory_order_release);
+  g_bLogWindowsEventDiagnosticsCached.store(
+      g_bLogWindowsEventDiagnostics.Get(), std::memory_order_release);
   g_bReviewSrcCached.store(g_bReviewSrc.Get(), std::memory_order_release);
 }
 
@@ -190,6 +197,13 @@ bool LogGlobalOffsetDiagnosticsEnabled() {
   // ITG_LOG_GLOBAL_OFFSET=1 when investigating this system.
   return g_bLogGlobalOffsetDiagnosticsCached.load(std::memory_order_acquire) ||
          g_bEnvLogGlobalOffset;
+}
+
+bool LogWindowsEventDiagnosticsEnabled() {
+  // The window procedure runs for every native message. This hot-path trace is
+  // deliberately independent from PerfDiagnostics and generic checkpoints.
+  return g_bLogWindowsEventDiagnosticsCached.load(std::memory_order_acquire) ||
+         g_bEnvWindowsEvents;
 }
 
 bool ReviewSrcDiagnosticsEnabled() {

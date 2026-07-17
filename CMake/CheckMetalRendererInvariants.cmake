@@ -43,6 +43,10 @@ require_contains(
   "\"metal,opengl\",  // Native Metal by default"
   "macOS defaults to native Metal with an OpenGL fallback")
 require_contains(
+  "${stepmania_source}"
+  "Using configured video renderer list '%s' instead of default '%s'"
+  "an explicit supported renderer choice is informational, not a warning")
+require_contains(
   "${operator_menu_options}"
   "choices = { \"OpenGL\", \"Metal\" }"
   "the hybrid OpenGL plus Metal option stays hidden")

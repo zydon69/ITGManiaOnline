@@ -11,6 +11,7 @@
 
 #include "IniFile.h"
 #include "LuaBinding.h"
+#include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "SpecialFiles.h"
@@ -700,6 +701,13 @@ bool TeejusbFsrManager::SaveAssignments() const {
 }
 
 void TeejusbFsrManager::LoadAssignments() {
+  // This file is optional until the first explicit pad assignment is saved.
+  // Avoid routing its expected first-run absence through IniFile's generic
+  // failed-read diagnostics.
+  if (!DoesFileExist(kAssignmentsPath)) {
+    return;
+  }
+
   IniFile ini;
   if (!ini.ReadFile(kAssignmentsPath)) {
     return;

@@ -20,11 +20,11 @@
 #include "FontManager.h"
 #include "IniFile.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "RageException.h"
 #include "RageLog.h"
 #include "RageTextureID.h"
 #include "RageTextureManager.h"
-#include "RageThreads.h"
 #include "RageTypes.h"
 #include "RageUtil.h"
 #include "RageUtil/Regex.h"
@@ -1001,8 +1001,11 @@ void Font::Load(const std::string& sIniPath, std::string sChars) {
   FontLoadStackGuard loadGuard(normalizedIniPath);
 
   // The font is not already loaded. Figure out what we have.
-  CHECKPOINT_M(ssprintf(
-      "Font::Load(\"%s\",\"%s\").", sIniPath.c_str(), m_sChars.c_str()));
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: font_load path='%s' chars=%zu", sIniPath.c_str(),
+        sChars.size());
+  }
 
   path = sIniPath;
   m_sChars = sChars;

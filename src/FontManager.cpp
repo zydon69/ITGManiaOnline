@@ -8,9 +8,9 @@
 #include <utility>
 
 #include "Font.h"
+#include "PerfDiagnostics.h"
 #include "RageException.h"
 #include "RageLog.h"
-#include "RageThreads.h"
 #include "RageUtil.h"
 #include "global.h"
 
@@ -54,8 +54,11 @@ Font* FontManager::LoadFont(
    * the same bitmap if there are equivalent but different paths
    * (e.g. "graphics\blah.png" and "..\stepmania\graphics\blah.png" ). */
 
-  CHECKPOINT_M(
-      ssprintf("FontManager::LoadFont(%s).", sFontOrTextureFilePath.c_str()));
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: font_cache_load path='%s'",
+        sFontOrTextureFilePath.c_str());
+  }
   const FontName NewName(NormalizeFontPath(sFontOrTextureFilePath), sChars);
   std::map<FontName, Font*>::iterator p = g_mapPathToFont.find(NewName);
   if (p != g_mapPathToFont.end()) {
@@ -117,7 +120,10 @@ void FontManager::UnloadFont(Font* fp) {
       continue;
     }
 
-    CHECKPOINT_M(ssprintf("FontManager::UnloadFont(%s).", fp->path.c_str()));
+    if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+      LOG->Trace(
+          "CONTENT_TRACE: font_cache_unload path='%s'", fp->path.c_str());
+    }
 
     if (fp->m_iRefCount <= 0) {
       if (LOG != nullptr) {

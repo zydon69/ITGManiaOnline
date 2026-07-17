@@ -653,10 +653,10 @@ bool CheckVideoDefaultSettings() {
     PREFSMAN->m_sLastSeenVideoDriver.Set(GetVideoDriverName());
   } else if (CompareNoCase(
                  PREFSMAN->m_sVideoRenderers.Get(), defaults.sVideoRenderers)) {
-    LOG->Warn(
-        "Video renderer list has been changed from '%s' to '%s'",
-        defaults.sVideoRenderers.c_str(),
-        PREFSMAN->m_sVideoRenderers.Get().c_str());
+    LOG->Info(
+        "Using configured video renderer list '%s' instead of default '%s'",
+        PREFSMAN->m_sVideoRenderers.Get().c_str(),
+        defaults.sVideoRenderers.c_str());
   }
 
   LOG->Info("Video renderers: '%s'", PREFSMAN->m_sVideoRenderers.Get().c_str());

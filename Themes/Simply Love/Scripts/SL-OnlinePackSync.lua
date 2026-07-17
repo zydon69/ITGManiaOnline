@@ -52,6 +52,8 @@ PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKey or ""
 PackSync.lastDeferredApplyKey = PackSync.lastDeferredApplyKey or ""
+PackSync.lastTerminalApplyKey = PackSync.lastTerminalApplyKey or ""
+PackSync.lastTerminalApplyStatus = PackSync.lastTerminalApplyStatus or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
 PackSync.minimumDownloadFreeBytes = 256 * 1024 * 1024
 PackSync.maxArchiveUncompressedBytes = 5 * 1024 * 1024 * 1024
@@ -976,6 +978,18 @@ local function local_scan_key(songInfo)
 	}, "|")
 end
 
+local function terminal_apply_key(songInfo, generation)
+	if not songInfo then return "" end
+	return table.concat({
+		selected_at(songInfo),
+		selected_song_hash(songInfo),
+		selected_chart_hash(songInfo),
+		selected_path(songInfo),
+		tostring(generation or 0),
+		tostring(ITGOnline and ITGOnline.screenGeneration or 0),
+	}, "|")
+end
+
 local function build_payload(song, steps)
 	if ITGOnline and ITGOnline.BuildSongPayloadFor then
 		return ITGOnline:BuildSongPayloadFor(song, steps)
@@ -1800,6 +1814,8 @@ function PackSync:ResetLocalState(reason)
 	self.lastNoSongClearResetReason = normalizedReason
 	self.localScanCache = {}
 	self.lastCachedTerminalScanTraceKey = ""
+	self.lastTerminalApplyKey = ""
+	self.lastTerminalApplyStatus = ""
 	self.browsePreviewPackKey = ""
 	self.downloadInFlightKey = nil
 	self.downloadStartedAt = nil
@@ -1882,6 +1898,8 @@ function PackSync:InvalidateLocalChartIndex()
 	self.localChartIndexKey = nil
 	self.localScanCache = {}
 	self.lastCachedTerminalScanTraceKey = ""
+	self.lastTerminalApplyKey = ""
+	self.lastTerminalApplyStatus = ""
 end
 
 function PackSync:LocalChartIndex()
@@ -2228,6 +2246,20 @@ function PackSync:ApplySelectedChart(songInfo)
 	end
 	self.lastDeferredApplyKey = ""
 
+	-- Room snapshots can repeat without changing either the selected chart or
+	-- the local song library.  Once the same generation has produced a terminal
+	-- negative result, keep the existing status and missing-song notification
+	-- instead of re-emitting both for every snapshot.  Song reloads explicitly
+	-- invalidate this key through InvalidateLocalChartIndex().
+	local applyKey = terminal_apply_key(songInfo, self.downloadGeneration)
+	if applyKey ~= ""
+		and self.lastTerminalApplyKey == applyKey
+		and self.lastTerminalApplyStatus ~= ""
+		and self.currentStatus == self.lastTerminalApplyStatus
+	then
+		return false
+	end
+
 	trace_online_state("apply_selected_chart_begin", {
 		selected_at = selected_at(songInfo),
 		title = selected_title(songInfo),
@@ -2273,6 +2305,8 @@ function PackSync:ApplySelectedChart(songInfo)
 		})
 	end
 	if result.ok then
+		self.lastTerminalApplyKey = ""
+		self.lastTerminalApplyStatus = ""
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_apply_selected_chart")
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
@@ -2308,6 +2342,18 @@ function PackSync:ApplySelectedChart(songInfo)
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = reason, noCompatibleChart = true })
 		end
+	end
+	if result.status == "mismatch" then
+		self.lastTerminalApplyKey = applyKey
+		self.lastTerminalApplyStatus = self.status.ChartMismatch
+	elseif result.reason == "no_compatible_chart_found" then
+		self.lastTerminalApplyKey = applyKey
+		self.lastTerminalApplyStatus = self.status.NoCompatibleChartFound
+	else
+		-- Transport, parser, and SONGMAN availability failures are transient.
+		-- They must remain retryable even when the room selection is unchanged.
+		self.lastTerminalApplyKey = ""
+		self.lastTerminalApplyStatus = ""
 	end
 	return false
 end

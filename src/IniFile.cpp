@@ -9,9 +9,9 @@ http://en.wikipedia.org/wiki/INI_file
 #include <cstddef>
 #include <string>
 
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageLog.h"
-#include "RageThreads.h"
 #include "RageUtil.h"
 #include "StdString.h"
 #include "XmlFile.h"
@@ -21,7 +21,9 @@ IniFile::IniFile() : XNode("IniFile") {}
 
 bool IniFile::ReadFile(const std::string& sPath) {
   m_sPath = sPath;
-  CHECKPOINT_M(ssprintf("Reading '%s'", m_sPath.c_str()));
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace("CONTENT_TRACE: ini_read path='%s'", m_sPath.c_str());
+  }
 
   RageFile f;
   if (!f.Open(m_sPath)) {

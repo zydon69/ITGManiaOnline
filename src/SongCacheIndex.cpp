@@ -7,6 +7,7 @@
 
 #include "CommonMetrics.h"
 #include "CryptManager.h"
+#include "PerfDiagnostics.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
 #include "RageThreads.h"
@@ -153,11 +154,13 @@ void SongCacheIndex::ReadCacheIndex() {
   CacheIndex.Clear();
   const bool bCacheIndexExists = DoesFileExist(sCacheIndexPath);
   if (!CacheIndex.ReadFile(sCacheIndexPath)) {
-    LOG->Trace(
-        "SRC_AUDIT_FIX SRC-630: cache index '%s' could not be read%s%s.",
-        sCacheIndexPath.c_str(), bCacheIndexExists ? ": " : "",
-        bCacheIndexExists ? CacheIndex.GetError().c_str()
-                          : " because it does not exist yet");
+    if (bCacheIndexExists || LogContentLoadDiagnosticsEnabled()) {
+      LOG->Trace(
+          "CONTENT_TRACE: cache index '%s' could not be read%s%s.",
+          sCacheIndexPath.c_str(), bCacheIndexExists ? ": " : "",
+          bCacheIndexExists ? CacheIndex.GetError().c_str()
+                            : " because it does not exist yet");
+    }
     if (bCacheIndexExists) {
       LOG->Warn(
           "SRC_AUDIT_FIX: preserving cache files after unreadable cache "

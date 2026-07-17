@@ -21,12 +21,12 @@
 #include "LocalizedString.h"
 #include "LuaBinding.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PrefsManager.h"
 #include "Profile.h"
 #include "ProfileManager.h"
 #include "RageLog.h"
-#include "RageThreads.h"
 #include "RageUtil.h"
 #include "Song.h"
 #include "SongManager.h"
@@ -430,10 +430,14 @@ void SongUtil::AdjustDuplicateSteps(Song* pSong) {
       DeleteDuplicateSteps(pSong, vSteps);
 
       const std::string& songTitle = pSong->GetDisplayFullTitle();
-      CHECKPOINT_M(
-          ssprintf("Duplicate steps from %s removed.", songTitle.c_str()));
+      if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+        LOG->Trace(
+            "CONTENT_TRACE: duplicate_steps_adjusted song='%s' steps_type=%s "
+            "difficulty=%s",
+            songTitle.c_str(), StepsTypeToString(st).c_str(),
+            DifficultyToString(dc).c_str());
+      }
       StepsUtil::SortNotesArrayByDifficulty(vSteps);
-      CHECKPOINT_M(ssprintf("Charts from %s sorted.", songTitle.c_str()));
       for (unsigned k = 1; k < vSteps.size(); k++) {
         vSteps[k]->SetDifficulty(Difficulty_Edit);
         if (vSteps[k]->GetDescription() == "") {

@@ -1571,9 +1571,15 @@ void SongManager::InitCoursesFromDisk(LoadingWindow* ld, bool onlyAdditions) {
 
       Course* pCourse = new Course;
       if (!CourseLoaderCRS::LoadFromCRSFile(sCoursePath, *pCourse)) {
-        LOG->Warn(
-            "SRC_AUDIT_FIX SRC-099: skipped invalid course file '%s'.",
-            sCoursePath.c_str());
+        // The loader already reports the precise parse or I/O reason.  A
+        // syntactically valid dynamic course can also be unplayable when the
+        // local library has fewer BEST/WORST entries than it requests, which
+        // is normal on small or portable installs.
+        if (LogContentLoadDiagnosticsEnabled()) {
+          LOG->Trace(
+              "CONTENT_TRACE: skipped unavailable or invalid course '%s'",
+              sCoursePath.c_str());
+        }
         delete pCourse;
         continue;
       }

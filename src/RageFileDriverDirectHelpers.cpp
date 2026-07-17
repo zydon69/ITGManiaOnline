@@ -6,7 +6,8 @@
 #include <string>
 #include <vector>
 
-#include "RageThreads.h"
+#include "PerfDiagnostics.h"
+#include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil_FileDB.h"
 #include "StdString.h"
@@ -171,7 +172,10 @@ void DirectFilenameDB::SetRoot(std::string root_) {
 }
 
 void DirectFilenameDB::CacheFile(const std::string& sPath) {
-  CHECKPOINT_M(root + sPath);
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: file_cache path='%s'", (root + sPath).c_str());
+  }
   std::string sDir = Dirname(sPath);
   FileSet* pFileSet = GetFileSet(sDir, false);
   if (pFileSet == nullptr) {
@@ -246,7 +250,11 @@ void DirectFilenameDB::PopulateFileSet(FileSet& fs, const std::string& path) {
   }
 
   HANDLE hFind = DoFindFirstFile((root + sPath + "/*").c_str(), &fd);
-  CHECKPOINT_M(root + sPath + "/*");
+  if (LogVerboseContentLoadDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "CONTENT_TRACE: directory_scan path='%s'",
+        (root + sPath + "/*").c_str());
+  }
 
   if (hFind == INVALID_HANDLE_VALUE) {
     return;
