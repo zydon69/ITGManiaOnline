@@ -1435,14 +1435,6 @@ local function manifest_file_name(path)
 	return name
 end
 
-local function simfile_relative_path(path)
-	local value = tostring(path or ""):gsub("\\", "/")
-	value = value:gsub("^/*Songs/+", "")
-	value = value:gsub("^/+", "")
-	value = value:gsub("/+$", "")
-	return value ~= "" and value or nil
-end
-
 function ITGOnline:NormalizeHash(value, options)
 	options = options or {}
 	value = tostring(value or ""):lower()
@@ -8930,7 +8922,10 @@ function ITGOnline:BuildSongPayloadFor(song, steps)
 		chart_hash = chartHash,
 		chart_file_hash = songFileHash,
 		chart_key = chartKey ~= "" and chartKey or nil,
-		simfile_relative_path = simfile_relative_path(songFilePath),
+		-- required_files uses the normalized manifest filename.  Reuse that exact
+		-- name here so punctuation stripped for transport (for example apostrophes)
+		-- cannot make the selected simfile disagree with its own manifest.
+		simfile_relative_path = songFileName,
 		simfile_hash = songFileHash,
 		chart_type = chartType,
 		difficulty = difficulty,

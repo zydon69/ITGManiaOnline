@@ -1943,7 +1943,10 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	self.currentSongInfo = songInfo
 	local packKey = pack_name_key(packName)
 	local exists = self:PackExists(packName)
-	local status = exists and self.status.DownloadedOk or self.status.ManagerBrowsingUnknownPack
+	-- A locally available pack is not a completed transfer.  Keep the terminal
+	-- downloaded_ok status reserved for an identified download acknowledged at
+	-- 100%, as required by the server protocol.
+	local status = exists and self.status.LocalChartMatchFound or self.status.ManagerBrowsingUnknownPack
 	local message = exists and "Pack disponible localement."
 		or "Pack absent. Vous pouvez rechercher un pack correspondant."
 	if exists and self.downloadedPackKey == packKey then
