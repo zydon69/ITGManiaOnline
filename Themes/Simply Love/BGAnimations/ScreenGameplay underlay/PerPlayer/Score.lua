@@ -128,20 +128,26 @@ local function place_lower_scores_for_player(actor_frame, showExScore, showItgSc
 	local lower_ex = actor_frame:GetChild("LowerEXScore")
 	local lower_itg = actor_frame:GetChild("LowerITGScore")
 	local primary = actor_frame:GetChild("PrimaryScore")
+	local primary_width = zoomed_width(primary, LowerScoreLayout.primaryFallbackWidth)
+	-- Online columns center the primary score on their anchor, whereas the
+	-- local layout right-aligns it.  Offset P1's secondary scores by the
+	-- centered half-width so their spacing from HardEX remains identical.
+	local primary_anchor_offset = is_online_column_layout() and (primary_width / 2) or 0
 	local ex_x
 	local itg_x
 
 	if showExScore and lower_ex then
-		ex_x = LowerScoreLayout.legacyFirstX
+		ex_x = LowerScoreLayout.legacyFirstX + primary_anchor_offset
 		place_legacy_lower_score(lower_ex, ex_x)
 	end
 
 	if showItgScore and lower_itg then
-		itg_x = showExScore and LowerScoreLayout.legacySecondX or LowerScoreLayout.legacyFirstX
+		itg_x = (showExScore and LowerScoreLayout.legacySecondX or LowerScoreLayout.legacyFirstX)
+			+ primary_anchor_offset
 		place_legacy_lower_score(lower_itg, itg_x)
 	end
 
-	return ex_x, itg_x, zoomed_width(primary, LowerScoreLayout.primaryFallbackWidth)
+	return ex_x, itg_x, primary_width
 end
 
 local function get_itg_percent()
