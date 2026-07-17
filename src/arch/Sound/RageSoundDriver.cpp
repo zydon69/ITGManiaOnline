@@ -8,6 +8,7 @@
 #include "RageLog.h"
 #include "RageSoundManager.h"
 #include "RageUtil.h"
+#include "StdString.h"
 #include "arch/RageDriver.h"
 #include "arch/arch_default.h"
 #include "global.h"
