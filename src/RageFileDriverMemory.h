@@ -16,36 +16,42 @@ class RageFileObjMem : public RageFileObj {
  public:
   RageFileObjMem(RageFileObjMemFile* pFile = nullptr);
   RageFileObjMem(const RageFileObjMem& cpy);
-  ~RageFileObjMem();
+  ~RageFileObjMem() override;
 
-  int ReadInternal(void* buffer, size_t bytes);
-  int WriteInternal(const void* buffer, size_t bytes);
-  int SeekInternal(int offset);
-  int GetFileSize() const;
-  RageFileObjMem* Copy() const;
+  int ReadInternal(void* buffer, size_t bytes) override;
+  int WriteInternal(const void* buffer, size_t bytes) override;
+  int SeekInternal(int offset) override;
+  int GetFileSize() const override;
+  RageFileObjMem* Copy() const override;
 
   /* Retrieve the contents of this file. */
-  const std::string& GetString() const;
-  void PutString(const std::string& sBuf);
+  std::string GetString() const;
+  bool PutString(const std::string& sBuf);
 
  private:
   RageFileObjMemFile* m_pFile;
   int m_iFilePos;
+
+  RageFileObjMem& operator=(const RageFileObjMem&) = delete;
 };
 
 class RageFileDriverMem : public RageFileDriver {
  public:
   RageFileDriverMem();
-  ~RageFileDriverMem();
+  ~RageFileDriverMem() override;
 
-  RageFileBasic* Open(const std::string& sPath, int mode, int& err);
-  void FlushDirCache(const std::string& /* sPath */) {}
+  RageFileBasic* Open(
+      const std::string& sPath, int mode, int& err) override;
+  void FlushDirCache(const std::string& /* sPath */) override {}
 
-  bool Remove(const std::string& sPath);
+  bool Remove(const std::string& sPath) override;
 
  private:
   RageMutex m_Mutex;
   std::vector<RageFileObjMemFile*> m_Files;
+
+  RageFileDriverMem(const RageFileDriverMem&) = delete;
+  RageFileDriverMem& operator=(const RageFileDriverMem&) = delete;
 };
 
 #endif

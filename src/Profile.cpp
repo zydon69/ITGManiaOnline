@@ -1730,10 +1730,11 @@ ProfileLoadResult Profile::LoadStatsFromDir(
     return ProfileLoadResult_FailedTampered;
   }
 
+  uint32_t expectedCompressedCRC32 = 0;
   if (compressed) {
     std::string sError;
-    uint32_t iCRC32;
-    RageFileObjInflate* pInflate = GunzipFile(pFile.release(), sError, &iCRC32);
+    RageFileObjInflate* pInflate =
+        GunzipFile(pFile.release(), sError, &expectedCompressedCRC32);
     if (pInflate == nullptr) {
       LOG->Trace("Error opening %s: %s", fn.c_str(), sError.c_str());
       return ProfileLoadResult_FailedTampered;
@@ -1782,6 +1783,14 @@ ProfileLoadResult Profile::LoadStatsFromDir(
   XNode xml;
   if (!XmlFileUtil::LoadFromFileShowErrors(xml, *pFile.get())) {
     return ProfileLoadResult_FailedTampered;
+  }
+  if (compressed) {
+    uint32_t actualCRC32 = 0;
+    if (!pFile->GetCRC32(&actualCRC32) ||
+        actualCRC32 != expectedCompressedCRC32) {
+      LOG->Warn("Compressed profile CRC check failed for %s", fn.c_str());
+      return ProfileLoadResult_FailedTampered;
+    }
   }
   LOG->Trace("Done.");
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "GameConstantsAndTypes.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "RageFileManager.h"
 #include "RageUtil.h"
@@ -24,47 +25,97 @@ class Song;
 
 struct PlayAfterLaunchInfo {
   std::string sSongDir;
-  std::string sTheme;
-  bool bAnySongChanged;
-  bool bAnyThemeChanged;
+  bool bAnyContentChanged;
 
-  PlayAfterLaunchInfo() {
-    bAnySongChanged = false;
-    bAnyThemeChanged = false;
-  }
+  PlayAfterLaunchInfo() : bAnyContentChanged(false) {}
 
   void OverlayWith(const PlayAfterLaunchInfo& other) {
     if (!other.sSongDir.empty()) {
       sSongDir = other.sSongDir;
     }
-    if (!other.sTheme.empty()) {
-      sTheme = other.sTheme;
-    }
-    bAnySongChanged |= other.bAnySongChanged;
-    bAnyThemeChanged |= other.bAnyThemeChanged;
+    bAnyContentChanged |= other.bAnyContentChanged;
   }
 };
 
-void InstallSmzipOsArg(const std::string& sOsZipFile, PlayAfterLaunchInfo& out);
+bool InstallSmzipOsArg(const std::string& sOsZipFile, PlayAfterLaunchInfo& out);
 PlayAfterLaunchInfo DoInstalls(CommandLineActions::CommandLineArgs args);
 
-static void Parse(const std::string& sDir, PlayAfterLaunchInfo& out) {
+static void MarkInstalledContent(
+    const std::string& sDir, PlayAfterLaunchInfo& out) {
+  out.bAnyContentChanged = true;
   std::vector<std::string> vsDirParts;
   split(sDir, "/", vsDirParts, true);
   if (vsDirParts.size() == 3 && EqualsNoCase(vsDirParts[0], "Songs")) {
     out.sSongDir = "/" + sDir;
-  } else if (vsDirParts.size() == 2 && EqualsNoCase(vsDirParts[0], "Themes")) {
-    out.sTheme = vsDirParts[1];
   }
 }
+
+static bool IsInstallableContentPath(const std::string& path) {
+  std::vector<std::string> parts;
+  split(path, "/", parts, true);
+  if (parts.size() < 2 || parts[0].empty()) {
+    return false;
+  }
+
+  static const char* const allowedRoots[] = {
+      "Announcers",
+      "BGAnimations",
+      "BackgroundEffects",
+      "BackgroundTransitions",
+      "Characters",
+      "Courses",
+      "NoteSkins",
+      "RandomMovies",
+      "Songs",
+      "Themes"};
+  for (const char* root : allowedRoots) {
+    if (EqualsNoCase(parts[0], root)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+class ScopedMount {
+ public:
+  ScopedMount(
+      const std::string& type, const std::string& root,
+      const std::string& mountPoint)
+      : m_Type(type), m_Root(root), m_MountPoint(mountPoint) {
+    m_Mounted = FILEMAN != nullptr && FILEMAN->Mount(type, root, mountPoint);
+  }
+
+  ~ScopedMount() {
+    if (m_Mounted && FILEMAN != nullptr) {
+      FILEMAN->Unmount(m_Type, m_Root, m_MountPoint);
+    }
+  }
+
+  explicit operator bool() const { return m_Mounted; }
+
+  ScopedMount(const ScopedMount&) = delete;
+  ScopedMount& operator=(const ScopedMount&) = delete;
+
+ private:
+  std::string m_Type;
+  std::string m_Root;
+  std::string m_MountPoint;
+  bool m_Mounted{false};
+};
 
 static const std::string TEMP_ZIP_MOUNT_POINT = "/@temp-zip/";
 const std::string TEMP_OS_MOUNT_POINT = "/@temp-os/";
 
-static void InstallSmzip(
+static bool InstallSmzip(
     const std::string& sZipFile, PlayAfterLaunchInfo& out) {
-  if (!FILEMAN->Mount("zip", sZipFile, TEMP_ZIP_MOUNT_POINT)) {
-    FAIL_M("Failed to mount " + sZipFile);
+  ScopedMount zipMount("zip", sZipFile, TEMP_ZIP_MOUNT_POINT);
+  if (!zipMount) {
+    const std::string message = "Failed to mount package " + sZipFile;
+    LogReviewSrcDiagnostics("SRC-3405 %s", message.c_str());
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->SystemMessage(message);
+    }
+    return false;
   }
 
   std::vector<std::string> vsFiles;
@@ -72,21 +123,40 @@ static void InstallSmzip(
     std::vector<std::string> vsRawFiles;
     GetDirListingRecursive(TEMP_ZIP_MOUNT_POINT, "*", vsRawFiles);
 
-    std::vector<std::string> vsPrettyFiles;
     for (const std::string& s : vsRawFiles) {
-      if (EqualsNoCase(GetExtension(s), "ctl")) {
+      if (EqualsNoCase(GetExtension(s), "ctl") || IsADirectory(s)) {
         continue;
       }
 
       vsFiles.push_back(s);
-
-      std::string s2 = Right(s, s.length() - TEMP_ZIP_MOUNT_POINT.length());
-      vsPrettyFiles.push_back(s2);
     }
-    sort(vsPrettyFiles.begin(), vsPrettyFiles.end());
+  }
+
+  if (vsFiles.empty()) {
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->SystemMessage("Package contains no installable files");
+    }
+    return false;
+  }
+
+  for (const std::string& tmpFile : vsFiles) {
+    const std::string destination =
+        Right(tmpFile, tmpFile.length() - TEMP_ZIP_MOUNT_POINT.length());
+    if (!IsInstallableContentPath(destination)) {
+      const std::string result =
+          "Package contains a forbidden path: " + destination;
+      LogReviewSrcDiagnostics(
+          "SRC-3406 rejected package path package='%s' path='%s'",
+          sZipFile.c_str(), destination.c_str());
+      if (SCREENMAN != nullptr) {
+        SCREENMAN->SystemMessage(result);
+      }
+      return false;
+    }
   }
 
   std::string sResult = "Success installing " + sZipFile;
+  bool success = true;
   for (std::string& tmpFile : vsFiles) {
     std::string sDestFile = tmpFile;
     sDestFile =
@@ -95,34 +165,41 @@ static void InstallSmzip(
     std::string sDir, sThrowAway;
     splitpath(sDestFile, sDir, sThrowAway, sThrowAway);
 
-    Parse(sDir, out);
-    out.bAnySongChanged = true;
-
     FILEMAN->CreateDir(sDir);
 
     if (!FileCopy(tmpFile, sDestFile)) {
+      success = false;
       sResult = "Error extracting " + sDestFile;
       break;
     }
+    MarkInstalledContent(sDir, out);
   }
-  FILEMAN->Unmount("zip", sZipFile, TEMP_ZIP_MOUNT_POINT);
 
-  SCREENMAN->SystemMessage(sResult);
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->SystemMessage(sResult);
+  }
+  return success;
 }
 
-void InstallSmzipOsArg(
+bool InstallSmzipOsArg(
     const std::string& sOsZipFile, PlayAfterLaunchInfo& out) {
-  SCREENMAN->SystemMessage("Installing " + sOsZipFile);
+  if (SCREENMAN != nullptr) {
+    SCREENMAN->SystemMessage("Installing " + sOsZipFile);
+  }
 
   std::string sOsDir, sFilename, sExt;
   splitpath(sOsZipFile, sOsDir, sFilename, sExt);
 
-  if (!FILEMAN->Mount("dir", sOsDir, TEMP_OS_MOUNT_POINT)) {
-    FAIL_M("Failed to mount " + sOsDir);
+  ScopedMount osMount("dir", sOsDir, TEMP_OS_MOUNT_POINT);
+  if (!osMount) {
+    const std::string message = "Failed to access package directory " + sOsDir;
+    LogReviewSrcDiagnostics("SRC-3405 %s", message.c_str());
+    if (SCREENMAN != nullptr) {
+      SCREENMAN->SystemMessage(message);
+    }
+    return false;
   }
-  InstallSmzip(TEMP_OS_MOUNT_POINT + sFilename + sExt, out);
-
-  FILEMAN->Unmount("dir", sOsDir, TEMP_OS_MOUNT_POINT);
+  return InstallSmzip(TEMP_OS_MOUNT_POINT + sFilename + sExt, out);
 }
 
 static bool IsPackageFile(const std::string& arg) {
@@ -167,7 +244,7 @@ void ScreenInstallOverlay::Update(float fDeltaTime) {
     PlayAfterLaunchInfo pali2 = DoInstalls(args);
     playAfterLaunchInfo.OverlayWith(pali2);
   }
-  if (playAfterLaunchInfo.bAnySongChanged) {
+  if (playAfterLaunchInfo.bAnyContentChanged) {
     SONGMAN->Reload(false);
   }
 

@@ -4,6 +4,8 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -57,24 +59,38 @@ RageFileObjMem::~RageFileObjMem() {
 int RageFileObjMem::ReadInternal(void* buffer, size_t bytes) {
   LockMut(m_pFile->m_Mutex);
 
-  m_iFilePos = std::min(m_iFilePos, GetFileSize());
-  bytes = std::min(bytes, (size_t)GetFileSize() - m_iFilePos);
+  const size_t fileSize = m_pFile->m_sBuf.size();
+  const size_t filePos = std::min(static_cast<size_t>(m_iFilePos), fileSize);
+  m_iFilePos = static_cast<int>(filePos);
+  bytes = std::min(bytes, fileSize - filePos);
   if (bytes == 0) {
     return 0;
   }
-  memcpy(buffer, &m_pFile->m_sBuf[m_iFilePos], bytes);
-  m_iFilePos += bytes;
+  memcpy(buffer, m_pFile->m_sBuf.data() + filePos, bytes);
+  m_iFilePos += static_cast<int>(bytes);
 
-  return bytes;
+  return static_cast<int>(bytes);
 }
 
 int RageFileObjMem::WriteInternal(const void* buffer, size_t bytes) {
-  m_pFile->m_Mutex.Lock();
-  m_pFile->m_sBuf.replace(m_iFilePos, bytes, (const char*)buffer, bytes);
-  m_pFile->m_Mutex.Unlock();
+  if (m_iFilePos < 0 ||
+      bytes > static_cast<size_t>(std::numeric_limits<int>::max() - m_iFilePos)) {
+    SetError("Memory file exceeds the supported size");
+    return -1;
+  }
 
-  m_iFilePos += bytes;
-  return bytes;
+  LockMut(m_pFile->m_Mutex);
+  try {
+    m_pFile->m_sBuf.replace(
+        static_cast<size_t>(m_iFilePos), bytes,
+        static_cast<const char*>(buffer), bytes);
+  } catch (const std::exception& error) {
+    SetError(std::string("Could not write memory file: ") + error.what());
+    return -1;
+  }
+
+  m_iFilePos += static_cast<int>(bytes);
+  return static_cast<int>(bytes);
 }
 
 int RageFileObjMem::SeekInternal(int offset) {
@@ -84,7 +100,7 @@ int RageFileObjMem::SeekInternal(int offset) {
 
 int RageFileObjMem::GetFileSize() const {
   LockMut(m_pFile->m_Mutex);
-  return m_pFile->m_sBuf.size();
+  return static_cast<int>(m_pFile->m_sBuf.size());
 }
 
 RageFileObjMem::RageFileObjMem(const RageFileObjMem& cpy) : RageFileObj(cpy) {
@@ -98,12 +114,33 @@ RageFileObjMem* RageFileObjMem::Copy() const {
   return pRet;
 }
 
-const std::string& RageFileObjMem::GetString() const { return m_pFile->m_sBuf; }
+std::string RageFileObjMem::GetString() const {
+  LockMut(m_pFile->m_Mutex);
+  return m_pFile->m_sBuf;
+}
 
-void RageFileObjMem::PutString(const std::string& sBuf) {
-  m_pFile->m_Mutex.Lock();
-  m_pFile->m_sBuf = sBuf;
-  m_pFile->m_Mutex.Unlock();
+bool RageFileObjMem::PutString(const std::string& sBuf) {
+  if (sBuf.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+    SetError("Memory file exceeds the supported size");
+    return false;
+  }
+
+  int newPos = -1;
+  {
+    LockMut(m_pFile->m_Mutex);
+    try {
+      m_pFile->m_sBuf = sBuf;
+      newPos = std::min(RageFileObj::Tell(), static_cast<int>(sBuf.size()));
+    } catch (const std::exception& error) {
+      SetError(std::string("Could not replace memory file: ") + error.what());
+      return false;
+    }
+  }
+  if (RageFileObj::Seek(newPos) != newPos) {
+    SetError("Could not synchronize memory file position");
+    return false;
+  }
+  return true;
 }
 
 RageFileDriverMem::RageFileDriverMem()
@@ -120,7 +157,7 @@ RageFileBasic* RageFileDriverMem::Open(
     const std::string& sPath, int mode, int& err) {
   LockMut(m_Mutex);
 
-  if (mode == RageFile::WRITE) {
+  if ((mode & RageFile::WRITE) != 0) {
     /* If the file exists, delete it. */
     Remove(sPath);
 

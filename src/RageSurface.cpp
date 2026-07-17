@@ -5,13 +5,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
 
 #include "RageUtil.h"
 #include "global.h"
 
 int32_t RageSurfacePalette::FindColor(const RageSurfaceColor& color) const {
-  for (int i = 0; i < ncolors; ++i) {
+  const int safeColorCount = std::clamp<int>(ncolors, 0, 256);
+  for (int i = 0; i < safeColorCount; ++i) {
     if (colors[i] == color) {
       return i;
     }
@@ -24,7 +28,8 @@ int32_t RageSurfacePalette::FindClosestColor(
     const RageSurfaceColor& color) const {
   int iBest = -1;
   int iBestDist = INT_MAX;
-  for (int i = 0; i < ncolors; ++i) {
+  const int safeColorCount = std::clamp<int>(ncolors, 0, 256);
+  for (int i = 0; i < safeColorCount; ++i) {
     if (colors[i] == color) {
       return i;
     }
@@ -42,7 +47,9 @@ int32_t RageSurfacePalette::FindClosestColor(
 }
 
 RageSurfaceFormat::RageSurfaceFormat()
-    : Mask(),
+    : BytesPerPixel(0),
+      BitsPerPixel(0),
+      Mask(),
       Shift(),
       Loss(),
       Rmask(Mask[0]),
@@ -71,15 +78,22 @@ RageSurfaceFormat::RageSurfaceFormat(const RageSurfaceFormat& cpy)
   Mask = cpy.Mask;
   Shift = cpy.Shift;
   Loss = cpy.Loss;
-  if (palette) {
-    palette = std::make_unique<RageSurfacePalette>(*palette);
+  if (cpy.palette) {
+    palette = std::make_unique<RageSurfacePalette>(*cpy.palette);
   }
 }
 
 void RageSurfaceFormat::GetRGB(
     uint32_t val, uint8_t* r, uint8_t* g, uint8_t* b) const {
+  if (r == nullptr || g == nullptr || b == nullptr) {
+    return;
+  }
   if (BytesPerPixel == 1) {
-    ASSERT(palette != nullptr);
+    if (palette == nullptr ||
+        val >= static_cast<uint32_t>(std::clamp<int>(palette->ncolors, 0, 256))) {
+      *r = *g = *b = 0;
+      return;
+    }
     *r = palette->colors[val].r;
     *g = palette->colors[val].g;
     *b = palette->colors[val].b;
@@ -93,6 +107,9 @@ void RageSurfaceFormat::GetRGB(
 bool RageSurfaceFormat::MapRGBA(
     uint8_t r, uint8_t g, uint8_t b, uint8_t a, uint32_t& val) const {
   if (BytesPerPixel == 1) {
+    if (palette == nullptr) {
+      return false;
+    }
     RageSurfaceColor c(r, g, b, a);
     int32_t n = palette->FindColor(c);
     if (n == -1) {
@@ -112,7 +129,13 @@ bool RageSurfaceFormat::operator==(const RageSurfaceFormat& rhs) const {
   }
 
   if (BytesPerPixel == 1) {
-    if (memcmp(palette.get(), rhs.palette.get(), sizeof(RageSurfaceFormat))) {
+    if (palette == nullptr || rhs.palette == nullptr ||
+        palette->ncolors != rhs.palette->ncolors || palette->ncolors < 0 ||
+        palette->ncolors > 256 ||
+        memcmp(
+            palette->colors, rhs.palette->colors,
+            static_cast<size_t>(palette->ncolors) * sizeof(RageSurfaceColor)) !=
+            0) {
       return false;
     }
   }
@@ -132,25 +155,30 @@ bool RageSurfaceFormat::Equivalent(const RageSurfaceFormat& rhs) const {
   return true;
 }
 
-RageSurface::RageSurface() {
-  format = &fmt;
-  pixels = nullptr;
-  pixels_owned = true;
-}
+RageSurface::RageSurface()
+    : format(&fmt),
+      pixels(nullptr),
+      pixels_owned(true),
+      w(0),
+      h(0),
+      pitch(0),
+      flags(0) {}
 
-RageSurface::RageSurface(const RageSurface& cpy) {
-  format = &fmt;
-
+RageSurface::RageSurface(const RageSurface& cpy)
+    : format(&fmt), fmt(cpy.fmt), pixels(nullptr), pixels_owned(true) {
   w = cpy.w;
   h = cpy.h;
   pitch = cpy.pitch;
   flags = cpy.flags;
-  pixels_owned = true;
   if (cpy.pixels) {
-    pixels = new uint8_t[static_cast<size_t>(pitch) * h];
-    memcpy(pixels, cpy.pixels, static_cast<size_t>(pitch) * h);
-  } else {
-    pixels = nullptr;
+    if (pitch <= 0 || h <= 0 ||
+        static_cast<uint64_t>(pitch) * static_cast<uint64_t>(h) >
+            static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+      throw std::invalid_argument("Cannot copy an invalid RageSurface");
+    }
+    const size_t bytes = static_cast<size_t>(pitch) * static_cast<size_t>(h);
+    pixels = new uint8_t[bytes];
+    memcpy(pixels, cpy.pixels, bytes);
   }
 }
 
@@ -223,16 +251,40 @@ void SetupFormat(
 RageSurface* CreateSurface(
     int width, int height, int BitsPerPixel, uint32_t Rmask, uint32_t Gmask,
     uint32_t Bmask, uint32_t Amask) {
-  RageSurface* pImg = new RageSurface;
+  if (width <= 0 || height <= 0 ||
+      (BitsPerPixel != 8 && BitsPerPixel != 16 && BitsPerPixel != 24 &&
+       BitsPerPixel != 32)) {
+    return nullptr;
+  }
 
-  SetupFormat(
-      pImg->fmt, width, height, BitsPerPixel, Rmask, Gmask, Bmask, Amask);
+  const uint64_t pitch =
+      static_cast<uint64_t>(width) * static_cast<unsigned>(BitsPerPixel) / 8U;
+  const uint64_t allocation = pitch * static_cast<uint64_t>(height);
+  if (pitch > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+      allocation > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    return nullptr;
+  }
+
+  std::unique_ptr<RageSurface> pImg(new (std::nothrow) RageSurface);
+  if (pImg == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    SetupFormat(
+        pImg->fmt, width, height, BitsPerPixel, Rmask, Gmask, Bmask, Amask);
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
 
   pImg->w = width;
   pImg->h = height;
   pImg->flags = 0;
-  pImg->pitch = width * BitsPerPixel / 8;
-  pImg->pixels = new uint8_t[pImg->pitch * height];
+  pImg->pitch = static_cast<int>(pitch);
+  pImg->pixels = new (std::nothrow) uint8_t[static_cast<size_t>(allocation)];
+  if (pImg->pixels == nullptr) {
+    return nullptr;
+  }
 
   /*
   if( BitsPerPixel == 8 )
@@ -241,16 +293,32 @@ RageSurface* CreateSurface(
   }
   */
 
-  return pImg;
+  return pImg.release();
 }
 
 RageSurface* CreateSurfaceFrom(
     int width, int height, int BitsPerPixel, uint32_t Rmask, uint32_t Gmask,
     uint32_t Bmask, uint32_t Amask, uint8_t* pPixels, uint32_t pitch) {
-  RageSurface* pImg = new RageSurface;
+  if (width <= 0 || height <= 0 || BitsPerPixel <= 0 ||
+      (BitsPerPixel != 8 && BitsPerPixel != 16 && BitsPerPixel != 24 &&
+       BitsPerPixel != 32) ||
+      pitch == 0 ||
+      pitch > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+      pitch < static_cast<uint64_t>(width) * BitsPerPixel / 8U) {
+    return nullptr;
+  }
 
-  SetupFormat(
-      pImg->fmt, width, height, BitsPerPixel, Rmask, Gmask, Bmask, Amask);
+  std::unique_ptr<RageSurface> pImg(new (std::nothrow) RageSurface);
+  if (pImg == nullptr) {
+    return nullptr;
+  }
+
+  try {
+    SetupFormat(
+        pImg->fmt, width, height, BitsPerPixel, Rmask, Gmask, Bmask, Amask);
+  } catch (const std::bad_alloc&) {
+    return nullptr;
+  }
 
   pImg->w = width;
   pImg->h = height;
@@ -259,7 +327,7 @@ RageSurface* CreateSurfaceFrom(
   pImg->pixels = pPixels;
   pImg->pixels_owned = false;
 
-  return pImg;
+  return pImg.release();
 }
 
 /*

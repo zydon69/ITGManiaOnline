@@ -26,8 +26,8 @@ inline bool operator!=(
 }
 
 struct RageSurfacePalette {
-  RageSurfaceColor colors[256];
-  int32_t ncolors;
+  RageSurfaceColor colors[256]{};
+  int32_t ncolors{0};
 
   /* Find the exact color; returns -1 if not found. */
   int32_t FindColor(const RageSurfaceColor& color) const;

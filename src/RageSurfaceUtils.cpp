@@ -6,8 +6,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <memory>
+#include <new>
 #include <string>
 
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageLog.h"
 #include "RageSurface.h"
@@ -757,6 +761,12 @@ struct SurfaceHeader {
 
 // Save and load RageSurfaces to disk, in a very fast, nonportable way.
 bool RageSurfaceUtils::SaveSurface(const RageSurface* img, std::string file) {
+  if (img == nullptr || img->pixels == nullptr || img->w <= 0 || img->h <= 0 ||
+      img->pitch <= 0 || img->format == nullptr) {
+    LogReviewSrcDiagnostics(
+        "SRC-3408 refused to save invalid surface to '%s'", file.c_str());
+    return false;
+  }
   RageFile f;
   if (!f.Open(file, RageFile::WRITE)) {
     return false;
@@ -774,17 +784,36 @@ bool RageSurfaceUtils::SaveSurface(const RageSurface* img, std::string file) {
   h.Amask = img->format->Amask;
   h.bpp = img->format->BitsPerPixel;
 
-  f.Write(&h, sizeof(h));
-
-  if (h.bpp == 8) {
-    f.Write(
-        &img->format->palette->ncolors, sizeof(img->format->palette->ncolors));
-    f.Write(
-        img->format->palette->colors,
-        img->format->palette->ncolors * sizeof(RageSurfaceColor));
+  if (f.Write(&h, sizeof(h)) != static_cast<int>(sizeof(h))) {
+    return false;
   }
 
-  f.Write(img->pixels, static_cast<size_t>(img->h) * img->pitch);
+  if (h.bpp == 8) {
+    if (img->format->palette == nullptr ||
+        img->format->palette->ncolors < 0 ||
+        img->format->palette->ncolors > 256) {
+      return false;
+    }
+    const size_t colorBytes =
+        static_cast<size_t>(img->format->palette->ncolors) *
+        sizeof(RageSurfaceColor);
+    if (f.Write(
+            &img->format->palette->ncolors,
+            sizeof(img->format->palette->ncolors)) !=
+            static_cast<int>(sizeof(img->format->palette->ncolors)) ||
+        f.Write(img->format->palette->colors, colorBytes) !=
+            static_cast<int>(colorBytes)) {
+      return false;
+    }
+  }
+
+  const uint64_t pixelBytes =
+      static_cast<uint64_t>(img->h) * static_cast<unsigned>(img->pitch);
+  if (pixelBytes > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
+      f.Write(img->pixels, static_cast<size_t>(pixelBytes)) !=
+          static_cast<int>(pixelBytes)) {
+    return false;
+  }
 
   return true;
 }
@@ -800,23 +829,48 @@ RageSurface* RageSurfaceUtils::LoadSurface(std::string file) {
     return nullptr;
   }
 
+  constexpr uint64_t kMaxCachedSurfaceBytes = 256ULL * 1024ULL * 1024ULL;
+  if (h.width <= 0 || h.height <= 0 || h.pitch <= 0 ||
+      (h.bpp != 8 && h.bpp != 16 && h.bpp != 24 && h.bpp != 32)) {
+    LogReviewSrcDiagnostics(
+        "SRC-3407 rejected invalid cached surface header '%s'", file.c_str());
+    return nullptr;
+  }
+  const uint64_t minimumPitch =
+      static_cast<uint64_t>(h.width) * static_cast<unsigned>(h.bpp) / 8U;
+  const uint64_t expectedSize =
+      static_cast<uint64_t>(h.height) * static_cast<unsigned>(h.pitch);
+  if (minimumPitch != static_cast<unsigned>(h.pitch) ||
+      expectedSize > kMaxCachedSurfaceBytes ||
+      expectedSize > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+    LogReviewSrcDiagnostics(
+        "SRC-3407 rejected oversized or inconsistent cached surface '%s'",
+        file.c_str());
+    return nullptr;
+  }
+
   RageSurfacePalette palette;
   if (h.bpp == 8) {
     if (f.Read(&palette.ncolors, sizeof(palette.ncolors)) !=
         sizeof(palette.ncolors)) {
       return nullptr;
     }
-    ASSERT_M(palette.ncolors <= 256, ssprintf("%i", palette.ncolors));
-    if (f.Read(palette.colors, palette.ncolors * sizeof(RageSurfaceColor)) !=
-        int(palette.ncolors * sizeof(RageSurfaceColor))) {
+    if (palette.ncolors < 0 || palette.ncolors > 256) {
+      return nullptr;
+    }
+    const size_t colorBytes =
+        static_cast<size_t>(palette.ncolors) * sizeof(RageSurfaceColor);
+    if (f.Read(palette.colors, colorBytes) != static_cast<int>(colorBytes)) {
       return nullptr;
     }
   }
 
   // Create the surface.
-  RageSurface* img = CreateSurface(
-      h.width, h.height, h.bpp, h.Rmask, h.Gmask, h.Bmask, h.Amask);
-  ASSERT(img != nullptr);
+  std::unique_ptr<RageSurface> img(CreateSurface(
+      h.width, h.height, h.bpp, h.Rmask, h.Gmask, h.Bmask, h.Amask));
+  if (img == nullptr) {
+    return nullptr;
+  }
 
   /* If the pitch has changed, this surface is either corrupt, or was
    * created with a different version whose CreateSurface() behavior
@@ -825,15 +879,12 @@ RageSurface* RageSurfaceUtils::LoadSurface(std::string file) {
     LOG->Trace(
         "Error loading \"%s\": expected pitch %i, got %i (%ibpp, %i width)",
         file.c_str(), h.pitch, img->pitch, h.bpp, h.width);
-    delete img;
     return nullptr;
   }
 
-  const size_t expected_size = static_cast<size_t>(h.height) * h.pitch;
-  const size_t bytes_read =
-      static_cast<size_t>(f.Read(img->pixels, expected_size));
-  if (bytes_read != expected_size) {
-    delete img;
+  const size_t expected_size = static_cast<size_t>(expectedSize);
+  const int bytesRead = f.Read(img->pixels, expected_size);
+  if (bytesRead != static_cast<int>(expected_size)) {
     return nullptr;
   }
 
@@ -842,7 +893,7 @@ RageSurface* RageSurfaceUtils::LoadSurface(std::string file) {
     *img->fmt.palette = palette;
   }
 
-  return img;
+  return img.release();
 }
 
 /* This converts an image to a special 8-bit paletted format. The palette is set

@@ -45,6 +45,9 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 
 #include "RageFileBasic.h"
 #include "RageFileManager_ReadAhead.h"
@@ -62,7 +65,7 @@
 /* If GetFD() isn't supported on the underlying file, this filter won't do
  * anything. */
 bool RageFileDriverReadAhead::FileSupported(RageFileBasic* pFile) {
-  return pFile->GetFD() != -1;
+  return pFile != nullptr && pFile->GetFD() != -1;
 }
 
 /* iReadAheadBytes is the number of bytes to cache at the start of the file, to
@@ -75,23 +78,49 @@ RageFileDriverReadAhead::RageFileDriverReadAhead(
   }
 
   m_pFile = pFile;
-  m_iFilePos = pFile->Tell();
+  m_iFilePos = 0;
   m_bFileOwned = false;
   m_iPostBufferReadAhead = iPostBufferReadAhead;
+  m_bValid = false;
 
-  FillBuffer(iCacheBytes);
+  if (m_pFile == nullptr || iCacheBytes < 0 || iPostBufferReadAhead < 0 ||
+      iPostBufferReadAhead > std::numeric_limits<int>::max() - 1024 * 32) {
+    SetError("Invalid read-ahead file or buffer size");
+    return;
+  }
+  m_iFilePos = m_pFile->Tell();
+  if (m_iFilePos < 0) {
+    SetError("Could not determine read-ahead source position");
+    return;
+  }
+  const int initialPos = m_iFilePos;
+  m_bValid = FillBuffer(iCacheBytes);
+  if (m_bValid && RageFileObj::Seek(initialPos) != initialPos) {
+    m_bValid = false;
+    SetError("Could not synchronize read-ahead file position");
+  }
 }
 
 RageFileDriverReadAhead::RageFileDriverReadAhead(
     const RageFileDriverReadAhead& cpy)
     : RageFileObj(cpy) {
-  m_pFile = cpy.m_pFile->Copy();
-  m_sBuffer = cpy.m_sBuffer;
+  m_pFile = nullptr;
   m_iFilePos = cpy.m_iFilePos;
   m_bFileOwned = true;
   m_iPostBufferReadAhead = cpy.m_iPostBufferReadAhead;
+  m_bValid = false;
 
-  RageFileManagerReadAhead::CacheHintStreaming(m_pFile);
+  std::unique_ptr<RageFileBasic> sourceCopy(
+      cpy.m_pFile == nullptr ? nullptr : cpy.m_pFile->Copy());
+  m_sBuffer = cpy.m_sBuffer;
+  m_pFile = sourceCopy.release();
+  m_bValid = cpy.m_bValid && m_pFile != nullptr;
+
+  if (m_bValid) {
+    RageFileManagerReadAhead::CacheHintStreaming(m_pFile);
+  } else if (GetError().empty()) {
+    SetError("Could not copy read-ahead source");
+  }
 }
 
 RageFileDriverReadAhead::~RageFileDriverReadAhead() {
@@ -101,50 +130,87 @@ RageFileDriverReadAhead::~RageFileDriverReadAhead() {
 }
 
 RageFileDriverReadAhead* RageFileDriverReadAhead::Copy() const {
-  RageFileDriverReadAhead* pRet = new RageFileDriverReadAhead(*this);
-  return pRet;
+  try {
+    return new RageFileDriverReadAhead(*this);
+  } catch (const std::exception&) {
+    return nullptr;
+  }
 }
 
-void RageFileDriverReadAhead::FillBuffer(int iBytes) {
-  int iOldPos = m_pFile->Tell();
-  m_pFile->Seek(0);
+std::string RageFileDriverReadAhead::GetError() const {
+  const std::string localError = RageFileObj::GetError();
+  if (!localError.empty()) {
+    return localError;
+  }
+  return m_pFile == nullptr ? "Read-ahead source is unavailable"
+                            : m_pFile->GetError();
+}
 
-  m_sBuffer = "";
-  m_pFile->Read(m_sBuffer, iBytes);
+void RageFileDriverReadAhead::ClearError() {
+  RageFileObj::ClearError();
+  if (m_pFile != nullptr) {
+    m_pFile->ClearError();
+  }
+}
+
+bool RageFileDriverReadAhead::FillBuffer(int iBytes) {
+  const int iOldPos = m_pFile->Tell();
+  if (iOldPos < 0 || m_pFile->Seek(0) != 0) {
+    SetError("Could not seek read-ahead source to its beginning");
+    return false;
+  }
+
+  m_sBuffer.clear();
+  int buffered = -1;
+  try {
+    buffered = m_pFile->Read(m_sBuffer, iBytes);
+  } catch (const std::exception& error) {
+    SetError(std::string("Could not allocate read-ahead buffer: ") + error.what());
+    m_pFile->Seek(iOldPos);
+    return false;
+  }
+  if (buffered < 0) {
+    SetError(m_pFile->GetError().empty() ? "Could not fill read-ahead buffer"
+                                         : m_pFile->GetError());
+    m_pFile->Seek(iOldPos);
+    return false;
+  }
 
   /* Seek back to where we were.  If we're going back to the cached region, seek
    * past it, like SeekInternal does. */
-  if (iOldPos < (int)m_sBuffer.size()) {
-    iOldPos = m_sBuffer.size();
+  const int restorePos = std::max(iOldPos, static_cast<int>(m_sBuffer.size()));
+  if (m_pFile->Seek(restorePos) != restorePos) {
+    SetError("Could not restore read-ahead source position");
+    return false;
   }
-  m_pFile->Seek(iOldPos);
 
   /* Now that we're done moving the file pointer around, set the file's
    * read-ahead hint, if supported. */
   RageFileManagerReadAhead::CacheHintStreaming(m_pFile);
+  return true;
 }
 
 int RageFileDriverReadAhead::ReadInternal(void* pBuffer, size_t iBytes) {
+  if (!m_bValid || m_pFile == nullptr) {
+    SetError("Read-ahead source is invalid");
+    return -1;
+  }
   int iRet = -1;
-  if (m_bReadAheadNeeded && m_iFilePos < (int)m_sBuffer.size()) {
+  if (m_iFilePos >= 0 &&
+      m_iFilePos < static_cast<int>(m_sBuffer.size())) {
     // If we can serve data out of the buffer, use it.
-    iRet = std::min(iBytes, m_sBuffer.size() - m_iFilePos);
-    memcpy(pBuffer, m_sBuffer.data() + m_iFilePos, iRet);
+    const size_t bufferedBytes = std::min(
+        iBytes, m_sBuffer.size() - static_cast<size_t>(m_iFilePos));
+    memcpy(pBuffer, m_sBuffer.data() + m_iFilePos, bufferedBytes);
+    iRet = static_cast<int>(bufferedBytes);
   } else {
     // Read out of the underlying file.
     iRet = m_pFile->Read(pBuffer, iBytes);
   }
 
-  if (iRet != -1) {
+  if (iRet >= 0) {
     m_iFilePos += iRet;
-  }
-
-  /*
-   * Hint the read-ahead.  We only strictly need to do this when reading data
-   * from m_sBuffer, so the kernel knows to start reading data ahead of it.
-   * Always doing it is simpler, and reduces some skips when under I/O load.
-   */
-  RageFileManagerReadAhead::ReadAhead(m_pFile, m_iPostBufferReadAhead);
+    RageFileManagerReadAhead::ReadAhead(m_pFile, m_iPostBufferReadAhead);
 
   /*
    * We're streaming the file, so we don't need data that we've already read in
@@ -155,25 +221,56 @@ int RageFileDriverReadAhead::ReadInternal(void* pBuffer, size_t iBytes) {
    * if we're at the end of the file, flush the cache, then try to read
    * (resulting in 0 bytes), it'll hit the disk if we've flushed.
    */
-  RageFileManagerReadAhead::DiscardCache(
-      m_pFile, -m_iPostBufferReadAhead - 1024 * 32, m_iPostBufferReadAhead);
+    RageFileManagerReadAhead::DiscardCache(
+        m_pFile, -m_iPostBufferReadAhead - 1024 * 32,
+        m_iPostBufferReadAhead);
+  }
 
   return iRet;
 }
 
+int RageFileDriverReadAhead::WriteInternal(
+    const void* /* pBuffer */, size_t /* iBytes */) {
+  SetError("Read-ahead wrapper is read-only");
+  return -1;
+}
+
 int RageFileDriverReadAhead::SeekInternal(int iOffset) {
-  if (iOffset < (int)m_sBuffer.size()) {
+  if (!m_bValid || m_pFile == nullptr || iOffset < 0) {
+    SetError(iOffset < 0 ? "Read-ahead seek is negative"
+                         : "Read-ahead source is invalid");
+    return -1;
+  }
+  if (iOffset < static_cast<int>(m_sBuffer.size())) {
     /* This assumes that seeking the file won't block.  This seems to be true in
      * Linux, at least. Seek the actual file to just past our buffer, so the
      * RageFileManagerReadAhead::ReadAhead call will read ahead from the correct
      * position. */
-    m_pFile->Seek(m_sBuffer.size());
+    const int sourcePos = static_cast<int>(m_sBuffer.size());
+    if (m_pFile->Seek(sourcePos) != sourcePos) {
+      SetError(m_pFile->GetError().empty()
+                   ? "Could not position read-ahead source"
+                   : m_pFile->GetError());
+      return -1;
+    }
     m_iFilePos = iOffset;
     return iOffset;
   }
 
   m_iFilePos = m_pFile->Seek(iOffset);
+  if (m_iFilePos < 0) {
+    SetError(m_pFile->GetError().empty() ? "Could not seek read-ahead source"
+                                         : m_pFile->GetError());
+  }
   return m_iFilePos;
+}
+
+int RageFileDriverReadAhead::GetFileSize() const {
+  return m_pFile == nullptr ? -1 : m_pFile->GetFileSize();
+}
+
+int RageFileDriverReadAhead::GetFD() {
+  return m_pFile == nullptr ? -1 : m_pFile->GetFD();
 }
 
 /*

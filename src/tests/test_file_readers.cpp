@@ -1,6 +1,7 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 #include "RageFile.h"
@@ -344,6 +345,27 @@ void TestDeflate() {
   }
   defl.Flush();
 
+  data.Seek(0);
+  RageFileObjInflate partial(&data, iSize);
+  std::string prefix;
+  if (partial.Read(prefix, 7) != 7) {
+    LOG->Warn("Inflate partial-copy setup failed");
+    return;
+  }
+  std::unique_ptr<RageFileBasic> partialCopy(partial.Copy());
+  if (partialCopy == nullptr) {
+    LOG->Warn("Inflate partial-copy failed");
+    return;
+  }
+  std::string originalRemainder;
+  std::string copiedRemainder;
+  if (partial.Read(originalRemainder) == -1 ||
+      partialCopy->Read(copiedRemainder) == -1 ||
+      originalRemainder != copiedRemainder) {
+    LOG->Warn("Copied inflate stream diverged after a partial buffered read");
+    return;
+  }
+
   unsigned iOutputCRC;
   if (!defl.GetCRC32(&iOutputCRC)) {
     LOG->Warn("Deflate GetCRC32 failed");
@@ -360,7 +382,10 @@ void TestDeflate() {
   std::string gzipPayload;
   std::string uncompressedPayload;
   std::string gzipError;
-  GzipString(compressiblePayload, gzipPayload);
+  if (!GzipString(compressiblePayload, gzipPayload, &gzipError)) {
+    LOG->Warn("Could not create gzip test payload: %s", gzipError.c_str());
+    return;
+  }
 
   if (GunzipStringBounded(gzipPayload, uncompressedPayload, gzipError, 1024)) {
     LOG->Warn("Bounded gunzip accepted an oversized output");
@@ -378,6 +403,35 @@ void TestDeflate() {
   }
   if (uncompressedPayload != compressiblePayload) {
     LOG->Warn("Bounded gunzip returned unexpected output");
+    return;
+  }
+
+  std::string corruptCRC = gzipPayload;
+  corruptCRC[corruptCRC.size() - 8] ^= 0x01;
+  if (GunzipString(corruptCRC, uncompressedPayload, gzipError)) {
+    LOG->Warn("Gunzip accepted a corrupt payload CRC");
+    return;
+  }
+
+  std::string wrongDeclaredSize = gzipPayload;
+  wrongDeclaredSize[wrongDeclaredSize.size() - 4] ^= 0x01;
+  if (GunzipString(wrongDeclaredSize, uncompressedPayload, gzipError)) {
+    LOG->Warn("Gunzip accepted an incorrect declared output size");
+    return;
+  }
+
+  std::string truncatedPayload = gzipPayload;
+  truncatedPayload.erase(truncatedPayload.end() - 9);
+  if (GunzipString(truncatedPayload, uncompressedPayload, gzipError)) {
+    LOG->Warn("Gunzip accepted a truncated deflate stream");
+    return;
+  }
+
+  std::string emptyGzip;
+  if (!GzipString("", emptyGzip, &gzipError) ||
+      !GunzipString(emptyGzip, uncompressedPayload, gzipError) ||
+      !uncompressedPayload.empty()) {
+    LOG->Warn("Empty gzip stream validation failed: %s", gzipError.c_str());
   }
 }
 

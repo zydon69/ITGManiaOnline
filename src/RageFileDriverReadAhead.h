@@ -17,32 +17,32 @@ class RageFileDriverReadAhead : public RageFileObj {
   RageFileDriverReadAhead(
       RageFileBasic* pFile, int iCacheBytes, int iPostBufferReadAhead = -1);
   RageFileDriverReadAhead(const RageFileDriverReadAhead& cpy);
-  ~RageFileDriverReadAhead();
-  RageFileDriverReadAhead* Copy() const;
+  ~RageFileDriverReadAhead() override;
+  RageFileDriverReadAhead* Copy() const override;
 
   void DeleteFileWhenFinished() { m_bFileOwned = true; }
 
-  virtual std::string GetError() const { return m_pFile->GetError(); }
-  virtual void ClearError() { return m_pFile->ClearError(); }
+  std::string GetError() const override;
+  void ClearError() override;
 
-  int ReadInternal(void* pBuffer, size_t iBytes);
-  int WriteInternal(const void* pBuffer, size_t iBytes) {
-    return m_pFile->Write(pBuffer, iBytes);
-  }
-  int SeekInternal(int iOffset);
-  int GetFileSize() const { return m_pFile->GetFileSize(); }
-  int GetFD() { return m_pFile->GetFD(); }
-  int Tell() const { return m_iFilePos; }
+  int ReadInternal(void* pBuffer, size_t iBytes) override;
+  int WriteInternal(const void* pBuffer, size_t iBytes) override;
+  int SeekInternal(int iOffset) override;
+  int GetFileSize() const override;
+  int GetFD() override;
+  int Tell() const override { return m_iFilePos; }
 
  private:
-  void FillBuffer(int iBytes);
+  bool FillBuffer(int iBytes);
 
   RageFileBasic* m_pFile;
   int m_iFilePos;
   bool m_bFileOwned;
   std::string m_sBuffer;
   int m_iPostBufferReadAhead;
-  bool m_bReadAheadNeeded;
+  bool m_bValid;
+
+  RageFileDriverReadAhead& operator=(const RageFileDriverReadAhead&) = delete;
 };
 
 #endif

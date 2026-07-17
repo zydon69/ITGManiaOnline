@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <string>
 
 #include "RageFile.h"
@@ -32,7 +34,12 @@ void RageFile_png_read(png_struct* png, png_byte* p, png_size_t size) {
   if (LogVerboseContentLoadDiagnosticsEnabled()) {
     CHECKPOINT_M("Reading the png file.");
   }
-  RageFile* f = (RageFile*)png_get_io_ptr(png);
+  RageFile* f = static_cast<RageFile*>(png_get_io_ptr(png));
+  if (f == nullptr ||
+      size > static_cast<png_size_t>(std::numeric_limits<int>::max())) {
+    png_error(png, "Invalid PNG read request");
+    return;
+  }
 
   int got = f->Read(p, size);
   if (got == -1) {
@@ -54,11 +61,19 @@ struct error_info {
 };
 
 void PNG_Error(png_struct* png, const char* error) {
-  CHECKPOINT_M(ssprintf("PNG error during processing: %s", error));
-  error_info* info = (error_info*)png_get_error_ptr(png);
-  strncpy(info->err, error, 1024);
-  info->err[1023] = 0;
-  LOG->Trace("loading \"%s\": err: %s", info->fn, info->err);
+  CHECKPOINT_M(ssprintf(
+      "PNG error during processing: %s",
+      error != nullptr ? error : "Unknown PNG error"));
+  error_info* info = static_cast<error_info*>(png_get_error_ptr(png));
+  if (info != nullptr && info->err != nullptr) {
+    strncpy(info->err, error != nullptr ? error : "Unknown PNG error", 1024);
+    info->err[1023] = 0;
+    if (LOG != nullptr) {
+      LOG->Trace(
+          "loading \"%s\": err: %s", info->fn != nullptr ? info->fn : "",
+          info->err);
+    }
+  }
   longjmp(png_jmpbuf(png), 1);
 }
 
@@ -66,14 +81,20 @@ void PNG_Warning(png_struct* png, const char* warning) {
   if (LogVerboseContentLoadDiagnosticsEnabled()) {
     CHECKPOINT_M(ssprintf("PNG warning during processing: %s", warning));
   }
-  error_info* info = (error_info*)png_get_io_ptr(png);
-  LOG->Trace("loading \"%s\": warning: %s", info->fn, warning);
+  error_info* info = static_cast<error_info*>(png_get_error_ptr(png));
+  if (LOG != nullptr) {
+    LOG->Trace(
+        "loading \"%s\": warning: %s",
+        info != nullptr && info->fn != nullptr ? info->fn : "",
+        warning != nullptr ? warning : "Unknown PNG warning");
+  }
 }
 
 /* Since libpng forces us to use longjmp (gross!), this function shouldn't
  * create any C++ objects, and needs to watch out for memleaks. */
 static RageSurface* RageSurface_Load_PNG(
     RageFile* f, const char* fn, char errorbuf[1024], bool bHeaderOnly) {
+  errorbuf[0] = '\0';
   error_info error;
   error.err = errorbuf;
   error.fn = fn;
@@ -122,6 +143,18 @@ static RageSurface* RageSurface_Load_PNG(
       png, info_ptr, &width, &height, &bit_depth, &color_type, nullptr, nullptr,
       nullptr);
 
+  constexpr uint64_t kMaxDecodedPngBytes = 256ULL * 1024ULL * 1024ULL;
+  if (width == 0 || height == 0 ||
+      width > static_cast<png_uint_32>(std::numeric_limits<int>::max()) ||
+      height > static_cast<png_uint_32>(std::numeric_limits<int>::max())) {
+    png_error(png, "PNG dimensions exceed the supported decode limit");
+  }
+  const uint64_t decodedPixels =
+      static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+  if (decodedPixels > kMaxDecodedPngBytes / 4ULL) {
+    png_error(png, "PNG dimensions exceed the supported decode limit");
+  }
+
   /* If bHeaderOnly is true, don't allocate the pixel storage space or
    * decompress the image.  Just return an empty surface with only the width and
    * height set. */
@@ -129,7 +162,16 @@ static RageSurface* RageSurface_Load_PNG(
     if (LogVerboseContentLoadDiagnosticsEnabled()) {
       CHECKPOINT_M("PNG header-only load.");
     }
-    img = CreateSurfaceFrom(width, height, 32, 0, 0, 0, 0, nullptr, width * 4);
+    try {
+      img = CreateSurfaceFrom(
+          width, height, 32, 0, 0, 0, 0, nullptr,
+          static_cast<uint32_t>(width * 4));
+    } catch (const std::bad_alloc&) {
+      png_error(png, "Could not allocate PNG header surface");
+    }
+    if (img == nullptr) {
+      png_error(png, "Could not allocate PNG header surface");
+    }
     png_destroy_read_struct(&png, &info_ptr, nullptr);
     return img;
   }
@@ -143,7 +185,7 @@ static RageSurface* RageSurface_Load_PNG(
   }
 
   /* These are set for type == PALETTE. */
-  RageSurfaceColor colors[256];
+  RageSurfaceColor colors[256]{};
   int iColorKey = -1;
 
   /* We import three types of files: paletted, RGBX and RGBA.  The only
@@ -176,7 +218,8 @@ static RageSurface* RageSurface_Load_PNG(
       type = RGBA;
       break;
     default:
-      FAIL_M(ssprintf("%i", color_type));
+      png_error(png, "Unsupported PNG color type");
+      return nullptr;
   }
 
   if (LogVerboseContentLoadDiagnosticsEnabled()) {
@@ -192,7 +235,10 @@ static RageSurface* RageSurface_Load_PNG(
     int num_palette;
     png_color* palette;
     int ret = png_get_PLTE(png, info_ptr, &palette, &num_palette);
-    ASSERT(ret == PNG_INFO_PLTE);
+    if (ret != PNG_INFO_PLTE || palette == nullptr || num_palette <= 0 ||
+        num_palette > 256) {
+      png_error(png, "Invalid PNG palette");
+    }
 
     png_byte* trans = nullptr;
     int num_trans = 0;
@@ -226,7 +272,14 @@ static RageSurface* RageSurface_Load_PNG(
 
   switch (type) {
     case PALETTE:
-      img = CreateSurface(width, height, 8, 0, 0, 0, 0);
+      try {
+        img = CreateSurface(width, height, 8, 0, 0, 0, 0);
+      } catch (const std::bad_alloc&) {
+        png_error(png, "Could not allocate paletted PNG surface");
+      }
+      if (img == nullptr || img->fmt.palette == nullptr) {
+        png_error(png, "Could not allocate paletted PNG surface");
+      }
       memcpy(img->fmt.palette->colors, colors, 256 * sizeof(RageSurfaceColor));
 
       if (iColorKey != -1) {
@@ -236,17 +289,27 @@ static RageSurface* RageSurface_Load_PNG(
       break;
     case RGBX:
     case RGBA:
-      img = CreateSurface(
-          width, height, 32, Swap32BE(0xFF000000), Swap32BE(0x00FF0000),
-          Swap32BE(0x0000FF00),
-          Swap32BE(type == RGBA ? 0x000000FF : 0x00000000));
+      try {
+        img = CreateSurface(
+            width, height, 32, Swap32BE(0xFF000000), Swap32BE(0x00FF0000),
+            Swap32BE(0x0000FF00),
+            Swap32BE(type == RGBA ? 0x000000FF : 0x00000000));
+      } catch (const std::bad_alloc&) {
+        png_error(png, "Could not allocate true-color PNG surface");
+      }
       break;
     default:
-      FAIL_M(ssprintf("%i", type));
+      png_error(png, "Invalid PNG output format");
+      return nullptr;
   }
-  ASSERT(img != nullptr);
+  if (img == nullptr || img->pixels == nullptr) {
+    png_error(png, "Could not allocate PNG surface");
+  }
 
-  row_pointers = new png_byte*[height];
+  row_pointers = new (std::nothrow) png_byte*[height];
+  if (row_pointers == nullptr) {
+    png_error(png, "Could not allocate PNG row table");
+  }
   if (LogVerboseContentLoadDiagnosticsEnabled()) {
     CHECKPOINT_M(
         ssprintf("PNG row pointer table %p.", static_cast<void*>(row_pointers)));

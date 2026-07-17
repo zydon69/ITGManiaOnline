@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageFileManager.h"
 #include "RageLog.h"
@@ -65,7 +66,12 @@ static void DeleteEmptyDirectories(std::string sDir) {
   std::vector<std::string> asNewDirs;
   GetDirListing(sDir + "/*", asNewDirs, false, true);
   for (unsigned i = 0; i < asNewDirs.size(); ++i) {
-    ASSERT_M(IsADirectory(asNewDirs[i]), asNewDirs[i]);
+    if (!IsADirectory(asNewDirs[i])) {
+      LogReviewSrcDiagnostics(
+          "SRC-3404 background cache cleanup skipped non-directory '%s'",
+          asNewDirs[i].c_str());
+      continue;
+    }
     DeleteEmptyDirectories(asNewDirs[i]);
   }
 

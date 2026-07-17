@@ -70,7 +70,14 @@ bool LyricsLoader::LoadFromLRCFile(const std::string& sPath, Song& out) {
     if (!x.Compare(line, matches)) {
       continue;
     }
-    ASSERT(matches.size() == 2);
+    if (matches.size() != 2) {
+      if (LogContentLoadDiagnosticsEnabled()) {
+        LOG->Trace(
+            "CONTENT_TRACE: lyrics_regex_contract_failed path='%s' fields=%zu",
+            input.GetPath().c_str(), matches.size());
+      }
+      continue;
+    }
 
     std::string& sValueName = matches[0];
     std::string& sValueData = matches[1];

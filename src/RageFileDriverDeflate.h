@@ -16,70 +16,101 @@ class RageFileObjInflate : public RageFileObj {
  public:
   /* By default, pFile will not be freed.  To implement GetFileSize(), the
    * container format must store the file size. */
-  RageFileObjInflate(RageFileBasic* pFile, int iUncompressedSize);
+  explicit RageFileObjInflate(RageFileBasic* pFile, int iUncompressedSize);
   RageFileObjInflate(const RageFileObjInflate& cpy);
-  ~RageFileObjInflate();
-  int ReadInternal(void* pBuffer, size_t iBytes);
-  int WriteInternal(const void* /* pBuffer */, size_t /* iBytes */) {
+  ~RageFileObjInflate() override;
+  int ReadInternal(void* pBuffer, size_t iBytes) override;
+  int WriteInternal(
+      const void* /* pBuffer */, size_t /* iBytes */) override {
     SetError("Not implemented");
     return -1;
   }
-  int SeekInternal(int iOffset);
-  int GetFileSize() const { return m_iUncompressedSize; }
-  int GetFD() { return m_pFile->GetFD(); }
-  RageFileObjInflate* Copy() const;
+  int SeekInternal(int iOffset) override;
+  int GetFileSize() const override { return m_iUncompressedSize; }
+  int GetFD() override { return m_pFile == nullptr ? -1 : m_pFile->GetFD(); }
+  RageFileObjInflate* Copy() const override;
+
+  bool IsValid() const { return m_bInflateInitialized && m_pFile != nullptr; }
 
   void DeleteFileWhenFinished() { m_bFileOwned = true; }
 
  private:
-  int m_iUncompressedSize;
-  RageFileBasic* m_pFile;
-  int m_iFilePos;
-  bool m_bFileOwned;
+  bool ValidateStreamEnd();
 
-  z_stream* m_pInflate;
+  int m_iUncompressedSize{ 0 };
+  RageFileBasic* m_pFile{ nullptr };
+  int m_iFilePos{ 0 };
+  bool m_bFileOwned{ false };
+  bool m_bInflateInitialized{ false };
+  bool m_bStreamEnded{ false };
+
+  z_stream* m_pInflate{ nullptr };
   enum { INBUFSIZE = 1024 * 4 };
-  char decomp_buf[INBUFSIZE], *decomp_buf_ptr;
-  int decomp_buf_avail;
+  char decomp_buf[INBUFSIZE]{};
+  char* decomp_buf_ptr{ decomp_buf };
+  int decomp_buf_avail{ 0 };
+
+  RageFileObjInflate& operator=(const RageFileObjInflate&) = delete;
 };
 
 class RageFileObjDeflate : public RageFileObj {
  public:
   /* By default, pFile will not be freed. */
-  RageFileObjDeflate(RageFileBasic* pOutput);
-  ~RageFileObjDeflate();
+  explicit RageFileObjDeflate(RageFileBasic* pOutput);
+  ~RageFileObjDeflate() override;
 
-  int GetFileSize() const { return m_pFile->GetFileSize(); }
+  int GetFileSize() const override {
+    return m_pFile == nullptr ? -1 : m_pFile->GetFileSize();
+  }
+  int GetFD() override { return m_pFile == nullptr ? -1 : m_pFile->GetFD(); }
   void DeleteFileWhenFinished() { m_bFileOwned = true; }
 
  protected:
-  int ReadInternal(void* /* pBuffer */, size_t /* iBytes */) {
+  int ReadInternal(void* /* pBuffer */, size_t /* iBytes */) override {
     SetError("Not implemented");
     return -1;
   }
-  int WriteInternal(const void* pBuffer, size_t iBytes);
-  int FlushInternal();
+  int WriteInternal(const void* pBuffer, size_t iBytes) override;
+  int FlushInternal() override;
+  int SeekInternal(int /* iOffset */) override {
+    SetError("Compressed output streams cannot be seeked");
+    return -1;
+  }
 
-  RageFileBasic* m_pFile;
-  z_stream* m_pDeflate;
-  bool m_bFileOwned;
+  bool IsDeflateValid() const {
+    return m_bDeflateInitialized && m_pFile != nullptr;
+  }
+
+  RageFileBasic* m_pFile{ nullptr };
+  z_stream* m_pDeflate{ nullptr };
+  bool m_bFileOwned{ false };
+  bool m_bDeflateInitialized{ false };
+  bool m_bDeflateFinished{ false };
+
+ private:
+  RageFileObjDeflate(const RageFileObjDeflate&) = delete;
+  RageFileObjDeflate& operator=(const RageFileObjDeflate&) = delete;
 };
 
 class RageFileObjGzip : public RageFileObjDeflate {
  public:
-  RageFileObjGzip(RageFileBasic* pFile);
+  explicit RageFileObjGzip(RageFileBasic* pFile);
   int Start();
   int Finish();
 
  private:
-  int m_iDataStartOffset;
+  int m_iDataStartOffset{ -1 };
+  bool m_bStarted{ false };
+  bool m_bFinished{ false };
 };
 
 RageFileObjInflate* GunzipFile(
     RageFileBasic* pFile, std::string& sError, uint32_t* iCRC32);
 
 /* Quick helpers: */
-void GzipString(const std::string& sIn, std::string& sOut);
+bool GzipString(
+    const std::string& sIn, std::string& sOut,
+    std::string* pError = nullptr);
 bool GunzipString(
     const std::string& sIn, std::string& sOut,
     std::string& sError);  // returns false on CRC, etc. error

@@ -2,6 +2,8 @@
 
 #include <cerrno>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 
 #include "RageFileBasic.h"
 
@@ -22,34 +24,55 @@
 void RageFileManagerReadAhead::Init() {}
 void RageFileManagerReadAhead::Shutdown() {}
 void RageFileManagerReadAhead::ReadAhead(RageFileBasic* pFile, int iBytes) {
-  int iFD = pFile->GetFD();
+  if (pFile == nullptr || iBytes <= 0) {
+    return;
+  }
+  const int iFD = pFile->GetFD();
   if (iFD == -1) {
     return;
   }
 
-  int iStart = lseek(iFD, 0, SEEK_CUR);
+  const off_t iStart = lseek(iFD, 0, SEEK_CUR);
+  if (iStart < 0) {
+    return;
+  }
   posix_fadvise(iFD, iStart, iBytes, POSIX_FADV_WILLNEED);
 }
 
 void RageFileManagerReadAhead::DiscardCache(
     RageFileBasic* pFile, int iRelativePosition, int iBytes) {
-  int iFD = pFile->GetFD();
+  if (pFile == nullptr || iBytes <= 0) {
+    return;
+  }
+  const int iFD = pFile->GetFD();
   if (iFD == -1) {
     return;
   }
 
-  int iStart = lseek(iFD, 0, SEEK_CUR);
-  iStart += iRelativePosition;
-  if (iStart < 0) {
-    iBytes -= iStart;
-    iStart = 0;
-  }
-
-  if (iBytes == 0) {
+  const off_t current = lseek(iFD, 0, SEEK_CUR);
+  if (current < 0) {
     return;
   }
 
-  posix_fadvise(iFD, iStart, iBytes, POSIX_FADV_DONTNEED);
+  if (iRelativePosition > 0 &&
+      static_cast<int64_t>(current) >
+          std::numeric_limits<int64_t>::max() - iRelativePosition) {
+    return;
+  }
+  int64_t start = static_cast<int64_t>(current) + iRelativePosition;
+  int64_t bytes = iBytes;
+  if (start < 0) {
+    bytes += start;
+    start = 0;
+  }
+  if (bytes <= 0 ||
+      start > static_cast<int64_t>(std::numeric_limits<off_t>::max())) {
+    return;
+  }
+
+  posix_fadvise(
+      iFD, static_cast<off_t>(start), static_cast<off_t>(bytes),
+      POSIX_FADV_DONTNEED);
 }
 
 #else
@@ -167,14 +190,21 @@ void RageFileManagerReadAhead::CacheHintStreaming(RageFileBasic* pFile) {
   /* This guesses at the actual size of the file on disk, which may be smaller
    * if this file is compressed. Since this is usually used on music and video
    * files, it generally shouldn't be. */
-  int iFD = pFile->GetFD();
+  if (pFile == nullptr) {
+    return;
+  }
+  const int iFD = pFile->GetFD();
   if (iFD == -1) {
     return;
   }
-  int iPos = pFile->Tell();
-  int iFrom = lseek(iFD, 0, SEEK_CUR);
-  int iBytes = pFile->GetFileSize() - iPos;
-  posix_fadvise(iFD, iFrom, iBytes, POSIX_FADV_SEQUENTIAL);
+  const int iPos = pFile->Tell();
+  const int iSize = pFile->GetFileSize();
+  const off_t iFrom = lseek(iFD, 0, SEEK_CUR);
+  if (iPos < 0 || iSize < iPos || iFrom < 0) {
+    return;
+  }
+  posix_fadvise(
+      iFD, iFrom, static_cast<off_t>(iSize - iPos), POSIX_FADV_SEQUENTIAL);
 #endif
 }
 

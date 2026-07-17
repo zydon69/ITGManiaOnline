@@ -1,6 +1,7 @@
 #ifndef RAGE_FILE_DRIVER_ZIP_H
 #define RAGE_FILE_DRIVER_ZIP_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -11,14 +12,15 @@
 class RageFileDriverZip : public RageFileDriver {
  public:
   RageFileDriverZip();
-  RageFileDriverZip(const std::string& sPath);
+  explicit RageFileDriverZip(const std::string& sPath);
   bool Load(const std::string& sPath);
   bool Load(RageFileBasic* pFile);
 
-  virtual ~RageFileDriverZip();
+  ~RageFileDriverZip() override;
 
-  RageFileBasic* Open(const std::string& sPath, int iMode, int& iErr);
-  void FlushDirCache(const std::string& sPath);
+  RageFileBasic* Open(
+      const std::string& sPath, int iMode, int& iErr) override;
+  void FlushDirCache(const std::string& sPath) override;
 
   void DeleteFileWhenFinished() { m_bFileOwned = true; }
 
@@ -30,8 +32,9 @@ class RageFileDriverZip : public RageFileDriver {
     int m_iDataOffset;
 
     ZipCompressionMethod m_iCompressionMethod;
-    int m_iCRC32;
+    uint32_t m_iCRC32;
     int m_iCompressedSize, m_iUncompressedSize;
+    uint16_t m_iGeneralPurpose;
 
     /* If 0, unknown. */
     int m_iFilePermissions;
@@ -41,9 +44,10 @@ class RageFileDriverZip : public RageFileDriver {
   std::string GetGlobalComment() const { return m_sComment; }
 
  private:
-  bool m_bFileOwned;
+  bool m_bFileOwned{ false };
+  bool m_bValid{ false };
 
-  RageFileBasic* m_pZip;
+  RageFileBasic* m_pZip{ nullptr };
   std::vector<FileInfo*> m_pFiles;
 
   std::string m_sPath;
@@ -53,12 +57,19 @@ class RageFileDriverZip : public RageFileDriver {
    * around in it when reading files. */
   RageMutex m_Mutex;
 
+  int m_iEndCentralOffset{ -1 };
+  int m_iCentralDirectoryStart{ -1 };
+  int m_iCentralDirectoryEnd{ -1 };
+
   bool ParseZipfile();
   bool ReadEndCentralRecord(
       int& total_entries_central_dir, int& offset_start_central_directory);
   int ProcessCdirFileHdr(FileInfo& info);
   bool SeekToEndCentralRecord();
   bool ReadLocalFileHeader(FileInfo& info);
+
+  RageFileDriverZip(const RageFileDriverZip&) = delete;
+  RageFileDriverZip& operator=(const RageFileDriverZip&) = delete;
 };
 
 #endif

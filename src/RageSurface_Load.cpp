@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ActorUtil.h"
+#include "PerfDiagnostics.h"
 #include "RageFile.h"
 #include "RageLog.h"
 #include "RageSurface_Load_BMP.h"
@@ -35,7 +36,14 @@ static RageSurface* TryOpenFile(
   }
 
   if (result == RageSurfaceUtils::OPEN_OK) {
-    ASSERT(ret != nullptr);
+    if (ret == nullptr) {
+      error = "Image decoder returned success without a surface";
+      bKeepTrying = false;
+      LogReviewSrcDiagnostics(
+          "SRC-3402 image decoder returned a null surface for '%s' as %s",
+          sPath.c_str(), format.c_str());
+      return nullptr;
+    }
     return ret;
   }
 
