@@ -14800,6 +14800,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		end
 		local freshPhase = "nil"
 		local freshRoomFound = false
+		local freshAcceptsNewMembers = nil
 		if prefetchOk and type(prefetchDecoded) == "table" then
 			local lobbyPayload = self:LobbySearchPayload(prefetchDecoded)
 			self.cachedLobbySearchPayload = lobbyPayload
@@ -14808,12 +14809,17 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				if online_room_ids_match(candidateRoomId, joinIntentRoomId) then
 					freshRoomFound = true
 					freshPhase = tostring(lobby.phase or "nil")
+					freshAcceptsNewMembers = lobby.acceptsNewMembers
+					if freshAcceptsNewMembers == nil then
+						freshAcceptsNewMembers = lobby.accepts_new_members
+					end
 					break
 				end
 			end
 			online_flow_trace("join_room_prefetch_applied room=" .. tostring(roomId)
 				.. " found=" .. tostring(freshRoomFound == true)
 				.. " phase=" .. tostring(freshPhase)
+				.. " acceptsNewMembers=" .. tostring(freshAcceptsNewMembers)
 				.. " lobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
 				.. " onlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
 			safe_broadcast("LobbySearched", lobbyPayload)
@@ -14822,6 +14828,23 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " ok=" .. tostring(prefetchOk == true)
 				.. " status=" .. tostring(prefetchResponse and prefetchResponse.statusCode or "nil")
 				.. " error=" .. tostring(prefetchDecoded and prefetchDecoded.error_code or prefetchResponse and prefetchResponse.errorMessage or "nil"))
+		end
+		if prefetchOk and freshRoomFound and freshAcceptsNewMembers == false then
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+			online_flow_trace("join_room_prefetch_rejected reason=room_no_longer_accepting"
+				.. " room=" .. tostring(joinIntentRoomId)
+				.. " phase=" .. tostring(freshPhase))
+			safe_callback(callback, false, {
+				error_code = "room_no_longer_accepting",
+				message = "This room no longer accepts new members.",
+			}, {
+				statusCode = 422,
+				errorCode = "room_no_longer_accepting",
+				errorMessage = "This room no longer accepts new members.",
+				preflightRejected = true,
+			})
+			return
 		end
 
 		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)

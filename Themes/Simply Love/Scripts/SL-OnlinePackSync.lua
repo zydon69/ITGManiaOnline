@@ -46,6 +46,10 @@ PackSync.lastManagerBrowsingPreviewPostAt = tonumber(PackSync.lastManagerBrowsin
 PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.managerBrowsingPreviewDuplicateSuppressSeconds) or 1.5
 PackSync.pendingBrowseCompletionRetryAt = tonumber(PackSync.pendingBrowseCompletionRetryAt) or 0
 PackSync.pendingBrowseCompletionRetryCount = tonumber(PackSync.pendingBrowseCompletionRetryCount) or 0
+PackSync.pendingSelectedAvailabilitySongInfo = PackSync.pendingSelectedAvailabilitySongInfo or nil
+PackSync.pendingSelectedAvailabilityRetryAt = tonumber(PackSync.pendingSelectedAvailabilityRetryAt) or 0
+PackSync.pendingSelectedAvailabilityRetryCount = tonumber(PackSync.pendingSelectedAvailabilityRetryCount) or 0
+PackSync.selectedAvailabilityInFlight = PackSync.selectedAvailabilityInFlight or false
 PackSync.lastResetSignature = PackSync.lastResetSignature or ""
 PackSync.lastResetAt = tonumber(PackSync.lastResetAt) or 0
 PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
@@ -1482,6 +1486,12 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			end
 			return
 		end
+		if not ok and tostring(self.lastPostedStatusSignature or "") == signature then
+			self.lastPostedStatusSignature = ""
+			self.lastPostedStatusAt = 0
+			trace("Cleared failed status post dedupe key status=" .. tostring(status)
+				.. " selected_at=" .. tostring(requestSelectedAt))
+		end
 		local statusResult = decoded and decoded.pack_sync_status or nil
 		if ok and self:IsTerminalDownloadStatus(status)
 			and tostring(payload.download_id or "") == tostring(self.lastDownloadId or "") then
@@ -1583,6 +1593,17 @@ function PackSync:ApplyLocalStatus(status, message, progress)
 end
 
 function PackSync:WatchdogTick()
+	if self.pendingSelectedAvailabilitySongInfo ~= nil then
+		local now = GetTimeSinceStart()
+		if not self.selectedAvailabilityInFlight
+			and now >= (tonumber(self.pendingSelectedAvailabilityRetryAt) or 0)
+		then
+			self:FinalizeDownloadedSelectedSongAvailability(
+				self.pendingSelectedAvailabilitySongInfo,
+				"watchdog_retry")
+		end
+	end
+
 	local status = tostring(self.currentStatus or self.status.Unknown)
 	if status == self.status.DownloadedOk and self.pendingPostReloadSongInfo ~= nil then
 		local now = GetTimeSinceStart()
@@ -1677,6 +1698,84 @@ function PackSync:CompletePendingPostReload(ok, message, reason)
 	self.activeBrowseOnlyDownload = false
 	self:ClearActiveDownloadId(reason or "post_reload_validation_complete")
 	safe_invoke_callback(pendingCallback, ok == true, message)
+end
+
+function PackSync:ClearSelectedAvailabilityRetry(reason)
+	if self.pendingSelectedAvailabilitySongInfo ~= nil or self.selectedAvailabilityInFlight then
+		trace("Selected availability retry cleared reason=" .. tostring(reason or "unknown")
+			.. " attempts=" .. tostring(self.pendingSelectedAvailabilityRetryCount or 0))
+	end
+	self.pendingSelectedAvailabilitySongInfo = nil
+	self.pendingSelectedAvailabilityRetryAt = 0
+	self.pendingSelectedAvailabilityRetryCount = 0
+	self.selectedAvailabilityInFlight = false
+end
+
+function PackSync:ScheduleSelectedAvailabilityRetry(songInfo, reason)
+	if not self:SongInfoMatchesCurrentSelection(songInfo) then
+		self:ClearSelectedAvailabilityRetry("selection_changed")
+		return false
+	end
+	self.pendingSelectedAvailabilitySongInfo = songInfo
+	self.pendingSelectedAvailabilityRetryCount = (tonumber(self.pendingSelectedAvailabilityRetryCount) or 0) + 1
+	local delay = math.min(10, 1.5 * self.pendingSelectedAvailabilityRetryCount)
+	self.pendingSelectedAvailabilityRetryAt = GetTimeSinceStart() + delay
+	trace("Selected availability retry scheduled reason=" .. tostring(reason or "unknown")
+		.. " attempt=" .. tostring(self.pendingSelectedAvailabilityRetryCount)
+		.. " delay=" .. tostring(delay)
+		.. " selected_at=" .. tostring(selected_at(songInfo)))
+	return true
+end
+
+function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source)
+	if self.selectedAvailabilityInFlight then
+		trace("Selected availability finalization skipped reason=in_flight source=" .. tostring(source or "unknown"))
+		return false
+	end
+	if not self:SongInfoMatchesCurrentSelection(songInfo) then
+		self:ClearSelectedAvailabilityRetry("selection_changed_before_confirmation")
+		return false
+	end
+	if not (ITGOnline and ITGOnline.ConfirmSelectedSongAvailability) then
+		self:UpdateStatus(self.status.Ready, nil, nil, function(statusOk)
+			if statusOk then
+				self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
+			end
+		end)
+		self:ClearSelectedAvailabilityRetry("client_confirmation_unavailable")
+		return true
+	end
+
+	self.selectedAvailabilityInFlight = true
+	self.pendingSelectedAvailabilitySongInfo = songInfo
+	trace("Selected availability finalization begin source=" .. tostring(source or "unknown")
+		.. " selected_at=" .. tostring(selected_at(songInfo)))
+	ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
+		self.selectedAvailabilityInFlight = false
+		local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
+		trace("Selected availability finalization response confirmed=" .. tostring(confirmed)
+			.. " deferred=" .. tostring(deferred)
+			.. " reason=" .. tostring(availabilityReason)
+			.. " source=" .. tostring(source or "unknown"))
+		if not confirmed then
+			self:ScheduleSelectedAvailabilityRetry(songInfo, availabilityReason)
+			return
+		end
+
+		self:UpdateStatus(self.status.Ready, nil, nil, function(statusOk, statusDecoded, statusResponse)
+			trace("Selected ready status response ok=" .. tostring(statusOk == true)
+				.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
+				.. " error=" .. tostring(statusDecoded and statusDecoded.error_code
+					or statusResponse and statusResponse.errorMessage or "nil"))
+			if not statusOk then
+				self:ScheduleSelectedAvailabilityRetry(songInfo, "ready_status_not_acknowledged")
+				return
+			end
+			self:ClearSelectedAvailabilityRetry("selected_song_ready")
+			self:MarkLobbyReadyForSelectedSong("downloaded_ok")
+		end)
+	end)
+	return true
 end
 
 function PackSync:ResetLocalState(reason)
@@ -1826,6 +1925,7 @@ function PackSync:ResetLocalState(reason)
 	self.pendingPostReloadSongInfo = nil
 		self.pendingQuarantinePath = nil
 		self.pendingPostReloadBrowseOnly = false
+		self:ClearSelectedAvailabilityRetry(reason or "reset_local_state")
 		self:NextDownloadGeneration(reason or "reset_local_state")
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlinePackSyncLocalStatus", {
@@ -3880,28 +3980,15 @@ function PackSync:ValidatePendingPostReload()
 					.. " error=" .. tostring(statusDecoded and statusDecoded.error_code or statusResponse and statusResponse.errorMessage or "nil"))
 				return
 			end
+			-- The transfer is already acknowledged by the server and the local chart
+			-- has been validated. Release the download guard before availability is
+			-- confirmed; otherwise ReportSongAvailability defers itself forever on
+			-- the very download that has just completed.
+			complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
 			if MESSAGEMAN then
 				MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 			end
-
-			if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
-				ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
-				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
-				trace("PostReload availability result confirmed=" .. tostring(confirmed)
-					.. " deferred=" .. tostring(deferred)
-					.. " reason=" .. tostring(availabilityReason)
-					.. " source=downloaded_ok")
-				if confirmed then
-					self:UpdateStatus(self.status.Ready, nil)
-					self:MarkLobbyReadyForSelectedSong("downloaded_ok")
-				end
-					complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
-				end)
-			else
-				self:UpdateStatus(self.status.Ready, nil)
-				self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
-				complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
-			end
+			self:FinalizeDownloadedSelectedSongAvailability(songInfo, "post_reload")
 		end)
 		return true
 	end

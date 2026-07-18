@@ -153,10 +153,22 @@ endif()
 
 foreach(REQUIRED_SNIPPET
     "terminal_download_status_is_not_preview_state"
-    "browse_reload_status_not_acknowledged")
+    "browse_reload_status_not_acknowledged"
+    "Release the download guard before availability is"
+    "FinalizeDownloadedSelectedSongAvailability"
+    "Selected availability retry scheduled")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(FATAL_ERROR "Online pack completion invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "join_room_prefetch_rejected reason=room_no_longer_accepting"
+    "preflightRejected = true")
+  string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online join preflight rejection invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 
