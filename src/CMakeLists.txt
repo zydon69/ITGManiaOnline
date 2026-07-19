@@ -561,13 +561,24 @@ endif()
 target_include_directories("${SM_EXE_NAME}" PUBLIC ${SM_INCLUDE_DIRS})
 
 if(BUILD_TESTING)
-  add_test(
-    NAME audio_playonce_runtime_smoke
-    COMMAND
-      "${CMAKE_COMMAND}"
-      "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
-      "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/audio_playonce_runtime_smoke"
-      -P "${SM_CMAKE_DIR}/RunPlayOnceSmokeTest.cmake")
+  if(APPLE)
+    add_test(
+      NAME audio_playonce_runtime_smoke
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
+        "-DITGMANIA_APP_BUNDLE=$<TARGET_BUNDLE_DIR:${SM_EXE_NAME}>"
+        "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/audio_playonce_runtime_smoke"
+        -P "${SM_CMAKE_DIR}/RunPlayOnceSmokeTest.cmake")
+  else()
+    add_test(
+      NAME audio_playonce_runtime_smoke
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
+        "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/audio_playonce_runtime_smoke"
+        -P "${SM_CMAKE_DIR}/RunPlayOnceSmokeTest.cmake")
+  endif()
   set_tests_properties(
     audio_playonce_runtime_smoke
     PROPERTIES

@@ -99,6 +99,7 @@ read_source("src/RageDisplay.cpp" rage_display_cpp)
 read_source("src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm" macos_window_cpp)
 read_source("src/CMakeLists.txt" src_cmake_lists)
 read_source("src/CMakeData-rage.cmake" cmake_data_rage)
+read_source("CMake/RunPlayOnceSmokeTest.cmake" playonce_smoke_test_cmake)
 
 require_contains("${rage_sound_h}" "#include <atomic>" "RageSound uses atomics")
 require_contains(
@@ -1324,3 +1325,15 @@ require_contains(
   "${src_cmake_lists}"
   "audio_playonce_runtime_smoke"
   "CTest runs a real PlayOnce runtime smoke test")
+require_contains(
+  "${src_cmake_lists}"
+  "-DITGMANIA_APP_BUNDLE=$<TARGET_BUNDLE_DIR:\${SM_EXE_NAME}>"
+  "macOS PlayOnce smoke receives the configured target bundle")
+require_contains(
+  "${playonce_smoke_test_cmake}"
+  "/usr/bin/open -W -n -g"
+  "macOS PlayOnce smoke launches the application through LaunchServices")
+require_contains(
+  "${playonce_smoke_test_cmake}"
+  "PlayOnce runtime smoke PASS:"
+  "PlayOnce smoke verifies the runtime success marker")
