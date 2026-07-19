@@ -4,8 +4,11 @@
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
-local pn = ToEnumShortString(player)
-local stats = STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local routine_shared = IsRoutine and IsRoutine()
+local source_player = routine_shared and GAMESTATE:GetMasterPlayerNumber() or player
+if routine_shared and player ~= source_player then return end
+local pn = ToEnumShortString(source_player)
+local stats = routine_shared and STATSMAN:GetCurStageStats():GetRoutineStageStats() or STATSMAN:GetCurStageStats():GetPlayerStageStats(source_player)
 local stageStorage = SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
 local mods = SL[pn].ActiveModifiers
 
@@ -50,7 +53,7 @@ local function ProfileDir()
 		[PLAYER_1] = "ProfileSlot_Player1",
 		[PLAYER_2] = "ProfileSlot_Player2",
 	}
-	local dir = PROFILEMAN:GetProfileDir(profile_slot[player])
+	local dir = PROFILEMAN:GetProfileDir(profile_slot[source_player])
 	if not dir or dir == "" then return nil end
 	return dir
 end
@@ -96,7 +99,7 @@ local function AppendCurrentScores()
 	stageStorage.ghost_data = stageStorage.ghost_data or { itg = {}, ex = {} }
 	stageStorage.ghost_data.itg[#stageStorage.ghost_data.itg + 1] = currentItgPoints
 
-	local _, exPoints = CalculateExScore(player, currentExCounts)
+	local _, exPoints = CalculateExScore(source_player, currentExCounts)
 	stageStorage.ghost_data.ex[#stageStorage.ghost_data.ex + 1] = exPoints or 0
 
 	if ActiveGhostTarget() and hasGhostData and ghostCurve then
@@ -104,10 +107,10 @@ local function AppendCurrentScores()
 		local current = mods.ShowExScore and (exPoints or 0) or currentItgPoints
 		local target = ghostCurve[index]
 		if target ~= nil then
-			local _, _, possible = CalculateExScore(player, currentExCounts)
+			local _, _, possible = CalculateExScore(source_player, currentExCounts)
 			if not mods.ShowExScore then possible = stats:GetPossibleDancePoints() end
 			MESSAGEMAN:Broadcast("GhostDataUpdated", {
-				player=player,
+				player=source_player,
 				current=current,
 				target=target,
 				possible=possible or 0
@@ -119,17 +122,26 @@ end
 return Def.Actor{
 	OnCommand=function()
 		stageStorage.ghost_data = { itg = {}, ex = {} }
+		if routine_shared then
+			SL.P1.Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].ghost_data = stageStorage.ghost_data
+			SL.P2.Stages.Stats[SL.Global.Stages.PlayedThisGame + 1].ghost_data = stageStorage.ghost_data
+		end
+		if RoutineCoupleTrace and routine_shared then
+			RoutineCoupleTrace("event=collector_start collector=ghost_data source="
+				.. tostring(ToEnumShortString(source_player))
+				.. " active_target=" .. tostring(ActiveGhostTarget()))
+		end
 		if ActiveGhostTarget() then
 			ghostCurve = ReadGhostCurve()
 			hasGhostData = ghostCurve ~= nil and #ghostCurve > 0
 			if not hasGhostData then
-				MESSAGEMAN:Broadcast("NoGhostData", { player=player })
+				MESSAGEMAN:Broadcast("NoGhostData", { player=source_player })
 			end
 		end
 	end,
 
 	JudgmentMessageCommand=function(_, params)
-		if params.Player ~= player or IsAutoplay(player) then return end
+		if params.Player ~= source_player or IsAutoplay(source_player) then return end
 
 		if params.HoldNoteScore then
 			local hns = ToEnumShortString(params.HoldNoteScore)
@@ -152,10 +164,10 @@ return Def.Actor{
 				currentItgPoints = currentItgPoints + ItgWeight(tns)
 
 				if SL.Global.GameMode == "ITG" and tns == "W1" then
-					if IsW010Judgment(params, player) then
+					if IsW010Judgment(params, source_player) then
 						currentExCounts.W0 = currentExCounts.W0 + 1
 						currentExCounts.W010 = currentExCounts.W010 + 1
-					elseif IsW0Judgment(params, player) then
+					elseif IsW0Judgment(params, source_player) then
 						currentExCounts.W0 = currentExCounts.W0 + 1
 						currentExCounts.W110 = currentExCounts.W110 + 1
 					else

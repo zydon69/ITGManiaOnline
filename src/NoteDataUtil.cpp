@@ -21,6 +21,7 @@
 #include "NoteData.h"
 #include "NoteTypes.h"
 #include "PlayerNumber.h"
+#include "PerfDiagnostics.h"
 #include "PlayerOptions.h"
 #include "PrefsManager.h"
 #include "RadarValues.h"
@@ -50,6 +51,31 @@ static bool IsValidNoteTrackCount(int iNumTracks, const char* context) {
 
 static bool IsValidNoteTypeForSnap(NoteType nt) {
   return nt >= NOTE_TYPE_4TH && nt < NUM_NoteType;
+}
+
+static TapNote AdditionOwnedBy(
+    const TapNote& prototype, const TapNote& source) {
+  TapNote result = prototype;
+  result.pn = source.pn;
+  return result;
+}
+
+static bool ResolveInsertionOwner(
+    const NoteData& noteData, const TapNote& first, const TapNote& second,
+    PlayerNumber& ownerOut) {
+  ownerOut = PLAYER_INVALID;
+  for (const TapNote* note : {&first, &second}) {
+    if (note->pn < PLAYER_1 || note->pn >= NUM_PlayerNumber) {
+      continue;
+    }
+    if (ownerOut >= PLAYER_1 && ownerOut < NUM_PlayerNumber &&
+        ownerOut != note->pn) {
+      return false;
+    }
+    ownerOut = note->pn;
+  }
+  return !noteData.IsComposite() ||
+         (ownerOut >= PLAYER_1 && ownerOut < NUM_PlayerNumber);
 }
 
 static bool CheckedScaledRow(
@@ -496,6 +522,17 @@ void NoteDataUtil::LoadFromSMNoteDataString(
     return;
   }
 
+  const size_t separatorCount =
+      static_cast<size_t>(
+          std::count(sSMNoteData.begin(), sSMNoteData.end(), '&'));
+  if (separatorCount >= static_cast<size_t>(NUM_PLAYERS)) {
+    LOG->Warn(
+        "Composite chart rejected: %zu player separators exceed the %i-player "
+        "format.",
+        separatorCount, NUM_PLAYERS);
+    return;
+  }
+
   int start = 0, size = -1;
 
   std::vector<NoteData> vParts;
@@ -512,8 +549,10 @@ void NoteDataUtil::LoadFromSMNoteDataString(
     LoadFromSMNoteDataStringWithPlayer(
         nd, sSMNoteData, start, size, pn, iNumTracks);
   }
-  CombineCompositeNoteData(out, vParts);
-  out.RevalidateATIs(std::vector<int>(), false);
+  if (!CombineCompositeNoteData(out, vParts)) {
+    out.Init();
+    out.SetNumTracks(iNumTracks);
+  }
 }
 
 void NoteDataUtil::InsertHoldTails(NoteData& inout) {
@@ -683,6 +722,10 @@ void NoteDataUtil::SplitCompositeNoteData(
     out.back().SetNumTracks(in.GetNumTracks());
   }
 
+  LogRoutineCoupleDiagnostics(
+      "component=note_data event=split_routine_begin tracks=%d taps=%d",
+      in.GetNumTracks(), in.GetNumTapNotes());
+
   for (int t = 0; t < in.GetNumTracks(); ++t) {
     for (NoteData::const_iterator iter = in.begin(t); iter != in.end(t);
          ++iter) {
@@ -702,6 +745,11 @@ void NoteDataUtil::SplitCompositeNoteData(
       out[index].SetTapNote(t, row, tn);
     }
   }
+  LogRoutineCoupleDiagnostics(
+      "component=note_data event=split_routine_complete parts=%zu p1_taps=%d "
+      "p2_taps=%d",
+      out.size(), out.size() > PLAYER_1 ? out[PLAYER_1].GetNumTapNotes() : 0,
+      out.size() > PLAYER_2 ? out[PLAYER_2].GetNumTapNotes() : 0);
 }
 
 bool NoteDataUtil::SplitCompositeOrStackedNoteData(
@@ -767,35 +815,90 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
   out[PLAYER_2] = in;
   ShiftTracks(out[PLAYER_2], tracksPerPlayer);
   out[PLAYER_2].SetNumTracks(tracksPerPlayer);
+  LogRoutineCoupleDiagnostics(
+      "component=note_data event=split_couple_complete steps_type=%s "
+      "source_tracks=%d tracks_per_player=%d p1_taps=%d p2_taps=%d",
+      StepsTypeToString(stepsType).c_str(), in.GetNumTracks(), tracksPerPlayer,
+      out[PLAYER_1].GetNumTapNotes(), out[PLAYER_2].GetNumTapNotes());
   return true;
 }
 
-void NoteDataUtil::CombineCompositeNoteData(
+bool NoteDataUtil::CombineCompositeNoteData(
     NoteData& out, const std::vector<NoteData>& in) {
-  for (const NoteData& nd : in) {
-    const int iMaxTracks = std::min(out.GetNumTracks(), nd.GetNumTracks());
+  LogRoutineCoupleDiagnostics(
+      "component=note_data event=combine_routine_begin parts=%zu "
+      "output_tracks=%d",
+      in.size(), out.GetNumTracks());
+  if (in.size() > static_cast<size_t>(NUM_PLAYERS)) {
+    LOG->Warn(
+        "Composite chart recomposition rejected: %zu parts exceed %i players.",
+        in.size(), NUM_PLAYERS);
+    return false;
+  }
 
-    for (int track = 0; track < iMaxTracks; ++track) {
+  const int outputTracks = out.GetNumTracks();
+  if (!IsValidNoteTrackCount(outputTracks, "CombineCompositeNoteData")) {
+    return false;
+  }
+
+  NoteData combined;
+  combined.SetNumTracks(outputTracks);
+  for (size_t partIndex = 0; partIndex < in.size(); ++partIndex) {
+    const NoteData& nd = in[partIndex];
+    if (nd.GetNumTracks() != outputTracks) {
+      LOG->Warn(
+          "Composite chart recomposition rejected: part %zu has %i tracks, "
+          "expected %i.",
+          partIndex, nd.GetNumTracks(), outputTracks);
+      return false;
+    }
+    const PlayerNumber owner = static_cast<PlayerNumber>(partIndex);
+
+    for (int track = 0; track < outputTracks; ++track) {
       for (NoteData::const_iterator i = nd.begin(track); i != nd.end(track);
            ++i) {
-        int row = i->first;
-        if (out.IsHoldNoteAtRow(track, i->first)) {
-          continue;
-        }
-        if (i->second.type == TapNoteType_HoldHead) {
+        const int row = i->first;
+        TapNote note = i->second;
+        note.pn = owner;
+        if (note.type == TapNoteType_HoldHead) {
           int endRow = 0;
-          if (CheckedHoldEndRow(
-                  row, i->second.iDuration, &endRow,
-                  "CombineCompositeNoteData")) {
-            out.AddHoldNote(track, row, endRow, i->second);
+          if (!CheckedHoldEndRow(
+                  row, note.iDuration, &endRow, "CombineCompositeNoteData")) {
+            return false;
           }
+          NoteData::const_iterator collisionBegin, collisionEnd;
+          combined.GetTapNoteRangeInclusive(
+              track, row, endRow, collisionBegin, collisionEnd);
+          if (collisionBegin != collisionEnd) {
+            LOG->Warn(
+                "Composite chart recomposition rejected: player %zu hold "
+                "collides at beat %.6f column %i.",
+                partIndex, NoteRowToBeat(row), track + 1);
+            return false;
+          }
+          combined.AddHoldNote(track, row, endRow, note);
         } else {
-          out.SetTapNote(track, row, i->second);
+          if (combined.GetTapNote(track, row).type != TapNoteType_Empty ||
+              combined.IsHoldNoteAtRow(track, row)) {
+            LOG->Warn(
+                "Composite chart recomposition rejected: player %zu note "
+                "collides at beat %.6f column %i.",
+                partIndex, NoteRowToBeat(row), track + 1);
+            return false;
+          }
+          combined.SetTapNote(track, row, note);
         }
       }
     }
   }
-  out.RevalidateATIs(std::vector<int>(), false);
+  combined.RevalidateATIs(std::vector<int>(), false);
+  out = combined;
+  LogRoutineCoupleDiagnostics(
+      "component=note_data event=combine_routine_complete parts=%zu "
+      "tracks=%d taps=%d composite=%d",
+      in.size(), out.GetNumTracks(), out.GetNumTapNotes(),
+      out.IsComposite() ? 1 : 0);
+  return true;
 }
 
 void NoteDataUtil::LoadTransformedSlidingWindow(
@@ -1569,9 +1672,16 @@ void NoteDataUtil::RemoveSimultaneousNotes(
           "it could not be split safely.");
       return;
     }
-    in.Init();
-    in.SetNumTracks(vParts.front().GetNumTracks());
-    CombineCompositeNoteData(in, vParts);
+    NoteData combined;
+    combined.SetNumTracks(vParts.front().GetNumTracks());
+    if (!CombineCompositeNoteData(combined, vParts)) {
+      LOG->Warn(
+          "RemoveSimultaneousNotes preserved composite data because its "
+          "transformed parts could not be recombined safely.");
+      return;
+    }
+    in = combined;
+    return;
   }
   FOREACH_NONEMPTY_ROW_ALL_TRACKS_RANGE(in, r, iStartIndex, iEndIndex) {
     std::set<int> viTracksHeld;
@@ -1704,7 +1814,15 @@ static void GetTrackMapping(
           iTakeFromTrack[0] = 3;
           iTakeFromTrack[3] = 0;
           break;
+        case StepsType_dance_couple:
+          if (NumTracks <= 4) {
+            iTakeFromTrack[0] = 3;
+            iTakeFromTrack[3] = 0;
+            break;
+          }
+          [[fallthrough]];
         case StepsType_dance_double:
+        case StepsType_dance_routine:
           iTakeFromTrack[0] = 7;
           iTakeFromTrack[1] = 5;
           iTakeFromTrack[2] = 6;
@@ -1726,6 +1844,18 @@ static void GetTrackMapping(
           iTakeFromTrack[3] = 1;
           iTakeFromTrack[4] = 0;
           break;
+        case StepsType_pump_couple:
+          if (NumTracks <= 5) {
+            iTakeFromTrack[0] = 4;
+            iTakeFromTrack[1] = 3;
+            iTakeFromTrack[3] = 1;
+            iTakeFromTrack[4] = 0;
+            break;
+          }
+          for (int track = 0; track < 10; ++track) {
+            iTakeFromTrack[track] = 9 - track;
+          }
+          break;
         case StepsType_pump_halfdouble:
           iTakeFromTrack[0] = 5;
           iTakeFromTrack[1] = 4;
@@ -1735,18 +1865,7 @@ static void GetTrackMapping(
           iTakeFromTrack[5] = 0;
           break;
         case StepsType_pump_double:
-          iTakeFromTrack[0] = 9;
-          iTakeFromTrack[1] = 8;
-          iTakeFromTrack[2] = 7;
-          iTakeFromTrack[3] = 6;
-          iTakeFromTrack[4] = 5;
-          iTakeFromTrack[5] = 4;
-          iTakeFromTrack[6] = 3;
-          iTakeFromTrack[7] = 2;
-          iTakeFromTrack[8] = 1;
-          iTakeFromTrack[9] = 0;
-          break;
-        case StepsType_pump_couple:
+        case StepsType_pump_routine:
           iTakeFromTrack[0] = 9;
           iTakeFromTrack[1] = 8;
           iTakeFromTrack[2] = 7;
@@ -1768,7 +1887,15 @@ static void GetTrackMapping(
           iTakeFromTrack[1] = 2;
           iTakeFromTrack[2] = 1;
           break;
+        case StepsType_dance_couple:
+          if (NumTracks <= 4) {
+            iTakeFromTrack[1] = 2;
+            iTakeFromTrack[2] = 1;
+            break;
+          }
+          [[fallthrough]];
         case StepsType_dance_double:
+        case StepsType_dance_routine:
           iTakeFromTrack[1] = 2;
           iTakeFromTrack[2] = 1;
           iTakeFromTrack[5] = 6;
@@ -1784,13 +1911,14 @@ static void GetTrackMapping(
           iTakeFromTrack[3] = 4;
           iTakeFromTrack[4] = 3;
           break;
-        case StepsType_pump_halfdouble:
-          iTakeFromTrack[1] = 2;
-          iTakeFromTrack[2] = 1;
-          iTakeFromTrack[3] = 4;
-          iTakeFromTrack[4] = 3;
-          break;
-        case StepsType_pump_double:
+        case StepsType_pump_couple:
+          if (NumTracks <= 5) {
+            iTakeFromTrack[0] = 1;
+            iTakeFromTrack[1] = 0;
+            iTakeFromTrack[3] = 4;
+            iTakeFromTrack[4] = 3;
+            break;
+          }
           iTakeFromTrack[0] = 1;
           iTakeFromTrack[1] = 0;
           iTakeFromTrack[3] = 4;
@@ -1800,7 +1928,14 @@ static void GetTrackMapping(
           iTakeFromTrack[8] = 9;
           iTakeFromTrack[9] = 8;
           break;
-        case StepsType_pump_couple:
+        case StepsType_pump_halfdouble:
+          iTakeFromTrack[1] = 2;
+          iTakeFromTrack[2] = 1;
+          iTakeFromTrack[3] = 4;
+          iTakeFromTrack[4] = 3;
+          break;
+        case StepsType_pump_double:
+        case StepsType_pump_routine:
           iTakeFromTrack[0] = 1;
           iTakeFromTrack[1] = 0;
           iTakeFromTrack[3] = 4;
@@ -1861,6 +1996,7 @@ static void GetTrackMapping(
           iTakeFromTrack[5] = 5;
           break;
         case StepsType_pump_double:
+        case StepsType_pump_routine:
           iTakeFromTrack[0] = 8;
           iTakeFromTrack[1] = 9;
           iTakeFromTrack[2] = 7;
@@ -2130,6 +2266,7 @@ static void GetTrackMapping(
               iTakeFromTrack[5] = 5;
               break;
             case StepsType_pump_double:
+            case StepsType_pump_routine:
               iTakeFromTrack[0] = 8;
               iTakeFromTrack[1] = 9;
               iTakeFromTrack[2] = 7;
@@ -2731,7 +2868,9 @@ void NoteDataUtil::Wide(NoteData& inout, int iStartIndex, int iEndIndex) {
         inout.GetTapNote(iTrackToAdd, i).type != TapNoteType_Fake) {
       iTrackToAdd = (iTrackToAdd + 1) % inout.GetNumTracks();
     }
-    inout.SetTapNote(iTrackToAdd, i, TAP_ADDITION_TAP);
+    const TapNote& source = inout.GetTapNote(iTrackOfNote, i);
+    inout.SetTapNote(
+        iTrackToAdd, i, AdditionOwnedBy(TAP_ADDITION_TAP, source));
   }
   inout.RevalidateATIs(std::vector<int>(), false);
 }
@@ -2856,7 +2995,19 @@ void NoteDataUtil::InsertIntelligentTaps(
       iTrackOfNoteToAdd = std::max(iTrackOfNoteEarlier, iTrackOfNoteLater) + 1;
     }
 
-    inout.SetTapNote(iTrackOfNoteToAdd, iRowToAdd, TAP_ADDITION_TAP);
+    const TapNote& earlier =
+        inout.GetTapNote(iTrackOfNoteEarlier, iRowEarlier);
+    const TapNote& later = inout.GetTapNote(iTrackOfNoteLater, iRowLater);
+    PlayerNumber owner = PLAYER_INVALID;
+    if (!ResolveInsertionOwner(inout, earlier, later, owner)) {
+      LOG->Trace(
+          "Routine transform skipped ambiguous inserted tap at beat %.6f.",
+          NoteRowToBeat(iRowToAdd));
+      continue;
+    }
+    TapNote addition = TAP_ADDITION_TAP;
+    addition.pn = owner;
+    inout.SetTapNote(iTrackOfNoteToAdd, iRowToAdd, addition);
   }
   inout.RevalidateATIs(std::vector<int>(), false);
 }
@@ -2942,7 +3093,9 @@ void NoteDataUtil::AddMines(NoteData& inout, int iStartIndex, int iEndIndex) {
     if (iRowCount >= iPlaceEveryRows) {
       for (int t = 0; t < inout.GetNumTracks(); t++) {
         if (inout.GetTapNote(t, r).type == TapNoteType_Tap) {
-          inout.SetTapNote(t, r, TAP_ADDITION_MINE);
+          const TapNote source = inout.GetTapNote(t, r);
+          inout.SetTapNote(
+              t, r, AdditionOwnedBy(TAP_ADDITION_MINE, source));
         }
       }
 
@@ -2985,12 +3138,15 @@ void NoteDataUtil::AddMines(NoteData& inout, int iStartIndex, int iEndIndex) {
       }
 
       // Add a mine right after the hold end.
-      inout.SetTapNote(iTrack, iMineRow, TAP_ADDITION_MINE);
+      inout.SetTapNote(
+          iTrack, iMineRow, AdditionOwnedBy(TAP_ADDITION_MINE, tn));
 
       // Convert all notes in this row to mines.
       for (int t = 0; t < inout.GetNumTracks(); t++) {
         if (inout.GetTapNote(t, iMineRow).type == TapNoteType_Tap) {
-          inout.SetTapNote(t, iMineRow, TAP_ADDITION_MINE);
+          const TapNote source = inout.GetTapNote(t, iMineRow);
+          inout.SetTapNote(
+              t, iMineRow, AdditionOwnedBy(TAP_ADDITION_MINE, source));
         }
       }
 
@@ -3003,6 +3159,7 @@ void NoteDataUtil::AddMines(NoteData& inout, int iStartIndex, int iEndIndex) {
 void NoteDataUtil::Echo(NoteData& inout, int iStartIndex, int iEndIndex) {
   // add 8th note tap "echos" after all taps
   int iEchoTrack = -1;
+  PlayerNumber echoOwner = PLAYER_INVALID;
 
   const int rows_per_interval = BeatToNoteRow(0.5f);
   iStartIndex = Quantize(iStartIndex, rows_per_interval);
@@ -3023,6 +3180,7 @@ void NoteDataUtil::Echo(NoteData& inout, int iStartIndex, int iEndIndex) {
     const int iFirstTapInRow = inout.GetFirstTrackWithTap(iRowWindowBegin);
     if (iFirstTapInRow != -1) {
       iEchoTrack = iFirstTapInRow;
+      echoOwner = inout.GetTapNote(iFirstTapInRow, iRowWindowBegin).pn;
     }
 
     if (iEchoTrack == -1) {
@@ -3055,7 +3213,9 @@ void NoteDataUtil::Echo(NoteData& inout, int iStartIndex, int iEndIndex) {
       }
     }
 
-    inout.SetTapNote(iEchoTrack, iRowEcho, TAP_ADDITION_TAP);
+    TapNote echo = TAP_ADDITION_TAP;
+    echo.pn = echoOwner;
+    inout.SetTapNote(iEchoTrack, iRowEcho, echo);
   }
   inout.RevalidateATIs(std::vector<int>(), false);
 }
@@ -3087,6 +3247,7 @@ void NoteDataUtil::ConvertTapsToHolds(
       }
 
       if (inout.GetTapNote(t, r).type == TapNoteType_Tap) {
+        const TapNote source = inout.GetTapNote(t, r);
         // Find the ending row for this hold
         int iTapsLeft = iSimultaneousHolds;
 
@@ -3125,7 +3286,10 @@ void NoteDataUtil::ConvertTapsToHolds(
           r2 = r + BeatToNoteRow(1);
         }
 
-        inout.AddHoldNote(t, r, r2, TAP_ORIGINAL_HOLD_HEAD);
+        TapNote hold = TAP_ORIGINAL_HOLD_HEAD;
+        hold.pn = source.pn;
+        hold.source = source.source;
+        inout.AddHoldNote(t, r, r2, hold);
         iTrackAddedThisRow++;
       }
     }
@@ -3176,7 +3340,9 @@ void NoteDataUtil::Stomp(
         }
 
         int iOppositeTrack = iTrackMapping[t];
-        inout.SetTapNote(iOppositeTrack, r, TAP_ADDITION_TAP);
+        const TapNote& source = inout.GetTapNote(t, r);
+        inout.SetTapNote(
+            iOppositeTrack, r, AdditionOwnedBy(TAP_ADDITION_TAP, source));
       }
     }
   }
@@ -3418,9 +3584,16 @@ const ValidRow g_ValidRows[] = {
     {StepsType_dance_double, {f, T, T, T, T, f, f, f}},
     {StepsType_dance_double, {f, f, f, T, T, T, T, f}},
     {StepsType_dance_double, {f, f, f, f, T, T, T, T}},
+    {StepsType_dance_routine, {T, T, T, T, f, f, f, f}},
+    {StepsType_dance_routine, {f, T, T, T, T, f, f, f}},
+    {StepsType_dance_routine, {f, f, f, T, T, T, T, f}},
+    {StepsType_dance_routine, {f, f, f, f, T, T, T, T}},
     {StepsType_pump_double, {T, T, T, T, T, f, f, f, f, f}},
     {StepsType_pump_double, {f, f, T, T, T, T, T, T, f, f}},
     {StepsType_pump_double, {f, f, f, f, f, T, T, T, T, T}},
+    {StepsType_pump_routine, {T, T, T, T, T, f, f, f, f, f}},
+    {StepsType_pump_routine, {f, f, T, T, T, T, T, T, f, f}},
+    {StepsType_pump_routine, {f, f, f, f, f, T, T, T, T, T}},
 };
 #undef T
 #undef f

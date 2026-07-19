@@ -9,13 +9,21 @@
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
+local routine_shared = IsRoutine and IsRoutine()
+local source_player = routine_shared and GAMESTATE:GetMasterPlayerNumber() or player
+if routine_shared and player ~= source_player then return end
 local sequential_offsets = {}
 
 local require_step_on_hold_heads = THEME:GetMetric("Player", "RequireStepOnHoldHeads")
 
 return Def.Actor{
+	OnCommand=function()
+		if RoutineCoupleTrace and routine_shared then
+			RoutineCoupleTrace("event=collector_start collector=judgment_offsets source=" .. tostring(ToEnumShortString(source_player)))
+		end
+	end,
 	JudgmentMessageCommand=function(self, params)
-		if params.Player ~= player then return end
+		if params.Player ~= source_player then return end
 		if params.HoldNoteScore then return end
 
 		local tns = params.TapNoteScore
@@ -45,7 +53,7 @@ return Def.Actor{
 			local courseOffset = 0
 			if GAMESTATE:IsCourseMode() then
 				local curCourseSong = GAMESTATE:GetCourseSongIndex()
-				local courseEntries = GAMESTATE:GetCurrentTrail(ToEnumShortString(player)):GetTrailEntries()
+				local courseEntries = GAMESTATE:GetCurrentTrail(ToEnumShortString(source_player)):GetTrailEntries()
 				
 				for i=1,curCourseSong do
 					courseOffset = courseOffset + courseEntries[i]:GetSong():GetLastSecond()
@@ -58,7 +66,20 @@ return Def.Actor{
 		end
 	end,
 	OffCommand=function(self)
-		local storage = SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+		local stage_index = SL.Global.Stages.PlayedThisGame + 1
+		local storage = SL[ToEnumShortString(source_player)].Stages.Stats[stage_index]
 		storage.sequential_offsets = sequential_offsets
+
+		-- Routine has one engine Player actor.  Mirror its shared judgments into
+		-- both participant slots so both evaluation panes describe the same play.
+		if routine_shared then
+			for _, pn in ipairs({"P1", "P2"}) do
+				SL[pn].Stages.Stats[stage_index].sequential_offsets = sequential_offsets
+			end
+		end
+		if RoutineCoupleTrace and routine_shared then
+			RoutineCoupleTrace("event=collector_complete collector=judgment_offsets source="
+				.. tostring(ToEnumShortString(source_player)) .. " count=" .. tostring(#sequential_offsets))
+		end
 	end
 }

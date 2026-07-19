@@ -83,6 +83,16 @@ local function safe_preference(name, fallback)
 	return value
 end
 
+RoutineCoupleTrace = function(message)
+	if safe_preference("review_src", false) ~= true then return end
+	local line = "ROUTINE_COUPLE_TRACE component=theme " .. tostring(message or "")
+	if type(Trace) == "function" then
+		Trace(line)
+	elseif type(Warn) == "function" then
+		Warn(line)
+	end
+end
+
 local function safe_preference_number(name, fallback)
 	return finite_number_or(safe_preference(name, fallback), fallback)
 end
@@ -234,7 +244,7 @@ GetEvaluationPlayerStageStats = function(player)
 			local key = tostring(safe_stage_index()) .. ":" .. tostring(safe_enum_short(player, player))
 			if not routine_stage_stats_trace[key] then
 				routine_stage_stats_trace[key] = true
-				Trace("ROUTINE_EVAL using shared stage stats"
+				RoutineCoupleTrace("event=evaluation_stats_source mode=routine shared=1"
 					.. " player=" .. tostring(safe_enum_short(player, player))
 					.. " source=" .. tostring(safe_enum_short(sourcePlayer, sourcePlayer))
 					.. " stage=" .. tostring(safe_stage_index()))

@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "GameState.h"
+#include "PerfDiagnostics.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "RageLog.h"
@@ -25,6 +26,10 @@ CombinedLifeMeterShared::CombinedLifeMeterShared(
   m_pLifeMeter->Load(pPlayerState, pPlayerStageStats);
   m_pLifeMeter->SetName("CoopLifeMeterInternal");
   AddChild(m_pLifeMeter);
+  LogRoutineCoupleDiagnostics(
+      "component=life event=construct player=%d life_type=%d initial=%.6f",
+      static_cast<int>(pPlayerState->m_PlayerNumber),
+      static_cast<int>(lifeType), m_pLifeMeter->GetLife());
 }
 
 CombinedLifeMeterShared::~CombinedLifeMeterShared() {
@@ -37,38 +42,72 @@ CombinedLifeMeterShared::~CombinedLifeMeterShared() {
 void CombinedLifeMeterShared::OnLoadSong() {
   if (m_pLifeMeter != nullptr) {
     m_pLifeMeter->OnLoadSong();
+    LogRoutineCoupleDiagnostics(
+        "component=life event=load_song life=%.6f failing=%d",
+        m_pLifeMeter->GetLife(), m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
 void CombinedLifeMeterShared::ChangeLife(
     PlayerNumber pn, TapNoteScore tns) {
   if (ShouldAcceptCallback(pn)) {
+    const float before = m_pLifeMeter->GetLife();
     m_pLifeMeter->ChangeLife(tns);
+    LogRoutineCoupleDiagnostics(
+        "component=life event=tap player=%d judgment=%s before=%.6f "
+        "after=%.6f failing=%d",
+        static_cast<int>(pn), TapNoteScoreToString(tns).c_str(), before,
+        m_pLifeMeter->GetLife(), m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
 void CombinedLifeMeterShared::ChangeLife(
     PlayerNumber pn, HoldNoteScore hns, TapNoteScore tns) {
   if (ShouldAcceptCallback(pn)) {
+    const float before = m_pLifeMeter->GetLife();
     m_pLifeMeter->ChangeLife(hns, tns);
+    LogRoutineCoupleDiagnostics(
+        "component=life event=hold player=%d judgment=%s tap=%s "
+        "before=%.6f after=%.6f failing=%d",
+        static_cast<int>(pn), HoldNoteScoreToString(hns).c_str(),
+        TapNoteScoreToString(tns).c_str(), before, m_pLifeMeter->GetLife(),
+        m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
 void CombinedLifeMeterShared::ChangeLife(PlayerNumber pn, float delta) {
   if (ShouldAcceptCallback(pn)) {
+    const float before = m_pLifeMeter->GetLife();
     m_pLifeMeter->ChangeLife(delta);
+    LogRoutineCoupleDiagnostics(
+        "component=life event=delta player=%d delta=%.6f before=%.6f "
+        "after=%.6f failing=%d",
+        static_cast<int>(pn), delta, before, m_pLifeMeter->GetLife(),
+        m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
 void CombinedLifeMeterShared::SetLife(PlayerNumber pn, float value) {
   if (ShouldAcceptCallback(pn) && std::isfinite(value)) {
+    const float before = m_pLifeMeter->GetLife();
     m_pLifeMeter->SetLife(value);
+    LogRoutineCoupleDiagnostics(
+        "component=life event=set player=%d requested=%.6f before=%.6f "
+        "after=%.6f failing=%d",
+        static_cast<int>(pn), value, before, m_pLifeMeter->GetLife(),
+        m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
 void CombinedLifeMeterShared::HandleTapScoreNone(PlayerNumber pn) {
   if (ShouldAcceptCallback(pn)) {
+    const float before = m_pLifeMeter->GetLife();
     m_pLifeMeter->HandleTapScoreNone();
+    LogRoutineCoupleDiagnostics(
+        "component=life event=tap_none player=%d before=%.6f after=%.6f "
+        "failing=%d",
+        static_cast<int>(pn), before, m_pLifeMeter->GetLife(),
+        m_pLifeMeter->IsFailing() ? 1 : 0);
   }
 }
 
@@ -106,8 +145,9 @@ bool CombinedLifeMeterShared::ShouldAcceptCallback(PlayerNumber pn) const {
 
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
   if (pn != master) {
-    LOG->Trace(
-        "Routine shared life ignored non-master callback: player=%i master=%i.",
+    LogRoutineCoupleDiagnostics(
+        "component=life event=callback_ignored reason=non_master player=%d "
+        "master=%d",
         static_cast<int>(pn), static_cast<int>(master));
     return false;
   }

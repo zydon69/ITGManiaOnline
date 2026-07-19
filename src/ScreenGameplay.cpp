@@ -305,6 +305,29 @@ static bool IsCurrentStyleSharedSides() {
          style->m_StyleType == StyleType_TwoPlayersSharedSides;
 }
 
+static const char* GetRoutineCoupleModeName() {
+  if (GAMESTATE == nullptr) {
+    return nullptr;
+  }
+  if (IsCurrentStyleSharedSides()) {
+    return "routine";
+  }
+  if (GAMEMAN == nullptr) {
+    return nullptr;
+  }
+  FOREACH_PlayerNumber(pn) {
+    const Steps* steps = GAMESTATE->m_pCurSteps[pn];
+    if (steps == nullptr) {
+      continue;
+    }
+    if (GAMEMAN->GetStepsTypeInfo(steps->m_StepsType).m_StepsTypeCategory ==
+        StepsTypeCategory_Couple) {
+      return "couple";
+    }
+  }
+  return nullptr;
+}
+
 static bool GetRoutineSharedMiniFromTheme(float& miniOut) {
   if (LUA == nullptr) {
     return false;
@@ -342,7 +365,7 @@ static bool GetRoutineSharedMiniFromTheme(float& miniOut) {
   if (!parsed || !std::isfinite(percent)) {
     return false;
   }
-  rage_clamp(percent, -100.0f, 150.0f);
+  rage_clamp(percent, 0.0f, 150.0f);
   miniOut = percent / 100.0f;
   return true;
 }
@@ -354,8 +377,9 @@ static void ApplyRoutineSharedMiniToPlayerStates(const char* context) {
 
   float mini = 0.0f;
   if (!GetRoutineSharedMiniFromTheme(mini)) {
-    LOG->Trace(
-        "ROUTINE_UI shared mini sync skipped context=%s reason=no_theme_value",
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=mini_sync_skipped context=%s "
+        "reason=no_theme_value",
         context != nullptr ? context : "unknown");
     return;
   }
@@ -368,8 +392,9 @@ static void ApplyRoutineSharedMiniToPlayerStates(const char* context) {
     PO_GROUP_ASSIGN_N(
         playerState->m_PlayerOptions, ModsLevel_Preferred, m_fEffects,
         PlayerOptions::EFFECT_MINI, mini);
-    LOG->Trace(
-        "ROUTINE_UI shared mini sync context=%s player=%i mini=%f "
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=mini_synchronized context=%s player=%d "
+        "mini=%.6f "
         "preferred=%f stage=%f song=%f current=%f",
         context != nullptr ? context : "unknown", static_cast<int>(pn), mini,
         playerState->m_PlayerOptions.GetPreferred()
@@ -503,9 +528,10 @@ void ScreenGameplay::PropagateSharedSidesFailure(
     }
   }
 
-  LOG->Trace(
-      "Routine shared failure propagated: context=%s failed_player=%i "
-      "master=%i routine_was_failed=%d p1_failed=%d p2_failed=%d.",
+  LogRoutineCoupleDiagnostics(
+      "component=gameplay event=failure_propagated mode=routine context=%s "
+      "failed_player=%d master=%d routine_was_failed=%d p1_failed=%d "
+      "p2_failed=%d",
       context != nullptr ? context : "unknown", static_cast<int>(failedPlayer),
       static_cast<int>(master), routineWasFailed ? 1 : 0,
       stageStats.m_player[PLAYER_1].m_bFailed ? 1 : 0,
@@ -1251,6 +1277,17 @@ void ScreenGameplay::Init() {
   }
 
   const bool bSharedSidesStyle = IsCurrentStyleSharedSides();
+  if (const char* mode = GetRoutineCoupleModeName()) {
+    int enabledActors = 0;
+    FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) { ++enabledActors; }
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=init mode=%s master=%d player_infos=%zu "
+        "enabled_actors=%d sides_joined=%d course=%d online=%d",
+        mode, static_cast<int>(GAMESTATE->GetMasterPlayerNumber()),
+        m_vPlayerInfo.size(), enabledActors, GAMESTATE->GetNumSidesJoined(),
+        GAMESTATE->IsCourseMode() ? 1 : 0,
+        HasActiveITGOnlineRoom() ? 1 : 0);
+  }
   if (bSharedSidesStyle) {
     ApplyRoutineSharedMiniToPlayerStates("ScreenGameplay::Init");
   }
@@ -1278,9 +1315,12 @@ void ScreenGameplay::Init() {
             RageUtil::SafeDelete(masterInfo.m_pSecondaryScoreKeeper);
           }
           masterInfo.m_pSecondaryScoreKeeper = m_pRoutineSharedScoreKeeper;
-          LOG->Trace(
-              "Routine shared scorekeeper attached to master only: master=%i.",
-              static_cast<int>(master));
+          LogRoutineCoupleDiagnostics(
+              "component=gameplay event=shared_scorekeeper_attached "
+              "master=%d primary_present=%d secondary_present=%d",
+              static_cast<int>(master),
+              masterInfo.m_pPrimaryScoreKeeper != nullptr ? 1 : 0,
+              masterInfo.m_pSecondaryScoreKeeper != nullptr ? 1 : 0);
         }
       }
     }
@@ -1850,10 +1890,13 @@ void ScreenGameplay::Init() {
         participant.m_pStyle = GAMESTATE->GetCurrentStyle(master);
         participant.m_vpPossibleSteps = m_vPlayerInfo[master].m_vpStepsQueue;
       }
-      LOG->Trace(
-          "Routine shared stats initialized: master=%i steps_queue=%zu.",
+      LogRoutineCoupleDiagnostics(
+          "component=gameplay event=shared_stats_initialized master=%d "
+          "steps_queue=%zu p1_joined=%d p2_joined=%d",
           static_cast<int>(master),
-          m_vPlayerInfo[master].m_vpStepsQueue.size());
+          m_vPlayerInfo[master].m_vpStepsQueue.size(),
+          STATSMAN->m_CurStageStats.m_player[PLAYER_1].m_bJoined ? 1 : 0,
+          STATSMAN->m_CurStageStats.m_player[PLAYER_2].m_bJoined ? 1 : 0);
     }
   }
 
@@ -2396,6 +2439,20 @@ void ScreenGameplay::LoadNextSong() {
     return;
   }
 
+  if (const char* mode = GetRoutineCoupleModeName()) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=load_song_begin mode=%s song_index=%d "
+        "song=%s music_length=%.6f p1_steps=%d p2_steps=%d same_steps=%d",
+        mode, iPlaySongIndex,
+        GAMESTATE->m_pCurSong->GetTranslitFullTitle().c_str(),
+        GAMESTATE->m_pCurSong->m_fMusicLengthSeconds,
+        GAMESTATE->m_pCurSteps[PLAYER_1] != nullptr ? 1 : 0,
+        GAMESTATE->m_pCurSteps[PLAYER_2] != nullptr ? 1 : 0,
+        GAMESTATE->m_pCurSteps[PLAYER_1] == GAMESTATE->m_pCurSteps[PLAYER_2]
+            ? 1
+            : 0);
+  }
+
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     PlayerStageStats* pss = pi->GetPlayerStageStats();
     if (pss == nullptr) {
@@ -2411,6 +2468,7 @@ void ScreenGameplay::LoadNextSong() {
     PlayerStageStats& routine = STATSMAN->m_CurStageStats.m_RoutinePlayer;
     IncrementGameplayCount(routine.m_iSongsPlayed, "routine songs played");
   }
+
   STATSMAN->m_CurStageStats.m_vpPlayedSongs.push_back(GAMESTATE->m_pCurSong);
 
   Song* pSong = GAMESTATE->m_pCurSong;
@@ -2527,6 +2585,15 @@ void ScreenGameplay::LoadNextSong() {
     IncrementGameplayCount(
         STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iStepsPlayed,
         "routine steps played");
+  }
+
+  if (const char* mode = GetRoutineCoupleModeName()) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=load_song_complete mode=%s song_index=%d "
+        "shared_next_song_sent=%d routine_songs=%d routine_steps=%d",
+        mode, iPlaySongIndex, bSentRoutineSharedOnNextSong ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iSongsPlayed,
+        STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iStepsPlayed);
   }
 
   if (m_pCombinedLifeMeter != nullptr) {
@@ -4537,9 +4604,19 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
             if (iCol != -1) {
               if (bSharedSidesInput && input.type == IET_FIRST_PRESS &&
                   !GAMESTATE->IsHumanPlayer(input.pn)) {
-                LOG->Trace(
-                    "ROUTINE_INPUT accepted pn=%i master=%i controller=%i "
-                    "button=%i col=%i.",
+                LogRoutineCoupleDiagnostics(
+                    "component=input event=participant_step source=%d "
+                    "master=%d controller=%d button=%d column=%d",
+                    static_cast<int>(input.pn),
+                    static_cast<int>(GAMESTATE->GetMasterPlayerNumber()),
+                    static_cast<int>(input.GameI.controller),
+                    static_cast<int>(input.GameI.button), iCol);
+              }
+              if (bSharedSidesInput && input.type == IET_FIRST_PRESS &&
+                  GAMESTATE->IsHumanPlayer(input.pn)) {
+                LogRoutineCoupleDiagnostics(
+                    "component=input event=master_step source=%d master=%d "
+                    "controller=%d button=%d column=%d",
                     static_cast<int>(input.pn),
                     static_cast<int>(GAMESTATE->GetMasterPlayerNumber()),
                     static_cast<int>(input.GameI.controller),
@@ -4636,9 +4713,10 @@ void ScreenGameplay::SaveStats() {
       shared.m_iNumControllerSteps += participant.m_iNumControllerSteps;
       shared.m_fCaloriesBurned += participant.m_fCaloriesBurned;
     }
-    LOG->Trace(
-        "Routine radar saved: possible=%s actual=%s p1_actual=%s "
-        "p2_actual=%s.",
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=radar_saved mode=routine possible=%s "
+        "actual=%s p1_actual=%s p2_actual=%s controller_steps=%.0f "
+        "calories=%.6f",
         shared.m_radarPossible.ToString().c_str(),
         shared.m_radarActual.ToString().c_str(),
         STATSMAN->m_CurStageStats.m_player[PLAYER_1]
@@ -4646,7 +4724,8 @@ void ScreenGameplay::SaveStats() {
             .c_str(),
         STATSMAN->m_CurStageStats.m_player[PLAYER_2]
             .m_radarActual.ToString()
-            .c_str());
+            .c_str(),
+        shared.m_iNumControllerSteps, shared.m_fCaloriesBurned);
     return;
   }
 
@@ -4670,6 +4749,13 @@ void ScreenGameplay::SaveStats() {
     pss->m_radarPossible += rv;
     NoteDataWithScoring::GetActualRadarValues(nd, *pss, timing, fMusicLen, rv);
     pss->m_radarActual += rv;
+    if (GetRoutineCoupleModeName() != nullptr) {
+      LogRoutineCoupleDiagnostics(
+          "component=gameplay event=radar_saved mode=couple player=%d "
+          "possible=%s actual=%s",
+          static_cast<int>(pn), pss->m_radarPossible.ToString().c_str(),
+          pss->m_radarActual.ToString().c_str());
+    }
   }
 }
 
@@ -4678,6 +4764,24 @@ void ScreenGameplay::SongFinished() {
     return;
   }
   const bool isOnlineActive = GetITGOnlineIsActive();
+  if (const char* mode = GetRoutineCoupleModeName()) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=song_finished_begin mode=%s song=%s "
+        "gameplay_seconds=%.6f routine_score=%u routine_failed=%d",
+        mode,
+        GAMESTATE->m_pCurSong != nullptr
+            ? GAMESTATE->m_pCurSong->GetTranslitFullTitle().c_str()
+            : "none",
+        STATSMAN != nullptr ? STATSMAN->m_CurStageStats.m_fGameplaySeconds
+                            : 0.0f,
+        STATSMAN != nullptr
+            ? STATSMAN->m_CurStageStats.m_RoutinePlayer.m_iScore
+            : 0,
+        STATSMAN != nullptr &&
+                STATSMAN->m_CurStageStats.m_RoutinePlayer.m_bFailed
+            ? 1
+            : 0);
+  }
   if (isOnlineActive) {
     OnlineTrace("ITG Online: ScreenGameplay::SongFinished begin.");
   }
@@ -4698,6 +4802,10 @@ void ScreenGameplay::SongFinished() {
   }
   if (isOnlineActive) {
     OnlineTrace("ITG Online: ScreenGameplay::SongFinished complete.");
+  }
+  if (const char* mode = GetRoutineCoupleModeName()) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=song_finished_complete mode=%s", mode);
   }
 }
 
@@ -4787,6 +4895,17 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
     return;
   }
   const bool isOnlineActive = GetITGOnlineIsActive();
+  const char* routineCoupleMode = GetRoutineCoupleModeName();
+  if (routineCoupleMode != nullptr) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=stage_finished_begin mode=%s backed_out=%d "
+        "all_failed=%d gave_up=%d autoplay=%d gameplay_seconds=%.6f",
+        routineCoupleMode, bBackedOut ? 1 : 0,
+        STATSMAN->m_CurStageStats.AllFailed() ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_bGaveUp ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_bUsedAutoplay ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_fGameplaySeconds);
+  }
   if (isOnlineActive) {
     OnlineTrace(
         "ITG Online: StageFinished begin backedOut=%d allFailed=%d gaveUp=%d "
@@ -4852,6 +4971,21 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
       pn, STATSMAN->m_CurStageStats.m_bGaveUp,
       STATSMAN->m_CurStageStats.m_bUsedAutoplay);
   STATSMAN->m_CurStageStats.FinalizeScores(false);
+
+  if (routineCoupleMode != nullptr) {
+    const PlayerStageStats& routine =
+        STATSMAN->m_CurStageStats.m_RoutinePlayer;
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay event=stage_finished_finalized mode=%s "
+        "routine_score=%u routine_percent=%.6f routine_failed=%d "
+        "p1_score=%u p1_failed=%d p2_score=%u p2_failed=%d",
+        routineCoupleMode, routine.m_iScore, routine.GetPercentDancePoints(),
+        routine.m_bFailed ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_player[PLAYER_1].m_iScore,
+        STATSMAN->m_CurStageStats.m_player[PLAYER_1].m_bFailed ? 1 : 0,
+        STATSMAN->m_CurStageStats.m_player[PLAYER_2].m_iScore,
+        STATSMAN->m_CurStageStats.m_player[PLAYER_2].m_bFailed ? 1 : 0);
+  }
 
   GAMESTATE->CommitStageStats();
 
@@ -5615,6 +5749,10 @@ Song* ScreenGameplay::GetNextCourseSong() const {
 }
 
 LifeMeter* ScreenGameplay::GetLifeMeter(PlayerNumber pn) {
+  if (IsCurrentStyleSharedSides() && IsValidGameplayPlayer(pn) &&
+      m_pCombinedLifeMeter != nullptr) {
+    return m_pCombinedLifeMeter->GetInnerLifeMeter();
+  }
   PlayerInfo* pi = GetPlayerInfo(pn);
   if (pi == nullptr) {
     return nullptr;

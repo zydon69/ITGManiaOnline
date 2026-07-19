@@ -41,6 +41,7 @@
 #include "RageFileManager.h"
 #include "NotesLoaderSSC.h"
 #include "PlayerNumber.h"
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageUtil.h"
 #include "RageUtil/Regex.h"
@@ -543,6 +544,11 @@ void Steps::CalculateRadarValues(
          ++pn) {
       NoteDataUtil::CalculateRadarValues(
           vParts[pn], fMusicLengthSeconds, timing, m_RadarValues[pn]);
+      LogRoutineCoupleDiagnostics(
+          "component=steps event=radar_calculated steps_type=%s player=%zu "
+          "tracks=%d taps=%d values=%s",
+          m_StepsTypeStr.c_str(), pn, vParts[pn].GetNumTracks(),
+          vParts[pn].GetNumTapNotes(), m_RadarValues[pn].ToString().c_str());
     }
   } else {
     NoteDataUtil::CalculateRadarValues(
@@ -575,8 +581,9 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
   }
   TimingData* timing = this->GetTimingData();
   std::vector<NoteData> splitNoteData;
-  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
-          tempNoteData, splitNoteData, m_StepsType)) {
+  const bool split = NoteDataUtil::SplitCompositeOrStackedNoteData(
+      tempNoteData, splitNoteData, m_StepsType);
+  if (split) {
     FOREACH_PlayerNumber(pn) {
       NoteAnnotationCache cachedAnnotations;
       if (splitNoteData.size() <= static_cast<size_t>(pn)) {
@@ -589,8 +596,14 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
         continue;
       }
       if (splitNoteData[pn].IsEmpty()) {
-        m_TechCounts[pn].MakeUnknown();
+        // An explicitly empty participant part is valid in Couple/Routine.
+        // It has zero techniques; "unknown" is reserved for analysis errors.
         m_NoteAnnotations.push_back(cachedAnnotations);
+        LogRoutineCoupleDiagnostics(
+            "component=steps event=tech_counts steps_type=%s player=%d "
+            "status=empty values=%s",
+            m_StepsTypeStr.c_str(), static_cast<int>(pn),
+            m_TechCounts[pn].ToString().c_str());
         continue;
       }
 
@@ -611,6 +624,11 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
       cachedAnnotations.decompressed = noteAnnotations;
       cachedAnnotations.Compress();
       m_NoteAnnotations.push_back(cachedAnnotations);
+      LogRoutineCoupleDiagnostics(
+          "component=steps event=tech_counts steps_type=%s player=%d "
+          "status=calculated rows=%zu annotations=%zu values=%s",
+          m_StepsTypeStr.c_str(), static_cast<int>(pn), gen.rows.size(),
+          noteAnnotations.size(), m_TechCounts[pn].ToString().c_str());
     }
   } else {
     StepParity::StepParityGenerator gen(&*layout, timing);
@@ -652,13 +670,19 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
     return;
   }
   std::vector<NoteData> vParts;
-  if (NoteDataUtil::SplitCompositeOrStackedNoteData(
-          tempNoteData, vParts, m_StepsType)) {
+  const bool split = NoteDataUtil::SplitCompositeOrStackedNoteData(
+      tempNoteData, vParts, m_StepsType);
+  if (split) {
     measureInfoPerPlayer.resize(NUM_PLAYERS);
     for (std::size_t pn = 0;
          pn < std::min(vParts.size(), std::size_t(NUM_PLAYERS)); ++pn) {
       MeasureInfo::CalculateMeasureInfo(
           vParts[pn], timing, measureInfoPerPlayer[pn]);
+      LogRoutineCoupleDiagnostics(
+          "component=steps event=measure_info steps_type=%s player=%zu "
+          "tracks=%d taps=%d peak_nps=%.6f",
+          m_StepsTypeStr.c_str(), pn, vParts[pn].GetNumTracks(),
+          vParts[pn].GetNumTapNotes(), measureInfoPerPlayer[pn].peakNps);
     }
   } else {
     measureInfoPerPlayer.resize(1);

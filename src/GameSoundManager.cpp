@@ -43,6 +43,7 @@
 #include "SongUtil.h"
 #include "StdString.h"
 #include "Steps.h"
+#include "Style.h"
 #include "TimingData.h"
 #include "TimingSegments.h"
 #include "arch/Sound/RageSoundDriver.h"
@@ -1865,6 +1866,17 @@ void GameSoundManager::LogPlayOnceDiagnostics(const std::string& reason) {
 }
 
 float GameSoundManager::GetPlayerBalance(PlayerNumber pn) {
+  if (GAMESTATE != nullptr && pn >= PLAYER_1 && pn < NUM_PlayerNumber) {
+    const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+    const Style* style =
+        master >= PLAYER_1 && master < NUM_PlayerNumber
+            ? GAMESTATE->GetCurrentStyle(master)
+            : nullptr;
+    if (style != nullptr &&
+        style->m_StyleType == StyleType_TwoPlayersSharedSides) {
+      return 0.0f;
+    }
+  }
   /* If two players are active, play sounds on each players' side. */
   if (GAMESTATE != nullptr && pn >= PLAYER_1 && pn < NUM_PlayerNumber &&
       GAMESTATE->GetNumPlayersEnabled() == 2) {

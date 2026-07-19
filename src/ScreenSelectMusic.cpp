@@ -34,6 +34,7 @@
 #include "MusicWheelItem.h"
 #include "OptionsList.h"
 #include "PlayerNumber.h"
+#include "PerfDiagnostics.h"
 #include "PlayerOptions.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -1849,8 +1850,11 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
        */
 
       if (!GAMESTATE->IsCourseMode() && GAMESTATE->GetNumSidesJoined() == 2) {
-        bool bSelectedRoutineSteps[NUM_PLAYERS], bAnySelectedRoutine = false;
+        bool bSelectedRoutineSteps[NUM_PLAYERS], bSelectedCoupleSteps[NUM_PLAYERS];
+        bool bAnySelectedRoutine = false;
+        bool bAnySelectedCouple = false;
         ZERO(bSelectedRoutineSteps);
+        ZERO(bSelectedCoupleSteps);
         bool bSelectedSameSteps = GAMESTATE->m_pCurSteps[PLAYER_1] ==
                                   GAMESTATE->m_pCurSteps[PLAYER_2];
 
@@ -1865,7 +1869,29 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
 
           bSelectedRoutineSteps[p] =
               sti.m_StepsTypeCategory == StepsTypeCategory_Routine;
+          bSelectedCoupleSteps[p] =
+              sti.m_StepsTypeCategory == StepsTypeCategory_Couple;
           bAnySelectedRoutine |= bSelectedRoutineSteps[p];
+          bAnySelectedCouple |= bSelectedCoupleSteps[p];
+        }
+
+        if (bAnySelectedRoutine || bAnySelectedCouple) {
+          LogRoutineCoupleDiagnostics(
+              "component=select_music event=steps_confirm input_player=%d "
+              "timer=%d mode=%s p1_steps=%d p2_steps=%d same_steps=%d "
+              "p1_ready=%d p2_ready=%d p1_routine=%d p2_routine=%d "
+              "p1_couple=%d p2_couple=%d",
+              static_cast<int>(pn), bInitiatedByMenuTimer ? 1 : 0,
+              bAnySelectedRoutine ? "routine" : "couple",
+              GAMESTATE->m_pCurSteps[PLAYER_1] != nullptr ? 1 : 0,
+              GAMESTATE->m_pCurSteps[PLAYER_2] != nullptr ? 1 : 0,
+              bSelectedSameSteps ? 1 : 0,
+              m_bStepsChosen[PLAYER_1] ? 1 : 0,
+              m_bStepsChosen[PLAYER_2] ? 1 : 0,
+              bSelectedRoutineSteps[PLAYER_1] ? 1 : 0,
+              bSelectedRoutineSteps[PLAYER_2] ? 1 : 0,
+              bSelectedCoupleSteps[PLAYER_1] ? 1 : 0,
+              bSelectedCoupleSteps[PLAYER_2] ? 1 : 0);
         }
 
         if (bAnySelectedRoutine) {
@@ -1891,10 +1917,12 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
               GAMESTATE->m_pCurSteps[p].Set(sharedRoutineSteps);
               m_bStepsChosen[p] = true;
             }
-            LOG->Trace(
-                "Routine timer fallback synchronized both players to steps "
-                "%p.",
-                static_cast<void*>(sharedRoutineSteps));
+            LogRoutineCoupleDiagnostics(
+                "component=select_music event=timer_sync mode=routine "
+                "steps_type=%s difficulty=%s meter=%d",
+                StepsTypeToString(sharedRoutineSteps->m_StepsType).c_str(),
+                DifficultyToString(sharedRoutineSteps->GetDifficulty()).c_str(),
+                sharedRoutineSteps->GetMeter());
 
             break;
           }
@@ -1911,6 +1939,10 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
               /* Unready the other player if they selected Routine
                * steps, but we didn't. */
               if (bSelectedRoutineSteps[other]) {
+                LogRoutineCoupleDiagnostics(
+                    "component=select_music event=unready player=%d reason="
+                    "routine_chart_mismatch requested_by=%d",
+                    static_cast<int>(other), static_cast<int>(pn));
                 m_bStepsChosen[other] = false;
                 bAllPlayersDoneSelectingSteps =
                     false;  // if the timer ran out, we handled it earlier
@@ -1924,6 +1956,10 @@ bool ScreenSelectMusic::MenuStart(const InputEventPlus& input) {
               } else if (bSelectedRoutineSteps[pn]) {
                 /* They selected non-Routine steps, so we can't
                  * select Routine steps. */
+                LogRoutineCoupleDiagnostics(
+                    "component=select_music event=confirm_rejected player=%d "
+                    "reason=other_player_non_routine other=%d",
+                    static_cast<int>(pn), static_cast<int>(other));
                 return false;
               }
             }

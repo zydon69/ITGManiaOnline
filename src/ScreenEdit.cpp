@@ -2555,10 +2555,16 @@ bool ScreenEdit::Input(const InputEventPlus& input) {
 }
 
 static void ShiftToRightSide(int& iCol, int iNumTracks) {
-  switch (GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-              ->m_StyleType) {
-    DEFAULT_FAIL(GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber())
-                     ->m_StyleType);
+  if (GAMESTATE == nullptr) {
+    return;
+  }
+  const Style* style =
+      GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber());
+  if (style == nullptr) {
+    return;
+  }
+  switch (style->m_StyleType) {
+    DEFAULT_FAIL(style->m_StyleType);
     case StyleType_OnePlayerOneSide:
       break;
     case StyleType_TwoPlayersTwoSides:
@@ -6024,7 +6030,8 @@ void ScreenEdit::HandleAlterMenuChoice(
           nd, r, nf.m_iBeginMarker, nf.m_iEndMarker) {
         for (int t = 0; t < nd.GetNumTracks(); t++) {
           const TapNote& tn = nd.GetTapNote(t, r);
-          if (tn.type != TapNoteType_Empty) {
+          if (tn.type != TapNoteType_Empty &&
+              (tn.pn == PLAYER_1 || tn.pn == PLAYER_2)) {
             TapNote nTap = tn;
             nTap.pn = (tn.pn == PLAYER_1 ? PLAYER_2 : PLAYER_1);
             m_NoteDataEdit.SetTapNote(t, r, nTap);
@@ -6041,6 +6048,15 @@ void ScreenEdit::HandleAlterMenuChoice(
       NoteData& nd = this->m_NoteDataEdit;
       NoteField& nf = this->m_NoteFieldEdit;
       int tracks = nd.GetNumTracks();
+      const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
+      Steps* currentSteps =
+          master >= PLAYER_1 && master < NUM_PlayerNumber
+              ? GAMESTATE->m_pCurSteps[master].Get()
+              : nullptr;
+      if (currentSteps == nullptr) {
+        LOG->Warn("Routine mirror ignored because current steps are missing.");
+        break;
+      }
       FOREACH_NONEMPTY_ROW_ALL_TRACKS_RANGE(
           nd, r, nf.m_iBeginMarker, nf.m_iEndMarker) {
         for (int t = 0; t < tracks; t++) {
@@ -6048,7 +6064,7 @@ void ScreenEdit::HandleAlterMenuChoice(
           if (tn.type != TapNoteType_Empty && tn.pn == oPN) {
             TapNote nTap = tn;
             nTap.pn = nPN;
-            StepsType curType = GAMESTATE->m_pCurSteps[PLAYER_1]->m_StepsType;
+            StepsType curType = currentSteps->m_StepsType;
             // TODO: Find a better way to do this.
             if (curType == StepsType_dance_routine) {
               nTrack = tracks - t - 1;
@@ -6088,6 +6104,21 @@ void ScreenEdit::HandleAlterMenuChoice(
                   FAIL_M(ssprintf("Invalid column %d for pump-routine", t));
                   break;
               }
+            }
+            if (nTrack < 0 || nTrack >= tracks) {
+              LOG->Warn(
+                  "Routine mirror ignored invalid destination track %i.",
+                  nTrack);
+              continue;
+            }
+            const TapNote& destination = m_NoteDataEdit.GetTapNote(nTrack, r);
+            if (destination.type != TapNoteType_Empty &&
+                destination.pn != nPN) {
+              LOG->Warn(
+                  "Routine mirror preserved occupied destination at row %i "
+                  "track %i.",
+                  r, nTrack);
+              continue;
             }
             m_NoteDataEdit.SetTapNote(nTrack, r, nTap);
           }

@@ -21,7 +21,10 @@
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
-local pn = ToEnumShortString(player)
+local routine_shared = IsRoutine and IsRoutine()
+local source_player = routine_shared and GAMESTATE:GetMasterPlayerNumber() or player
+if routine_shared and player ~= source_player then return end
+local pn = ToEnumShortString(source_player)
 local mods = SL[pn].ActiveModifiers
 
 local judgments = {}
@@ -32,13 +35,30 @@ for i=1,GAMESTATE:GetCurrentStyle():ColumnsPerPlayer() do
 end
 
 return Def.Actor{
+	OnCommand=function()
+		if RoutineCoupleTrace and routine_shared then
+			RoutineCoupleTrace("event=collector_start collector=column_judgments source="
+				.. tostring(ToEnumShortString(source_player)) .. " columns=" .. tostring(#judgments))
+		end
+	end,
 	OffCommand=function(self)
-		local storage = SL[ToEnumShortString(player)].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
+		local stage_index = SL.Global.Stages.PlayedThisGame + 1
+		local storage = SL[pn].Stages.Stats[stage_index]
 		storage.column_judgments = judgments
+		if routine_shared then
+			for _, target in ipairs({"P1", "P2"}) do
+				SL[target].Stages.Stats[stage_index].column_judgments = judgments
+			end
+		end
+		if RoutineCoupleTrace and routine_shared then
+			RoutineCoupleTrace("event=collector_complete collector=column_judgments source="
+				.. tostring(ToEnumShortString(source_player)) .. " columns=" .. tostring(#judgments))
+		end
 	end,
 	JudgmentMessageCommand=function(self, params)
+		if not params or params.Player ~= source_player or not params.Notes then return end
 		local health_state = GAMESTATE:GetPlayerState(params.Player):GetHealthState()
-		if params.Player == player and params.Notes and health_state ~= 'HealthState_Dead' then
+		if health_state ~= 'HealthState_Dead' then
 			for col,tapnote in pairs(params.Notes) do
 				local tnt = ToEnumShortString(tapnote:GetTapNoteType())
 
@@ -52,7 +72,7 @@ return Def.Actor{
 						local etns = ToEnumShortString(params.EarlyTapNoteScore)
 						
 						if etns ~= "None" then
-							if IsW0Judgment(params, player) then
+							if IsW0Judgment(params, source_player) then
 								judgments[col]["Early"]["W0"] = judgments[col]["Early"]["W0"] + 1
 							elseif tns ~= "W4" and tns ~= "W5" and tns ~= "Miss" then
 								judgments[col]["Early"][tns] = judgments[col]["Early"][tns] + 1
@@ -64,7 +84,7 @@ return Def.Actor{
 						end
 					end
 
-					if mods.ShowFaPlusWindow and mods.ShowFaPlusPane and IsW0Judgment(params, player) then
+					if mods.ShowFaPlusWindow and mods.ShowFaPlusPane and IsW0Judgment(params, source_player) then
 						tns = "W0"
 					end
 					judgments[col][tns] = judgments[col][tns] + 1

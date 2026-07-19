@@ -40,6 +40,7 @@
 #include "NoteData.h"
 #include "NoteSkinManager.h"
 #include "PlayerNumber.h"
+#include "PerfDiagnostics.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "Preference.h"
@@ -1067,6 +1068,55 @@ void GameState::BeginStage() {
   ResetStageStatistics();
   AdjustSync::ResetOriginalSyncData();
 
+  const PlayerNumber sharedMaster = GetMasterPlayerNumber();
+  const Style* sharedStyle =
+      IsValidPlayerNumber(sharedMaster) ? GetCurrentStyle(sharedMaster)
+                                        : nullptr;
+  const bool isSharedSides =
+      sharedStyle != nullptr &&
+      sharedStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
+  bool isCouple = false;
+  FOREACH_PlayerNumber(pn) {
+    const Steps* steps = m_pCurSteps[pn];
+    if (steps == nullptr || GAMEMAN == nullptr) {
+      continue;
+    }
+    const StepsTypeInfo& stepsTypeInfo =
+        GAMEMAN->GetStepsTypeInfo(steps->m_StepsType);
+    isCouple = isCouple ||
+               stepsTypeInfo.m_StepsTypeCategory == StepsTypeCategory_Couple;
+  }
+  if (isSharedSides || isCouple) {
+    LogRoutineCoupleDiagnostics(
+        "component=game_state event=begin_stage mode=%s master=%d style=%s "
+        "style_type=%s sides_joined=%d p1_steps=%d p2_steps=%d same_steps=%d",
+        isSharedSides ? "routine" : "couple",
+        static_cast<int>(sharedMaster),
+        sharedStyle != nullptr && sharedStyle->m_szName != nullptr
+            ? sharedStyle->m_szName
+            : "none",
+        sharedStyle != nullptr
+            ? StyleTypeToString(sharedStyle->m_StyleType).c_str()
+            : "none",
+        GetNumSidesJoined(), m_pCurSteps[PLAYER_1] != nullptr ? 1 : 0,
+        m_pCurSteps[PLAYER_2] != nullptr ? 1 : 0,
+        m_pCurSteps[PLAYER_1] == m_pCurSteps[PLAYER_2] ? 1 : 0);
+  }
+  if (isSharedSides && m_pPlayerState[sharedMaster] != nullptr) {
+    const PlayerOptions& sharedOptions =
+        m_pPlayerState[sharedMaster]->m_PlayerOptions.GetPreferred();
+    FOREACH_PlayerNumber(pn) {
+      if (pn == sharedMaster || m_pPlayerState[pn] == nullptr) {
+        continue;
+      }
+      m_pPlayerState[pn]->m_PlayerOptions.GetPreferred() = sharedOptions;
+      LogRoutineCoupleDiagnostics(
+          "component=game_state event=options_synchronized master=%d "
+          "participant=%d",
+          static_cast<int>(sharedMaster), static_cast<int>(pn));
+    }
+  }
+
   if (!ARE_STAGE_PLAYER_MODS_FORCED) {
     FOREACH_PlayerNumber(p) {
       if (m_pPlayerState[p] == nullptr) {
@@ -1117,14 +1167,12 @@ void GameState::BeginStage() {
         routineDisqualified = true;
       }
     }
-    const PlayerNumber master = GetMasterPlayerNumber();
-    const Style* style =
-        IsValidPlayerNumber(master) ? GetCurrentStyle(master) : nullptr;
-    if (routineDisqualified && style != nullptr &&
-        style->m_StyleType == StyleType_TwoPlayersSharedSides) {
+    if (routineDisqualified && isSharedSides) {
       STATSMAN->m_CurStageStats.m_RoutinePlayer.m_bDisqualified = true;
-      LOG->Trace(
-          "Routine shared score marked disqualified by participant options.");
+      LogRoutineCoupleDiagnostics(
+          "component=game_state event=shared_score_disqualified "
+          "reason=participant_options master=%d",
+          static_cast<int>(sharedMaster));
     }
   }
   m_bEarnedExtraStage = false;

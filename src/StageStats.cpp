@@ -15,6 +15,7 @@
 #include "HighScore.h"
 #include "LuaManager.h"
 #include "PlayerNumber.h"
+#include "PerfDiagnostics.h"
 #include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -373,6 +374,14 @@ void StageStats::AddStats(const StageStats& other) {
     }
   }
   if (HasRecordedPlayerStats(other.m_RoutinePlayer)) {
+    LogRoutineCoupleDiagnostics(
+        "component=stage_stats event=aggregate_routine score_before=%u "
+        "score_add=%u songs_before=%d songs_add=%d failed_before=%d "
+        "failed_add=%d",
+        m_RoutinePlayer.m_iScore, other.m_RoutinePlayer.m_iScore,
+        m_RoutinePlayer.m_iSongsPlayed, other.m_RoutinePlayer.m_iSongsPlayed,
+        m_RoutinePlayer.m_bFailed ? 1 : 0,
+        other.m_RoutinePlayer.m_bFailed ? 1 : 0);
     m_RoutinePlayer.AddStats(other.m_RoutinePlayer);
   }
 }
@@ -432,13 +441,18 @@ void StageStats::SynchronizeRoutineScoreToPlayers() {
     target.m_bDisqualified = m_RoutinePlayer.m_bDisqualified;
   }
 
-  LOG->Trace(
-      "Routine shared score synchronized to participants: master=%i score=%u "
-      "percent=%.6f failed=%d disqualified=%d.",
+  LogRoutineCoupleDiagnostics(
+      "component=stage_stats event=synchronize_routine master=%d score=%u "
+      "percent=%.6f actual_dp=%d possible_dp=%d failed=%d disqualified=%d "
+      "songs=%d steps=%d p1_score=%u p2_score=%u",
       static_cast<int>(master), m_RoutinePlayer.m_iScore,
       m_RoutinePlayer.GetPercentDancePoints(),
+      m_RoutinePlayer.m_iActualDancePoints,
+      m_RoutinePlayer.m_iPossibleDancePoints,
       m_RoutinePlayer.m_bFailed ? 1 : 0,
-      m_RoutinePlayer.m_bDisqualified ? 1 : 0);
+      m_RoutinePlayer.m_bDisqualified ? 1 : 0,
+      m_RoutinePlayer.m_iSongsPlayed, m_RoutinePlayer.m_iStepsPlayed,
+      m_player[PLAYER_1].m_iScore, m_player[PLAYER_2].m_iScore);
 }
 
 bool StageStats::OnePassed() const {
@@ -745,6 +759,32 @@ void StageStats::FinalizeScores(bool bSummary) {
   // generate a HighScore for each player
   bool bPlayerScoreFilled[NUM_PLAYERS] = {};
   bool bMultiPlayerScoreFilled[NUM_MultiPlayer] = {};
+  const PlayerNumber master = m_RoutinePlayer.m_player_number;
+  const Style* pMasterStyle = m_RoutinePlayer.m_pStyle;
+  const bool bRoutineSharedStyle =
+      pMasterStyle != nullptr &&
+      pMasterStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
+  if (bRoutineSharedStyle) {
+    LogRoutineCoupleDiagnostics(
+        "component=stage_stats event=finalize_begin mode=routine summary=%d "
+        "master=%d score=%u percent=%.6f actual_dp=%d possible_dp=%d "
+        "failed=%d disqualified=%d songs=%d steps=%d",
+        bSummary ? 1 : 0, static_cast<int>(master),
+        m_RoutinePlayer.m_iScore, m_RoutinePlayer.GetPercentDancePoints(),
+        m_RoutinePlayer.m_iActualDancePoints,
+        m_RoutinePlayer.m_iPossibleDancePoints,
+        m_RoutinePlayer.m_bFailed ? 1 : 0,
+        m_RoutinePlayer.m_bDisqualified ? 1 : 0,
+        m_RoutinePlayer.m_iSongsPlayed, m_RoutinePlayer.m_iStepsPlayed);
+    FOREACH_PlayerNumber(pn) {
+      m_player[pn].m_HighScore.Unset();
+      m_player[pn].m_iPersonalHighScoreIndex = -1;
+      m_player[pn].m_iMachineHighScoreIndex = -1;
+    }
+    m_RoutinePlayer.m_HighScore.Unset();
+    m_RoutinePlayer.m_iPersonalHighScoreIndex = -1;
+    m_RoutinePlayer.m_iMachineHighScoreIndex = -1;
+  }
   const bool bCourseMode = IsCoursePlayMode(playMode);
   if (GAMESTATE->IsCourseMode() != bCourseMode) {
     LOG->Warn(
@@ -766,6 +806,9 @@ void StageStats::FinalizeScores(bool bSummary) {
   // whether or not to save scores when the stage was failed depends on if this
   // is a course or not... it's handled below in the switch.
   FOREACH_PlayerNumber(p) {
+    if (bRoutineSharedStyle) {
+      continue;
+    }
     if (!HasRecordedPlayerStats(m_player[p])) {
       continue;
     }
@@ -792,11 +835,6 @@ void StageStats::FinalizeScores(bool bSummary) {
         sSongOptions, sMachineGuid, PREFSMAN->m_iProductID);
     bMultiPlayerScoreFilled[mp] = true;
   }
-  const PlayerNumber master = m_RoutinePlayer.m_player_number;
-  const Style* pMasterStyle = m_RoutinePlayer.m_pStyle;
-  const bool bRoutineSharedStyle =
-      pMasterStyle != nullptr &&
-      pMasterStyle->m_StyleType == StyleType_TwoPlayersSharedSides;
   if (bRoutineSharedStyle && IsValidPlayerNumber(master) &&
       HasRecordedPlayerStats(m_RoutinePlayer)) {
     m_player[master].m_bFailed = m_RoutinePlayer.m_bFailed;
@@ -813,11 +851,12 @@ void StageStats::FinalizeScores(bool bSummary) {
 
     if (m_RoutinePlayer.m_bFailed) {
       bPlayerScoreFilled[master] = false;
+      m_player[master].m_HighScore.Unset();
       m_player[master].m_iPersonalHighScoreIndex = -1;
       m_player[master].m_iMachineHighScoreIndex = -1;
-      LOG->Trace(
-          "Routine shared high score skipped: master=%i reason=failed "
-          "score=%u percent=%.6f steps_type=%s.",
+      LogRoutineCoupleDiagnostics(
+          "component=stage_stats event=high_score_skipped mode=routine "
+          "master=%d reason=failed score=%u percent=%.6f steps_type=%s",
           static_cast<int>(master), m_RoutinePlayer.m_iScore,
           m_RoutinePlayer.GetPercentDancePoints(), routineStepsType.c_str());
     } else if (CanFillHighScore(master, "StageStats::FinalizeScores routine")) {
@@ -833,13 +872,14 @@ void StageStats::FinalizeScores(bool bSummary) {
           PREFSMAN->m_iProductID);
       m_player[master].m_HighScore.SetName(RANKING_TO_FILL_IN_MARKER[master]);
       bPlayerScoreFilled[master] = true;
-      LOG->Trace(
-          "Routine shared high score prepared: master=%i score=%u "
-          "percent=%.6f steps_type=%s p1_guid=%s p2_guid=%s.",
+      LogRoutineCoupleDiagnostics(
+          "component=stage_stats event=high_score_prepared mode=routine "
+          "master=%d score=%u percent=%.6f steps_type=%s p1_profile=%d "
+          "p2_profile=%d",
           static_cast<int>(master), m_RoutinePlayer.m_iScore,
           m_RoutinePlayer.GetPercentDancePoints(), routineStepsType.c_str(),
-          routinePlayerGuids[PLAYER_1].c_str(),
-          routinePlayerGuids[PLAYER_2].c_str());
+          routinePlayerGuids[PLAYER_1].empty() ? 0 : 1,
+          routinePlayerGuids[PLAYER_2].empty() ? 0 : 1);
     }
   }
 
@@ -1002,12 +1042,28 @@ void StageStats::FinalizeScores(bool bSummary) {
   }
 
   if (bRoutineSharedStyle && IsValidPlayerNumber(master) &&
-      HasRecordedPlayerStats(m_RoutinePlayer)) {
+      HasRecordedPlayerStats(m_RoutinePlayer) &&
+      bPlayerScoreFilled[master]) {
     m_RoutinePlayer.m_HighScore = m_player[master].m_HighScore;
     m_RoutinePlayer.m_iPersonalHighScoreIndex =
         m_player[master].m_iPersonalHighScoreIndex;
     m_RoutinePlayer.m_iMachineHighScoreIndex =
         m_player[master].m_iMachineHighScoreIndex;
+  } else if (bRoutineSharedStyle) {
+    m_RoutinePlayer.m_HighScore.Unset();
+    m_RoutinePlayer.m_iPersonalHighScoreIndex = -1;
+    m_RoutinePlayer.m_iMachineHighScoreIndex = -1;
+  }
+
+  if (bRoutineSharedStyle) {
+    LogRoutineCoupleDiagnostics(
+        "component=stage_stats event=finalize_complete mode=routine "
+        "master=%d filled=%d personal_index=%d machine_index=%d "
+        "high_score_empty=%d",
+        static_cast<int>(master), bPlayerScoreFilled[master] ? 1 : 0,
+        m_RoutinePlayer.m_iPersonalHighScoreIndex,
+        m_RoutinePlayer.m_iMachineHighScoreIndex,
+        m_RoutinePlayer.m_HighScore.IsEmpty() ? 1 : 0);
   }
 
   LOG->Trace("done saving stats and high scores");

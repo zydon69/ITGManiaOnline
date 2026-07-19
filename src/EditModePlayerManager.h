@@ -49,6 +49,6 @@ class EditModePlayerManager {
  private:
   // All players that the manager is looking at. Indexable by PlayerNumber.
   std::unordered_map<PlayerNumber, std::shared_ptr<PlayerPlus>> players_;
-  bool center_;
+  bool center_ = false;
 };
 #endif

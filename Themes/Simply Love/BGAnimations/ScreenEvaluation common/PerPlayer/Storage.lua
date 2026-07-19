@@ -89,5 +89,17 @@ return Def.Actor{
 		end
 
 		storage.timingwindows = SL[pn].ActiveModifiers.TimingWindows
+		local currentStyle = GAMESTATE and GAMESTATE:GetCurrentStyle() or nil
+		local currentStyleName = currentStyle and currentStyle:GetName() or ""
+		if RoutineCoupleTrace and (IsRoutine and IsRoutine() or currentStyleName:match("couple")) then
+			RoutineCoupleTrace("event=evaluation_storage player=" .. tostring(pn)
+				.. " routine=" .. tostring(IsRoutine and IsRoutine() or false)
+				.. " grade=" .. tostring(storage.grade)
+				.. " itg=" .. tostring(storage.score)
+				.. " ex=" .. tostring(storage.exscore)
+				.. " hardex=" .. tostring(storage.hardexscore)
+				.. " miss=" .. tostring(storage.judgments.Miss)
+				.. " steps=" .. tostring(storage.steps))
+		end
 	end
 }

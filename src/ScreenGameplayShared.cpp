@@ -5,6 +5,7 @@
 #include "Difficulty.h"
 #include "GameState.h"
 #include "InputEventPlus.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "RageLog.h"
 #include "Screen.h"
@@ -36,15 +37,16 @@ void ScreenGameplayShared::FillPlayerInfo(
     return;
   }
 
-  const PlayerNumber other = (master == PLAYER_1 ? PLAYER_2 : PLAYER_1);
-
-  /* The master player is where all of the real work takes place.  The other
-   * player exists only so we have a place to split stats out into at the end.
-   */
+  /* Routine has one chart, one score keeper, and one life meter.  Participant
+   * statistics have dedicated StageStats slots and do not require a second
+   * Player actor.  Loading an invisible second actor would still update and
+   * judge the full chart, producing duplicate misses, offsets and keysounds. */
   vPlayerInfoOut[master].Load(
       master, MultiPlayer_Invalid, true, Difficulty_Invalid);
-  vPlayerInfoOut[other].Load(
-      other, MultiPlayer_Invalid, false, Difficulty_Invalid);
+  LogRoutineCoupleDiagnostics(
+      "component=gameplay_shared event=player_info_loaded master=%d infos=%zu "
+      "active_actor_count=1",
+      static_cast<int>(master), vPlayerInfoOut.size());
 }
 
 PlayerInfo* ScreenGameplayShared::GetPlayerInfoForInput(
@@ -58,8 +60,19 @@ PlayerInfo* ScreenGameplayShared::GetPlayerInfoForInput(
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
   if (!IsSharedGameplayPlayer(master) ||
       static_cast<size_t>(master) >= m_vPlayerInfo.size()) {
+    LogRoutineCoupleDiagnostics(
+        "component=gameplay_shared event=input_route_rejected source=%d "
+        "master=%d infos=%zu",
+        static_cast<int>(iep.pn), static_cast<int>(master),
+        m_vPlayerInfo.size());
     return nullptr;
   }
+  LogRoutineCoupleDiagnostics(
+      "component=gameplay_shared event=input_routed source=%d master=%d "
+      "controller=%d button=%d type=%d",
+      static_cast<int>(iep.pn), static_cast<int>(master),
+      static_cast<int>(iep.GameI.controller),
+      static_cast<int>(iep.GameI.button), static_cast<int>(iep.type));
   return &m_vPlayerInfo[master];
 }
 

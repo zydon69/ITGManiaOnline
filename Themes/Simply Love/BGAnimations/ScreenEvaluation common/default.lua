@@ -51,11 +51,24 @@ end
 
 local t = Def.ActorFrame{Name="ScreenEval Common"}
 
+local EvaluationStyle = GAMESTATE and GAMESTATE:GetCurrentStyle() or nil
+local EvaluationStyleName = EvaluationStyle and EvaluationStyle:GetName() or ""
+if IsRoutine and IsRoutine() and RoutineCoupleTrace then
+	RoutineCoupleTrace("event=evaluation_construct mode=routine players=" .. tostring(#Players)
+		.. " panes=" .. tostring(NumPanes))
+elseif EvaluationStyleName:match("couple") and RoutineCoupleTrace then
+	RoutineCoupleTrace("event=evaluation_construct mode=couple players=" .. tostring(#Players)
+		.. " panes=" .. tostring(NumPanes))
+end
+
 if SL.Global.GameMode ~= "Casual" then
 	-- add a lua-based InputCalllback to this screen so that we can navigate
 	-- through multiple panes of information; pass a reference to this ActorFrame
 	-- and the number of panes there are to InputHandler.lua
 	t.OnCommand=function(self)
+		if RoutineCoupleTrace and IsRoutine and IsRoutine() then
+			RoutineCoupleTrace("event=evaluation_on mode=routine players=" .. tostring(#Players))
+		end
 		InputHandler = LoadActor("./InputHandler.lua", {self, NumPanes})
 		EventOverlayInputHandler = LoadActor("./Shared/EventInputHandler.lua")
 		local screen = SCREENMAN:GetTopScreen()

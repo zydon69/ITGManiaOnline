@@ -4,8 +4,11 @@
 
 #include "Attack.h"
 #include "GameState.h"
+#include "NoteData.h"
 #include "NoteTypes.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
+#include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "RageLog.h"
 #include "ScoreKeeper.h"
@@ -22,7 +25,12 @@ bool IsValidSharedScorePlayer(PlayerNumber pn) {
  * shouldn't do anything. */
 ScoreKeeperShared::ScoreKeeperShared(
     PlayerState* pPlayerState, PlayerStageStats* pPlayerStageStats)
-    : ScoreKeeperNormal(pPlayerState, pPlayerStageStats) {}
+    : ScoreKeeperNormal(pPlayerState, pPlayerStageStats) {
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=construct player_state_present=%d "
+      "stage_stats_present=%d",
+      pPlayerState != nullptr ? 1 : 0, pPlayerStageStats != nullptr ? 1 : 0);
+}
 
 bool ScoreKeeperShared::IsMasterScoreKeeper() const {
   if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
@@ -57,6 +65,9 @@ void ScoreKeeperShared::Load(
   if (!IsMasterScoreKeeper()) {
     return;
   }
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=load songs=%zu steps=%zu modifiers=%zu",
+      apSongs.size(), apSteps.size(), asModifiers.size());
   ScoreKeeperNormal::Load(apSongs, apSteps, asModifiers);
 }
 
@@ -80,6 +91,12 @@ void ScoreKeeperShared::OnNextSong(
   if (!IsMasterScoreKeeper()) {
     return;
   }
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=next_song course_index=%d "
+      "steps_present=%d note_data_present=%d tracks=%d",
+      iSongInCourseIndex, pSteps != nullptr ? 1 : 0,
+      pNoteData != nullptr ? 1 : 0,
+      pNoteData != nullptr ? pNoteData->GetNumTracks() : 0);
   ScoreKeeperNormal::OnNextSong(iSongInCourseIndex, pSteps, pNoteData);
 }
 
@@ -88,6 +105,15 @@ void ScoreKeeperShared::HandleTapScore(const TapNote& tn) {
     return;
   }
   ScoreKeeperNormal::HandleTapScore(tn);
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=tap judgment=%s offset_ms=%.3f "
+      "score=%u actual_dp=%d possible_dp=%d combo=%u miss_combo=%u",
+      TapNoteScoreToString(tn.result.tns).c_str(),
+      tn.result.fTapNoteOffset * 1000.0f, m_pPlayerStageStats->m_iScore,
+      m_pPlayerStageStats->m_iActualDancePoints,
+      m_pPlayerStageStats->m_iCurPossibleDancePoints,
+      m_pPlayerStageStats->m_iCurCombo,
+      m_pPlayerStageStats->m_iCurMissCombo);
 }
 
 void ScoreKeeperShared::HandleTapRowScore(const NoteData& nd, int iRow) {
@@ -95,6 +121,15 @@ void ScoreKeeperShared::HandleTapRowScore(const NoteData& nd, int iRow) {
     return;
   }
   ScoreKeeperNormal::HandleTapRowScore(nd, iRow);
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=tap_row row=%d beat=%.6f tracks=%d "
+      "score=%u actual_dp=%d possible_dp=%d combo=%u miss_combo=%u",
+      iRow, NoteRowToBeat(iRow), nd.GetNumTracks(),
+      m_pPlayerStageStats->m_iScore,
+      m_pPlayerStageStats->m_iActualDancePoints,
+      m_pPlayerStageStats->m_iCurPossibleDancePoints,
+      m_pPlayerStageStats->m_iCurCombo,
+      m_pPlayerStageStats->m_iCurMissCombo);
 }
 
 void ScoreKeeperShared::HandleHoldScore(const TapNote& tn) {
@@ -102,6 +137,14 @@ void ScoreKeeperShared::HandleHoldScore(const TapNote& tn) {
     return;
   }
   ScoreKeeperNormal::HandleHoldScore(tn);
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=hold judgment=%s tap=%s score=%u "
+      "actual_dp=%d possible_dp=%d",
+      HoldNoteScoreToString(tn.HoldResult.hns).c_str(),
+      TapNoteScoreToString(tn.result.tns).c_str(),
+      m_pPlayerStageStats->m_iScore,
+      m_pPlayerStageStats->m_iActualDancePoints,
+      m_pPlayerStageStats->m_iCurPossibleDancePoints);
 }
 
 void ScoreKeeperShared::HandleHoldActiveSeconds(float fMusicSecondsHeld) {
@@ -119,6 +162,13 @@ void ScoreKeeperShared::HandleHoldCheckpointScore(
   }
   ScoreKeeperNormal::HandleHoldCheckpointScore(
       nd, iRow, iNumHoldsHeldThisRow, iNumHoldsMissedThisRow);
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=hold_checkpoint row=%d beat=%.6f held=%d "
+      "missed=%d score=%u actual_dp=%d possible_dp=%d",
+      iRow, NoteRowToBeat(iRow), iNumHoldsHeldThisRow,
+      iNumHoldsMissedThisRow, m_pPlayerStageStats->m_iScore,
+      m_pPlayerStageStats->m_iActualDancePoints,
+      m_pPlayerStageStats->m_iCurPossibleDancePoints);
 }
 
 void ScoreKeeperShared::HandleTapScoreNone() {
@@ -126,6 +176,14 @@ void ScoreKeeperShared::HandleTapScoreNone() {
     return;
   }
   ScoreKeeperNormal::HandleTapScoreNone();
+  LogRoutineCoupleDiagnostics(
+      "component=scorekeeper event=tap_none score=%u actual_dp=%d "
+      "possible_dp=%d combo=%u miss_combo=%u",
+      m_pPlayerStageStats->m_iScore,
+      m_pPlayerStageStats->m_iActualDancePoints,
+      m_pPlayerStageStats->m_iCurPossibleDancePoints,
+      m_pPlayerStageStats->m_iCurCombo,
+      m_pPlayerStageStats->m_iCurMissCombo);
 }
 
 /*

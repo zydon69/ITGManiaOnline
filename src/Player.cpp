@@ -36,6 +36,7 @@
 #include "PlayerAI.h"
 #include "PlayerNumber.h"
 #include "PlayerOptions.h"
+#include "PerfDiagnostics.h"
 #include "PlayerState.h"
 #include "Preference.h"
 #include "PrefsManager.h"
@@ -113,6 +114,24 @@ static const float PlayerReadBpmFallback = 200.0f;
 
 static bool IsValidPlayerNumberForPlayer(PlayerNumber pn) {
   return pn >= PLAYER_1 && pn < NUM_PLAYERS;
+}
+
+static const char* GetPlayerRoutineCoupleMode(PlayerNumber pn) {
+  if (GAMESTATE == nullptr || !IsValidPlayerNumberForPlayer(pn)) {
+    return nullptr;
+  }
+  const Style* style = GAMESTATE->GetCurrentStyle(pn);
+  if (style != nullptr &&
+      style->m_StyleType == StyleType_TwoPlayersSharedSides) {
+    return "routine";
+  }
+  const Steps* steps = GAMESTATE->m_pCurSteps[pn];
+  if (steps != nullptr && GAMEMAN != nullptr &&
+      GAMEMAN->GetStepsTypeInfo(steps->m_StepsType).m_StepsTypeCategory ==
+          StepsTypeCategory_Couple) {
+    return "couple";
+  }
+  return nullptr;
 }
 
 static void AddPlayerCaloriesSaturated(float& total, float calories) {
@@ -2860,6 +2879,26 @@ void Player::DoTapScoreNone() {
         "SRC_AUDIT_FIX: Combined TapScoreNone skipped without valid player.");
   }
 
+  if (const char* mode = GetPlayerRoutineCoupleMode(pn)) {
+    const float life = m_pLifeMeter != nullptr
+                           ? m_pLifeMeter->GetLife()
+                           : (m_pCombinedLifeMeter != nullptr
+                                  ? m_pCombinedLifeMeter->GetLife(pn)
+                                  : -1.0f);
+    LogRoutineCoupleDiagnostics(
+        "component=player event=tap_none mode=%s player=%d score=%u "
+        "combo=%u miss_combo=%u life=%.6f failed=%d",
+        mode, static_cast<int>(pn),
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iScore : 0,
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iCurCombo : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iCurMissCombo
+            : 0,
+        life,
+        m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed ? 1
+                                                                         : 0);
+  }
+
   if (PENALIZE_TAP_SCORE_NONE) {
     if (m_pPlayerState == nullptr) {
       LOG->Warn(
@@ -2993,6 +3032,17 @@ void Player::Step(
     }
   }
   fSongBeat = SanitizePlayerFinite(fSongBeat, 0.0f, "Player::Step beat");
+  if (!bHeld && !bRelease) {
+    const PlayerNumber actorPlayer = m_pPlayerState->m_PlayerNumber;
+    if (const char* mode = GetPlayerRoutineCoupleMode(actorPlayer)) {
+      LogRoutineCoupleDiagnostics(
+          "component=player event=step mode=%s actor_player=%d "
+          "input_player=%d column=%d requested_row=%d beat=%.6f "
+          "position_seconds=%.6f",
+          mode, static_cast<int>(actorPlayer), static_cast<int>(inputSource),
+          col, row, fSongBeat, fPositionSeconds);
+    }
+  }
 
   const int iSongRow = row == -1 ? BeatToNoteRow(fSongBeat) : row;
 
@@ -3107,6 +3157,10 @@ void Player::Step(
         style->StyleInputToGameInput(t, physicalPlayer, GameI);
         float secs_held = 0.0f;
         for (size_t i = 0; i < GameI.size(); ++i) {
+          if (sharedInput && static_cast<int>(GameI[i].controller) !=
+                                 static_cast<int>(physicalPlayer)) {
+            continue;
+          }
           secs_held = std::max(secs_held, INPUTMAPPER->GetSecsHeld(GameI[i]));
         }
         if (secs_held > 0 && secs_held < timingWindowJump) {
@@ -4222,6 +4276,35 @@ void Player::HandleTapRowScore(unsigned row) {
   if (lastTap.result.earlyTns == TNS_None) {
     ChangeLife(scoreOfLastTap);
   }
+  const PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (const char* mode = GetPlayerRoutineCoupleMode(pn)) {
+    const float life = m_pLifeMeter != nullptr
+                           ? m_pLifeMeter->GetLife()
+                           : (m_pCombinedLifeMeter != nullptr
+                                  ? m_pCombinedLifeMeter->GetLife(pn)
+                                  : -1.0f);
+    LogRoutineCoupleDiagnostics(
+        "component=player event=tap_row_scored mode=%s player=%d row=%u "
+        "beat=%.6f judgment=%s early_judgment=%s score=%u combo=%u "
+        "miss_combo=%u actual_dp=%d possible_dp=%d life=%.6f failed=%d",
+        mode, static_cast<int>(pn), row, NoteRowToBeat(row),
+        TapNoteScoreToString(scoreOfLastTap).c_str(),
+        TapNoteScoreToString(lastTap.result.earlyTns).c_str(),
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iScore : 0,
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iCurCombo : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iCurMissCombo
+            : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iActualDancePoints
+            : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iCurPossibleDancePoints
+            : 0,
+        life,
+        m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed ? 1
+                                                                         : 0);
+  }
 }
 
 void Player::HandleHoldCheckpoint(
@@ -4345,6 +4428,31 @@ void Player::HandleHoldScore(const TapNote& tn) {
   }
 
   ChangeLife(holdScore, tapScore);
+  const PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
+  if (const char* mode = GetPlayerRoutineCoupleMode(pn)) {
+    const float life = m_pLifeMeter != nullptr
+                           ? m_pLifeMeter->GetLife()
+                           : (m_pCombinedLifeMeter != nullptr
+                                  ? m_pCombinedLifeMeter->GetLife(pn)
+                                  : -1.0f);
+    LogRoutineCoupleDiagnostics(
+        "component=player event=hold_scored mode=%s player=%d hold=%s "
+        "tap=%s score=%u combo=%u actual_dp=%d possible_dp=%d life=%.6f "
+        "failed=%d",
+        mode, static_cast<int>(pn), HoldNoteScoreToString(holdScore).c_str(),
+        TapNoteScoreToString(tapScore).c_str(),
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iScore : 0,
+        m_pPlayerStageStats != nullptr ? m_pPlayerStageStats->m_iCurCombo : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iActualDancePoints
+            : 0,
+        m_pPlayerStageStats != nullptr
+            ? m_pPlayerStageStats->m_iCurPossibleDancePoints
+            : 0,
+        life,
+        m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed ? 1
+                                                                         : 0);
+  }
 }
 
 float Player::GetMaxStepDistanceSeconds() {

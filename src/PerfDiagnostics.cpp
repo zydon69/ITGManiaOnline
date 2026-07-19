@@ -222,3 +222,20 @@ void LogReviewSrcDiagnostics(const char* fmt, ...) {
 
   LOG->Trace("SRC_REVIEW_TRACE %s", message.c_str());
 }
+
+bool RoutineCoupleDiagnosticsEnabled() {
+  return ReviewSrcDiagnosticsEnabled();
+}
+
+void LogRoutineCoupleDiagnostics(const char* fmt, ...) {
+  if (!RoutineCoupleDiagnosticsEnabled() || fmt == nullptr || LOG == nullptr) {
+    return;
+  }
+
+  va_list va;
+  va_start(va, fmt);
+  const std::string message = vssprintf(fmt, va);
+  va_end(va);
+
+  LOG->Trace("ROUTINE_COUPLE_TRACE %s", message.c_str());
+}

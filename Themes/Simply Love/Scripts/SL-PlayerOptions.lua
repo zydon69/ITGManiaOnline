@@ -803,6 +803,10 @@ local Overrides = {
 			for i=1,#self.Choices do
 				list[i] = i == selected
 			end
+			if routineShared and RoutineCoupleTrace then
+				RoutineCoupleTrace("event=option_load mode=routine option=mini player="
+					.. tostring(PlayerKey(pn) or pn) .. " source=P1 value=" .. tostring(sourceMods.Mini))
+			end
 			return list
 		end,
 		SaveSelections = function(self, list, pn)
@@ -856,6 +860,10 @@ local Overrides = {
 						.. tostring(PlayerKey(pn) or pn)
 						.. " authority=P1"
 						.. " mini=" .. tostring(selectedMini))
+				end
+				if RoutineCoupleTrace then
+					RoutineCoupleTrace("event=option_apply mode=routine option=mini source="
+						.. tostring(PlayerKey(pn) or pn) .. " authority=P1 value=" .. tostring(selectedMini))
 				end
 			else
 				applyMini(pn)

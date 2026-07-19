@@ -4,6 +4,8 @@
 
 -- if there is only one player, don't bother
 if #GAMESTATE:GetHumanPlayers() < 2 then return end
+-- Routine is one shared performance; neither participant can be "winning".
+if IsRoutine and IsRoutine() then return end
 
 -- if displaying different scoring mechanisms, don't bother.
 if SL["P1"].ActiveModifiers.ShowExScore ~= SL["P2"].ActiveModifiers.ShowExScore then return end

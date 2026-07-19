@@ -50,7 +50,8 @@ void SplitCompositeNoteData(const NoteData& in, std::vector<NoteData>& out);
  */
 bool SplitCompositeOrStackedNoteData(
     const NoteData& in, std::vector<NoteData>& out, StepsType stepsType);
-void CombineCompositeNoteData(NoteData& out, const std::vector<NoteData>& in);
+/** Recombine per-player parts without overwriting notes or losing ownership. */
+bool CombineCompositeNoteData(NoteData& out, const std::vector<NoteData>& in);
 /**
  * @brief Autogenerate notes from one type to another.
  *
