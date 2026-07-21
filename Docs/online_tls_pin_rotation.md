@@ -32,16 +32,19 @@ Au demarrage, le client construit sa politique reseau dans cet ordre:
 
 1. **Pins built-in**:
    - `ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT`
+   - `ITGMANIA_HTTP_PUBLIC_KEY_PINS_ROTATION_DEFAULT`
    - `ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT`
 2. **Override signe** (`Save/ITGOnlineNetworkSecurity.ini` + `.sig`), si valide.
-3. **Preference locale** `HttpPublicKeyPins` (persisted setting), utilisee comme
-   valeur active apres chargement.
+
+La preference locale `HttpPublicKeyPins` est immuable. Une ancienne valeur
+reste ignoree afin qu'un `Preferences.ini` obsolete ou modifie localement ne
+puisse ni bloquer la production ni remplacer une racine de confiance.
 
 En cas de signature invalide de l'override signe:
 
 - l'override est ignore,
 - le client journalise l'erreur,
-- il conserve la politique precedente (built-in / preference).
+- il conserve la politique built-in.
 
 ## Fichiers concernes
 
@@ -127,8 +130,14 @@ deploy/centos/scripts/tls-standby-key.sh
 
 Etat production actuel:
 
-- pin courant: `660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60`
+- pin courant: `35833860b4386ecf9297b08d9d0f7398cda72253224bd88b7f7f894f5d46f50d`
+- pin precedent conserve pendant la transition: `660801b6fa3faba577853c89d1b6d908d75a00a4396259184b1a65dc1bcd1f60`
 - pin standby: `3349ce463a6f443f110a1764102bc52401b6f4f42a9971a9747b02214a9ef60a`
+
+Le renouvellement Certbot de production doit conserver la cle active avec
+`reuse_key = True`. Le deploiement serveur refuse de commencer si son garde-fou
+TLS detecte une empreinte inattendue, une politique Certbot instable ou un
+certificat trop proche de son expiration.
 
 ### Etape 2 - Publier en mode dual-pin
 

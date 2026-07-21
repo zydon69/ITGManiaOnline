@@ -149,6 +149,65 @@ local function set_status(text)
 	refresh()
 end
 
+local function response_status_code(response)
+	return type(response) == "table" and tonumber(response.statusCode) or nil
+end
+
+local function response_error_text(decoded, response)
+	if type(decoded) == "table" and tostring(decoded.message or "") ~= "" then
+		return tostring(decoded.message)
+	end
+	if type(response) == "table" then
+		return tostring(response.errorMessage or response.message or "")
+	end
+	return ""
+end
+
+local function response_error_code(decoded, response)
+	if type(decoded) == "table" then
+		local code = tostring(decoded.error_code or decoded.code or "")
+		if code ~= "" then return code end
+	end
+	if type(response) == "table" then
+		return tostring(response.error_code or response.errorCode or response.code or "")
+	end
+	return ""
+end
+
+local function authentication_was_rejected(response)
+	return response_status_code(response) == 401
+		or response_error_code(nil, response) == "profile_token_user_mismatch"
+end
+
+local function friendly_login_error(decoded, response, fallbackKey)
+	local detail = response_error_text(decoded, response)
+	local lowerDetail = detail:lower()
+	if response_error_code(decoded, response) == "profile_token_user_mismatch" then
+		return THEME:GetString("ScreenITGOnlineLogin", "ProfileTokenMismatch")
+	end
+	if lowerDetail:find("public key pinning", 1, true)
+		or lowerDetail:find("public key pin", 1, true)
+	then
+		return THEME:GetString("ScreenITGOnlineLogin", "SecureConnectionFailed")
+	end
+
+	local statusCode = response_status_code(response)
+	if statusCode == nil or statusCode == 0
+		or lowerDetail:find("cannot connect", 1, true)
+		or lowerDetail:find("timed out", 1, true)
+		or lowerDetail:find("timeout", 1, true)
+	then
+		return THEME:GetString("ScreenITGOnlineLogin", "ConnectionFailed")
+	end
+
+	-- Server validation messages are useful when short and safe to render.  Raw
+	-- transport diagnostics remain in the gated logs instead of the UI.
+	if detail ~= "" and #detail <= 160 and not detail:find("[%c]") then
+		return detail
+	end
+	return THEME:GetString("ScreenITGOnlineLogin", fallbackKey or "ConnectionFailed")
+end
+
 local function clear_session()
 	login_flow_trace("clear_session" .. login_state_summary())
 	state.sessionId = nil
@@ -214,11 +273,16 @@ local function finish_token_connection(generation)
 			.. login_state_summary())
 		if not ok then
 			state.connecting = false
-			ITGOnline:ClearStoredAccessToken()
 			clear_session()
-			state.mode = "idle"
-			set_status(tostring((response and response.message) or THEME:GetString("ScreenITGOnlineLogin", "ConnectionFailed")))
-			start_device_login()
+			state.mode = "failed"
+			set_status(friendly_login_error(nil, response, "ConnectionFailed"))
+			if authentication_was_rejected(response) then
+				-- Only an explicit authentication rejection proves the saved token
+				-- unusable.  TLS, DNS and timeout failures must preserve it.
+				ITGOnline:ClearStoredAccessToken()
+				state.mode = "idle"
+				start_device_login()
+			end
 			return
 		end
 
@@ -300,7 +364,7 @@ start_device_login = function(resetAttempts)
 			.. login_state_summary())
 		if not ok or not decoded then
 			state.mode = "failed"
-			set_status(tostring((decoded and decoded.message) or (response and response.errorMessage) or THEME:GetString("ScreenITGOnlineLogin", "DeviceLoginUnavailable")))
+			set_status(friendly_login_error(decoded, response, "DeviceLoginUnavailable"))
 			return
 		end
 
@@ -695,7 +759,11 @@ local t = Def.ActorFrame{
 		},
 		LoadFont("Common Normal")..{
 			Name="Status",
-			InitCommand=function(self) self:xy(0, 92):horizalign(center):zoom(0.56):maxwidth(250):settext("") end
+			InitCommand=function(self)
+				self:xy(0, 88):horizalign(center):zoom(0.56)
+					:_wrapwidthpixels((safe_qr_panel_width() - 24) / 0.56)
+					:vertspacing(-5):maxheight(38 / 0.56):settext("")
+			end
 		},
 		LoadFont("Common Normal")..{
 			Name="Code",

@@ -9,6 +9,10 @@ file(
   READ
   "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua"
   ONLINE_CLIENT_TEXT)
+file(
+  READ
+  "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenITGOnlineLogin underlay/default.lua"
+  ONLINE_LOGIN_SCREEN_TEXT)
 file(READ "${ITGMANIA_SOURCE_DIR}/src/Profile.cpp" PROFILE_SOURCE_TEXT)
 file(READ "${ITGMANIA_SOURCE_DIR}/src/ProfileManager.cpp" PROFILE_MANAGER_SOURCE_TEXT)
 
@@ -26,7 +30,10 @@ foreach(REQUIRED_SNIPPET
     "std::atomic<int64_t> latestProgressCurrent"
     "LEGACY_GROOVESTATS_QR_LOGIN_HOST"
     "protocol == \"ws\" && host == LEGACY_GROOVESTATS_QR_LOGIN_HOST"
-    "HttpDenyHosts remains authoritative above")
+    "HttpDenyHosts remains authoritative above"
+    "ITGMANIA_HTTP_PUBLIC_KEY_PINS_ROTATION_DEFAULT"
+    "35833860b4386ecf9297b08d9d0f7398cda72253224bd88b7f7f894f5d46f50d"
+    "std::string configuredPins = BUILT_IN_HTTP_PUBLIC_KEY_PINS")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
@@ -34,6 +41,26 @@ foreach(REQUIRED_SNIPPET
         "NetworkManager invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "authentication_was_rejected"
+    "SecureConnectionFailed"
+    "ProfileTokenMismatch"
+    "TLS, DNS and timeout failures must preserve it"
+    "_wrapwidthpixels((safe_qr_panel_width() - 24) / 0.56)")
+  string(FIND "${ONLINE_LOGIN_SCREEN_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(FATAL_ERROR "Online login invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+string(FIND
+    "${NETWORK_MANAGER_TEXT}"
+    "NormalizePublicKeyPins(this->httpPublicKeyPins.Get())"
+    STALE_PIN_PREFERENCE_OFFSET)
+if(NOT STALE_PIN_PREFERENCE_OFFSET EQUAL -1)
+  message(FATAL_ERROR "NetworkManager must not activate TLS trust roots from Preferences.ini")
+endif()
 
 foreach(REQUIRED_SNIPPET
     "this->downloadWorkerQueue.swap(emptyQueue);"

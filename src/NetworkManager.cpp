@@ -73,6 +73,17 @@ namespace {
   "3349ce463a6f443f110a1764102bc52401b6f4f42a9971a9747b02214a9ef60a"
 #endif
 
+// Keep the active post-renewal key alongside the long-lived primary and the
+// offline standby key.  This overlap lets already-built clients survive a
+// controlled certificate transition without weakening normal CA validation.
+#ifndef ITGMANIA_HTTP_PUBLIC_KEY_PINS_ROTATION_DEFAULT
+#define ITGMANIA_HTTP_PUBLIC_KEY_PINS_ROTATION_DEFAULT                    \
+  "itgonline.fr="                                                         \
+  "35833860b4386ecf9297b08d9d0f7398cda72253224bd88b7f7f894f5d46f50d,*." \
+  "itgonline.fr="                                                         \
+  "35833860b4386ecf9297b08d9d0f7398cda72253224bd88b7f7f894f5d46f50d"
+#endif
+
 constexpr const char* BUILT_IN_HTTP_ALLOW_HOSTS =
     ITGMANIA_HTTP_ALLOW_HOSTS_DEFAULT;
 constexpr const char* REQUIRED_BUNDLED_ONLINE_ALLOW_HOSTS =
@@ -499,18 +510,22 @@ bool NormalizeHttpResponseBody(
 std::string BuildDefaultPublicKeyPins() {
   std::string primary = ITGMANIA_HTTP_PUBLIC_KEY_PINS_DEFAULT;
   std::string backup = ITGMANIA_HTTP_PUBLIC_KEY_PINS_BACKUP_DEFAULT;
+  std::string rotation = ITGMANIA_HTTP_PUBLIC_KEY_PINS_ROTATION_DEFAULT;
   Trim(primary);
   Trim(backup);
+  Trim(rotation);
 
-  if (primary.empty()) {
-    return backup;
+  std::vector<std::string> pinSets;
+  if (!primary.empty()) {
+    pinSets.push_back(primary);
   }
-
-  if (backup.empty()) {
-    return primary;
+  if (!rotation.empty()) {
+    pinSets.push_back(rotation);
   }
-
-  return primary + "," + backup;
+  if (!backup.empty()) {
+    pinSets.push_back(backup);
+  }
+  return join(",", pinSets);
 }
 
 const std::string BUILT_IN_HTTP_PUBLIC_KEY_PINS = BuildDefaultPublicKeyPins();
@@ -711,7 +726,8 @@ Preference<std::string> NetworkManager::httpAllowHosts(
     PreferenceType::Immutable);
 Preference<std::string> NetworkManager::httpDenyHosts("HttpDenyHosts", "");
 Preference<std::string> NetworkManager::httpPublicKeyPins(
-    "HttpPublicKeyPins", BUILT_IN_HTTP_PUBLIC_KEY_PINS);
+    "HttpPublicKeyPins", BUILT_IN_HTTP_PUBLIC_KEY_PINS, nullptr,
+    PreferenceType::Immutable);
 
 static const char* HttpErrorCodeNames[] = {
     "Blocked",
@@ -1073,11 +1089,10 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
         f.GetError().c_str());
   }
 
-  std::string configuredPins =
-      NormalizePublicKeyPins(this->httpPublicKeyPins.Get());
-  if (configuredPins.empty()) {
-    configuredPins = BUILT_IN_HTTP_PUBLIC_KEY_PINS;
-  }
+  // Public-key pins are a trust root.  Never let a stale or locally edited
+  // Preferences.ini replace the compiled set; emergency rotations must use
+  // the signed override file below.
+  std::string configuredPins = BUILT_IN_HTTP_PUBLIC_KEY_PINS;
   std::string signedPins;
   std::string signedAllowHosts;
 
@@ -1087,7 +1102,6 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
           NormalizePublicKeyPins(signedPins);
       if (!normalizedSignedPins.empty()) {
         configuredPins = normalizedSignedPins;
-        this->httpPublicKeyPins.Set(normalizedSignedPins);
         NetworkWarn("Loaded signed HttpPublicKeyPins override from Save/");
       } else {
         NetworkWarn("Signed HttpPublicKeyPins override ignored: no valid pins");
