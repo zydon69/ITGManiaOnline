@@ -45,6 +45,30 @@ local function current_config_ready_key(room)
 	end
 	return ""
 end
+
+local function online_join_failure_message(decoded, response)
+	local reason = tostring(decoded and decoded.room_state_reason or "")
+	local phase = tostring(decoded and decoded.room_phase or "")
+	local errorCode = tostring(decoded and decoded.error_code or response and response.errorCode or "")
+	local blockedMessages = {
+		song_ready_to_launch = "Une chanson est prete a etre lancee dans ce salon.",
+		players_configuring_options = "Les joueurs configurent leurs options.",
+		game_starting = "La partie est sur le point de commencer.",
+		game_in_progress = "Une partie est en cours.",
+		room_closed = "Ce salon est ferme.",
+	}
+	if errorCode == "room_no_longer_accepting" or reason ~= "" then
+		return blockedMessages[reason]
+			or (phase == "lobby_ready" and blockedMessages.song_ready_to_launch)
+			or (phase == "config" and blockedMessages.players_configuring_options)
+			or (phase == "starting" and blockedMessages.game_starting)
+			or (phase == "playing" and blockedMessages.game_in_progress)
+			or "Ce salon n'accepte pas de nouveau joueur pour le moment."
+	end
+	return (decoded and decoded.message)
+		or (response and response.errorMessage)
+		or "Echec de connexion au salon."
+end
 -- These screens are the ones we want to display the player's scores for.
 local scoreScreens = {"ScreenGameplay", "ScreenGameplayShared", "ScreenEvaluationStage", "ScreenEvaluationNonstop", "ScreenEvaluationSummary"}
 local gameplayScreens = {
@@ -3006,6 +3030,13 @@ CreateOnlineHandler = function()
 					if ITGOnline and ITGOnline.MaintainRealtimeAndRoomSync then
 						ITGOnline:MaintainRealtimeAndRoomSync("realtime_deadman_tick")
 					end
+					-- Pack transfers run from lobby/config screens, where gameplay timers
+					-- are deliberately stopped.  Keep their heartbeat/watchdog on the
+					-- connection timer so slow archives cannot be declared dead merely
+					-- because no new percentage was emitted for thirty seconds.
+					if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
+						ITGOnline.PackSync:WatchdogTick()
+					end
 
 							schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")
 						end,
@@ -3069,9 +3100,6 @@ CreateOnlineHandler = function()
 								.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 								.. " screen=" .. tostring(current_online_screen_name())
 								.. " secondsUntilStart=" .. tostring(ITGOnline and ITGOnline.SecondsUntilScheduledStart and ITGOnline:SecondsUntilScheduledStart() or "nil"))
-							if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
-								ITGOnline.PackSync:WatchdogTick()
-							end
 							if not onlineHandlerShuttingDown and self.inLobby and self.lastLobbyStatePayload then
 								local screen = current_top_screen()
 								local screenName = screen_name(screen)
@@ -3931,7 +3959,7 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="joinLobby",
 									success=false,
-									message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de connexion au salon."
+									message=online_join_failure_message(decoded, response)
 								})
 							end
 						end)

@@ -1741,6 +1741,16 @@ end
 
 function pack_sync_countdown_seconds_for_player(player)
 	if not (ITGOnline and ITGOnline.currentRoom) then return nil end
+	local currentUserId = tostring(ITGOnline and ITGOnline.user and ITGOnline.user.id or "")
+	if currentUserId ~= ""
+		and tostring(player and player.playerId or "") == currentUserId
+		and pack_sync_is_checking_joined_song()
+	then
+		-- The room snapshot can trail the local download by one request/response
+		-- cycle.  Never resurrect the missing-pack deadline while this client is
+		-- downloading, reloading SongManager, or validating the new chart.
+		return nil
+	end
 	local phase = normalized_online_phase(ITGOnline.currentRoom.phase)
 	local selectedSong = ITGOnline.currentRoom.selected_song
 	if type(selectedSong) ~= "table"
@@ -2336,6 +2346,18 @@ local function pack_sync_line_for_player(player)
 	local previewOnly = joined_song_preview ~= nil and not joined_song_confirmed
 	local isCurrentUser = ITGOnline and ITGOnline.user
 		and tostring(player.playerId or "") == tostring(ITGOnline.user.id or "")
+	if isCurrentUser and pack_sync_is_checking_joined_song() then
+		local localStatus = trim_text(ITGOnline.PackSync.currentStatus)
+		if localStatus ~= "" then
+			status = localStatus
+			message = trim_text(ITGOnline.PackSync.currentStatusMessage)
+			player.packSyncStatus = localStatus
+			player.packSyncMessage = ITGOnline.PackSync.currentStatusMessage
+			if localStatus == "download_in_progress" or localStatus == "download_requested" then
+				player.packSyncDownloadProgress = tonumber(ITGOnline.PackSync.currentStatusProgress)
+			end
+		end
+	end
 
 	if status == "download_in_progress" then
 		-- Only the downloading player needs the byte-level progress.  Everyone
@@ -4449,10 +4471,14 @@ local af = Def.ActorFrame{
 				missing = " ..."
 			end
 			local optionParts = {}
-			local speedMod = trim_text(player.speedMod)
-			if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
-			local stepchart = abbreviate_stepchart(player.stepchart)
-			if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
+			local phaseShowsCurrentOptions = joined_song_confirmed
+				and (joined_phase == "config" or joined_phase == "starting" or joined_phase == "playing")
+			if phaseShowsCurrentOptions then
+				local speedMod = trim_text(player.speedMod)
+				if speedMod ~= "" then optionParts[#optionParts+1] = speedMod end
+				local stepchart = abbreviate_stepchart(player.stepchart)
+				if stepchart ~= "" then optionParts[#optionParts+1] = stepchart end
+			end
 			-- A background download leaves a short-lived downloaded_ok/ready status
 			-- while the manager is still browsing. songAvailable can still describe
 			-- the previous preview, so do not show a phantom active selection.

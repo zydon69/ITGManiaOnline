@@ -5297,7 +5297,19 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	end
 	local incomingPlayStateVersion = tonumber(room.play_state and room.play_state.version_ms) or 0
 	local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[roomVersionKey]) or 0
-	if incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion and previousRoom and previousRoom.play_state then
+	local incomingPhase = self:NormalizeRoomPhase(room.phase)
+	local incomingResetsRound = incomingPhase == "lobby" and room.selected_song == nil
+	if incomingResetsRound then
+		-- Lobby-without-song is the authoritative round boundary.  Sparse lobby
+		-- and presence payloads intentionally omit play_state; preserving the old
+		-- one here leaked evaluation results and option state into the next lobby.
+		self.lastPlayStateVersionByRoomId[roomVersionKey] = incomingPlayStateVersion
+		online_flow_trace("room_snapshot_play_state_reset source=" .. tostring(source or "unknown")
+			.. " reason=lobby_without_song"
+			.. " room=" .. tostring(roomVersionKey)
+			.. " incomingVersion=" .. tostring(incomingPlayStateVersion)
+			.. " previousVersion=" .. tostring(previousPlayStateVersion))
+	elseif incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion and previousRoom and previousRoom.play_state then
 		online_flow_trace("room_snapshot_play_state_preserved source=" .. tostring(source or "unknown")
 			.. " reason=incoming_version_older"
 			.. " room=" .. tostring(roomVersionKey)
@@ -14801,6 +14813,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		local freshPhase = "nil"
 		local freshRoomFound = false
 		local freshAcceptsNewMembers = nil
+		local freshJoinBlockReason = nil
 		if prefetchOk and type(prefetchDecoded) == "table" then
 			local lobbyPayload = self:LobbySearchPayload(prefetchDecoded)
 			self.cachedLobbySearchPayload = lobbyPayload
@@ -14813,6 +14826,7 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 					if freshAcceptsNewMembers == nil then
 						freshAcceptsNewMembers = lobby.accepts_new_members
 					end
+					freshJoinBlockReason = lobby.joinBlockReason or lobby.join_block_reason
 					break
 				end
 			end
@@ -14830,6 +14844,19 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " error=" .. tostring(prefetchDecoded and prefetchDecoded.error_code or prefetchResponse and prefetchResponse.errorMessage or "nil"))
 		end
 		if prefetchOk and freshRoomFound and freshAcceptsNewMembers == false then
+			local blockedMessages = {
+				song_ready_to_launch = "Une chanson est prete a etre lancee dans ce salon.",
+				players_configuring_options = "Les joueurs configurent leurs options.",
+				game_starting = "La partie est sur le point de commencer.",
+				game_in_progress = "Une partie est en cours.",
+				room_closed = "Ce salon est ferme.",
+			}
+			local blockedMessage = blockedMessages[tostring(freshJoinBlockReason or "")]
+				or (freshPhase == "config" and blockedMessages.players_configuring_options)
+				or (freshPhase == "playing" and blockedMessages.game_in_progress)
+				or (freshPhase == "starting" and blockedMessages.game_starting)
+				or (freshPhase == "lobby_ready" and blockedMessages.song_ready_to_launch)
+				or "Ce salon n'accepte pas de nouveau joueur pour le moment."
 			self.pendingJoinRoomId = nil
 			self.pendingJoinRequestId = nil
 			online_flow_trace("join_room_prefetch_rejected reason=room_no_longer_accepting"
@@ -14837,11 +14864,13 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " phase=" .. tostring(freshPhase))
 			safe_callback(callback, false, {
 				error_code = "room_no_longer_accepting",
-				message = "This room no longer accepts new members.",
+				message = blockedMessage,
+				room_phase = freshPhase,
+				room_state_reason = freshJoinBlockReason,
 			}, {
 				statusCode = 422,
 				errorCode = "room_no_longer_accepting",
-				errorMessage = "This room no longer accepts new members.",
+				errorMessage = blockedMessage,
 				preflightRejected = true,
 			})
 			return
@@ -16529,6 +16558,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 					playerCount = room.members_count or 0,
 					phase = phase,
 					acceptsNewMembers = acceptsNewMembers == true,
+					joinBlockReason = room.join_block_reason or room.joinBlockReason,
 				}
 			end
 		end
