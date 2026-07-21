@@ -112,6 +112,31 @@ equal(event.target.id, "9", "nested target ID")
 equal(event.payload.room_id, "9", "nested payload room ID")
 equal(event.requires_ack, false, "event acknowledgement contract")
 
+local invitationEvent = assert(protocol.normalize_event({
+	id = "19",
+	event = "room.invitation.created",
+	payload = {
+		invitation = { id = "7", room_id = "9", status = "pending" },
+		inviter = { id = "3", name = "Inviting Player" },
+		room = { id = "9", phase = "lobby", name = "Private room", visibility = "private" },
+	},
+}))
+equal(invitationEvent.payload.room.phase, "lobby", "invitation room phase")
+equal(invitationEvent.payload.inviter.name, "Inviting Player", "invitation inviter name")
+
+local joinRequestEvent = assert(protocol.normalize_event({
+	id = "20",
+	event = "room.join_request.created",
+	payload = {
+		room_id = "9",
+		join_request = { id = "8", room_id = "9", user_id = "4", status = "pending" },
+		requester = { id = "4", name = "Requesting Player" },
+		room = { id = "9", phase = "lobby", name = "Private room", visibility = "private" },
+	},
+}))
+equal(joinRequestEvent.payload.room.phase, "lobby", "join request room phase")
+equal(joinRequestEvent.payload.requester.name, "Requesting Player", "join request requester name")
+
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
 	event = "room.ready_updated",

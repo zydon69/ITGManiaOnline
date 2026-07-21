@@ -1457,11 +1457,21 @@ function trim_text(value)
 	return text_or_empty(value):gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+function online_utf8_length(value)
+	value = text_or_empty(value)
+	if value.utf8len then
+		local ok, length = pcall(function() return value:utf8len() end)
+		if ok and type(length) == "number" then return length end
+	end
+	return #value
+end
+
 function clamp_text(value, maxLen)
 	value = text_or_empty(value)
 	maxLen = math.max(1, tonumber(maxLen) or 1)
-	if #value <= maxLen then return value end
+	if online_utf8_length(value) <= maxLen then return value end
 	if maxLen <= 1 then return "…" end
+	if value.utf8sub then return value:utf8sub(1, maxLen - 1) .. "…" end
 	return value:sub(1, maxLen - 1) .. "…"
 end
 
@@ -4245,10 +4255,10 @@ local af = Def.ActorFrame{
 			local line = clamp_text(selected .. i .. ". " .. display_name .. status .. room, 44)
 			if list_selected and lobby_view == "players" and i == online_player_index then
 				selected_start = text_length
-				selected_length = #line
+				selected_length = online_utf8_length(line)
 			end
 			lines[#lines + 1] = line
-			text_length = text_length + #line + 1
+			text_length = text_length + online_utf8_length(line) + 1
 		end
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
@@ -4495,7 +4505,7 @@ local af = Def.ActorFrame{
 			local optionsText = table.concat(optionParts, " | ")
 			local options = ""
 			if optionsText ~= "" then
-				local remaining = maxLineLen - #lineHead - #lineTail
+				local remaining = maxLineLen - online_utf8_length(lineHead) - online_utf8_length(lineTail)
 				if remaining >= 8 then
 					local optionsBudget = remaining - 3 -- " [" + "]"
 					options = " [" .. clamp_text(optionsText, optionsBudget) .. "]"
@@ -4504,10 +4514,10 @@ local af = Def.ActorFrame{
 			local line = clamp_text(lineHead..options..lineTail, maxLineLen)
 			if joined_players_selected and i == joined_player_index then
 				selected_start = text_length
-				selected_length = #line
+				selected_length = online_utf8_length(line)
 			end
 			lines[#lines+1] = line
-			text_length = text_length + #line + 1
+			text_length = text_length + online_utf8_length(line) + 1
 		end
 		lobby_flow_trace("joined_players_render rows=" .. table.concat(renderParts, ",")
 			.. " selectedIndex=" .. tostring(joined_player_index)
@@ -5603,7 +5613,7 @@ end,
 		lobby_flow_trace("OnlineRoomInvitation_ignored reason=missing_invitation")
 		return
 	end
-	lobby_flow_trace("OnlineRoomInvitation_received inviter=" .. tostring(params.invitation.inviter_id or params.invitation.user_id or "")
+	lobby_flow_trace("OnlineRoomInvitation_received inviter=" .. tostring(params.invitation.inviter_user_id or params.invitation.inviter_id or params.invitation.user_id or "")
 		.. " room=" .. tostring(params.invitation.room_id or "")
 		.. " mode=" .. tostring(mode)
 		.. " joined_code=" .. tostring(joined_lobby_code)

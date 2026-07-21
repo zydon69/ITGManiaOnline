@@ -13,6 +13,16 @@ local t = Def.ActorFrame{
 
 -- -----------------------------------------------------------------------
 
+local function WithOnlineDisplayName(player, text)
+	if ITGOnline and ITGOnline.OnlineDisplayNameForLocalPlayer then
+		local onlineName = ITGOnline:OnlineDisplayNameForLocalPlayer(player)
+		if onlineName and onlineName ~= "" then
+			return tostring(text or "") .. " [" .. onlineName .. "]"
+		end
+	end
+	return text
+end
+
 local function CreditsText( player )
 	return LoadFont("Common Normal") .. {
 		InitCommand=function(self)
@@ -29,14 +39,17 @@ local function CreditsText( player )
 				str = SL[pn].GrooveStatsUsername
 			end
 
-			self:settext(str)
+			self:settext(WithOnlineDisplayName(player, str))
 		end,
 		SetCreditsTextMessageCommand=function(self, params)
 			if params.pn == ToEnumShortString(player) then
-				self:settext(params.username)
+				self:settext(WithOnlineDisplayName(player, params.username))
 				self:visible(true)
 			end
 		end,
+		ITGOnlineLoginStateChangedMessageCommand=function(self) self:playcommand("UpdateText") end,
+		ITGOnlineSessionInvalidatedMessageCommand=function(self) self:playcommand("UpdateText") end,
+		ITGOnlineLocalProfileUnlinkedMessageCommand=function(self) self:playcommand("UpdateText") end,
 		UpdateVisibleCommand=function(self)
 			local screen = SCREENMAN:GetTopScreen()
 			local bShow = true

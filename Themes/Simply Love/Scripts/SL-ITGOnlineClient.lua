@@ -703,6 +703,18 @@ local function active_persistent_online_profile()
 	return { player = player, slot = slot, profile = profile, guid = guid, dir = dir, name = name }
 end
 
+function ITGOnline:OnlineDisplayNameForLocalPlayer(player)
+	if not player or not self.user or not self.HasActiveAccessToken or not self:HasActiveAccessToken() then
+		return nil
+	end
+
+	local identity = active_persistent_online_profile()
+	if not identity or identity.player ~= player then return nil end
+
+	local displayName = trim(user_display_name(self.user, ""))
+	return displayName ~= "" and displayName or nil
+end
+
 local function profile_prefers_persistent_online_token()
 	local player, pn, modifiers = active_online_player_modifiers()
 	local rememberToken = modifiers and modifiers.RememberOnlineToken == true
@@ -909,6 +921,7 @@ local function apply_authenticated_user_state(client, user)
 	client.lastAuthenticatedUserId = nextUserId
 	client.user = user
 	client.sessionExpired = false
+	safe_broadcast("ITGOnlineLoginStateChanged", { user = user })
 end
 
 local function ready_flow_trace_message(message)
@@ -8376,6 +8389,7 @@ function ITGOnline:Disconnect(options)
 		hasUser = self.user ~= nil,
 		disconnecting = self.disconnecting == true,
 	})
+	safe_broadcast("ITGOnlineLoginStateChanged")
 end
 
 function ITGOnline:Sync(callback)
@@ -16078,10 +16092,17 @@ function ITGOnline:HandleRealtimeEvent(event)
 				end
 				online_flow_trace("lobby_updated_event queue_lobby_refresh")
 				self:QueueLobbyRefresh({ reason = lobbyUpdateReason })
-		elseif name == "room.invitation.created" then
-		online_flow_trace("realtime_event_apply name=room.invitation.created action=broadcast_invitation"
-			.. " invitationId=" .. tostring(payload.invitation_id or payload.id or "nil"))
-		safe_broadcast("OnlineRoomInvitation", payload)
+		elseif name == "room.invitation.created" and type(payload.invitation) == "table" then
+			online_flow_trace("realtime_event_apply name=room.invitation.created action=broadcast_invitation"
+				.. " invitationId=" .. tostring(payload.invitation.id or payload.invitation_id or payload.id or "nil"))
+			safe_broadcast("OnlineRoomInvitation", payload)
+		elseif name == "room.join_request.created"
+			and type(payload.join_request) == "table"
+			and type(payload.requester) == "table" then
+			online_flow_trace("realtime_event_apply name=room.join_request.created action=broadcast_join_request"
+				.. " joinRequestId=" .. tostring(payload.join_request.id or "nil")
+				.. " requesterId=" .. tostring(payload.requester.id or "nil"))
+			safe_broadcast("OnlinePrivateJoinRequest", payload)
 		elseif name == "room.join_request.declined" then
 			online_flow_trace("realtime_event_apply name=room.join_request.declined"
 				.. " roomId=" .. tostring(payload.room_id or "nil")
