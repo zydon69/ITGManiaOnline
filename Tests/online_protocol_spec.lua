@@ -156,7 +156,10 @@ equal(invalidEventReason, "invalid_event_room:unknown_room_phase", "invalid even
 
 local syncPayload = assert(protocol.normalize_sync_payload({
 	current_room = { id = "9", phase = "lobby", members = {}, ready_states = {} },
-	public_rooms = { { id = "12", phase = "lobby", members = {}, ready_states = {} } },
+	visible_rooms = {
+		{ id = "12", phase = "lobby", visibility = "public", members = {}, ready_states = {} },
+		{ id = "13", phase = "lobby", visibility = "private", members = {}, ready_states = {} },
+	},
 	online_users = {},
 	pending_join_requests = {},
 	pending_invitations = {},
@@ -165,18 +168,19 @@ local syncPayload = assert(protocol.normalize_sync_payload({
 	meta = {},
 }))
 equal(syncPayload.current_room.id, "9", "sync current room ID")
-equal(syncPayload.public_rooms[1].id, "12", "sync public room ID")
+equal(syncPayload.visible_rooms[1].id, "12", "sync visible room ID")
+equal(syncPayload.visible_rooms[2].visibility, "private", "private room visibility")
 equal(syncPayload.events[1].id, "17", "sync event ID")
 
 local invalidSync, invalidSyncReason = protocol.normalize_sync_payload({
-	public_rooms = "invalid",
+	visible_rooms = "invalid",
 	events = {},
 })
 equal(invalidSync, nil, "invalid sync rejection")
-equal(invalidSyncReason, "collection_not_table:sync.public_rooms", "invalid sync reason")
+equal(invalidSyncReason, "collection_not_table:sync.visible_rooms", "invalid sync reason")
 
 local invalidCursorSync, invalidCursorReason = protocol.normalize_sync_payload({
-	public_rooms = {},
+	visible_rooms = {},
 	events = {},
 	next_cursor = "1e3",
 })

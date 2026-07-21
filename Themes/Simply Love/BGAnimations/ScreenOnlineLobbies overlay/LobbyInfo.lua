@@ -1,7 +1,8 @@
-local focus_pos = 1
+local focus_pos = 0
 local offset = 0
 local num_rows = 5
 local data = {}
+local private_border_color = color("#777777")
 
 local function lobby_info_trace(message)
   if type(online_logs_enabled) == "function" and not online_logs_enabled() then
@@ -15,97 +16,140 @@ end
 local function lobby_row_summary(row)
   row = type(row) == "table" and row or {}
   return " code=" .. tostring(row.code)
+    .. " visibility=" .. tostring(row.visibility)
     .. " phase=" .. tostring(row.phase)
     .. " acceptsNewMembers=" .. tostring(row.acceptsNewMembers)
     .. " playerCount=" .. tostring(row.playerCount)
 end
 
+local function is_selectable(row)
+  return type(row) == "table" and tostring(row.visibility or "public") ~= "private"
+end
+
+local function first_selectable_index()
+  for index, row in ipairs(data) do
+    if is_selectable(row) then return index end
+  end
+  return nil
+end
+
+local function selected_index()
+  if focus_pos < 1 then return nil end
+  return focus_pos + offset
+end
+
+local function set_selected_index(index)
+  if not index or index < 1 or index > #data then
+    focus_pos = 0
+    offset = 0
+    return
+  end
+
+  if index <= num_rows then
+    focus_pos = index
+    offset = 0
+  else
+    focus_pos = num_rows
+    offset = index - num_rows
+  end
+end
+
+local function adjacent_selectable_index(direction)
+  local current = selected_index()
+  if not current then return first_selectable_index() end
+
+  local index = current + direction
+  while index >= 1 and index <= #data do
+    if is_selectable(data[index]) then return index end
+    index = index + direction
+  end
+  return nil
+end
+
+local function update_parent_index(self)
+  if self:GetParent() then
+    self:GetParent():playcommand("UpdateIndex", {idx=selected_index() or 0, total=#data})
+  end
+end
+
 local t = Def.ActorFrame{
   InitCommand=function(self)
     self:y(-180)
+    self.hasSelectableRoom = false
   end,
   UpdateDataCommand=function(self, params)
-    data = params.data
-    focus_pos = 1
-    offset = 0
-    lobby_info_trace("update_data count=" .. tostring(#data)
-      .. " first=" .. lobby_row_summary(data[1]))
+    data = type(params) == "table" and type(params.data) == "table" and params.data or {}
+    set_selected_index(first_selectable_index())
+    self.hasSelectableRoom = selected_index() ~= nil
     if self:GetParent() then
-      self:GetParent():playcommand("UpdateIndex", {idx=(#data > 0 and 1 or 0), total=#data})
+      self:GetParent().hasSelectableRoom = self.hasSelectableRoom
     end
+    lobby_info_trace("update_data count=" .. tostring(#data)
+      .. " selectable=" .. tostring(self.hasSelectableRoom)
+      .. " selectedIndex=" .. tostring(selected_index() or 0)
+      .. " first=" .. lobby_row_summary(data[1]))
+    update_parent_index(self)
     self:queuecommand("UpdateSelf")
   end,
   NextLobbyCommand=function(self)
-    if focus_pos < num_rows and focus_pos < #data then
-      focus_pos = focus_pos + 1
-      lobby_info_trace("next_lobby focus=" .. tostring(focus_pos)
-        .. " offset=" .. tostring(offset)
-        .. lobby_row_summary(data[focus_pos + offset]))
-      self:queuecommand("UpdateSelf")
-      SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-      self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
-    elseif focus_pos == num_rows and focus_pos + offset < #data then
-      offset = offset + 1
-      lobby_info_trace("next_lobby_scroll focus=" .. tostring(focus_pos)
-        .. " offset=" .. tostring(offset)
-        .. lobby_row_summary(data[focus_pos + offset]))
-      self:queuecommand("UpdateSelf")
-      SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-      self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
-    end
+    local nextIndex = adjacent_selectable_index(1)
+    if not nextIndex then return end
+    set_selected_index(nextIndex)
+    lobby_info_trace("next_lobby selectedIndex=" .. tostring(nextIndex)
+      .. " focus=" .. tostring(focus_pos)
+      .. " offset=" .. tostring(offset)
+      .. lobby_row_summary(data[nextIndex]))
+    self:queuecommand("UpdateSelf")
+    SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+    update_parent_index(self)
   end,
   PrevLobbyCommand=function(self)
-    if focus_pos > 1 then
-      focus_pos = focus_pos - 1
-      lobby_info_trace("prev_lobby focus=" .. tostring(focus_pos)
-        .. " offset=" .. tostring(offset)
-        .. lobby_row_summary(data[focus_pos + offset]))
-      self:queuecommand("UpdateSelf")
-      SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-      self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
-    elseif focus_pos == 1 and focus_pos + offset > 1 then
-      offset = offset - 1
-      lobby_info_trace("prev_lobby_scroll focus=" .. tostring(focus_pos)
-        .. " offset=" .. tostring(offset)
-        .. lobby_row_summary(data[focus_pos + offset]))
-      self:queuecommand("UpdateSelf")
-      SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
-      self:GetParent():playcommand("UpdateIndex", {idx=focus_pos+offset, total=#data})
-    end
+    local previousIndex = adjacent_selectable_index(-1)
+    if not previousIndex then return end
+    set_selected_index(previousIndex)
+    lobby_info_trace("prev_lobby selectedIndex=" .. tostring(previousIndex)
+      .. " focus=" .. tostring(focus_pos)
+      .. " offset=" .. tostring(offset)
+      .. lobby_row_summary(data[previousIndex]))
+    self:queuecommand("UpdateSelf")
+    SOUND:PlayOnce(THEME:GetPathS("ScreenSelectMaster", "change"))
+    update_parent_index(self)
   end,
-  SelectLobbyCommand=function(self, params)
-    local selected = data[focus_pos + offset]
-    if not selected then
-      lobby_info_trace("select_lobby missing focus=" .. tostring(focus_pos)
-        .. " offset=" .. tostring(offset)
+  SelectLobbyCommand=function(self)
+    local index = selected_index()
+    local selected = index and data[index] or nil
+    if not selected or not is_selectable(selected) then
+      lobby_info_trace("select_lobby rejected reason="
+        .. tostring(selected and "private_room" or "missing_selection")
+        .. " selectedIndex=" .. tostring(index or 0)
         .. " count=" .. tostring(#data))
       SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
       return
     end
 
-	    lobby_info_trace("select_lobby" .. lobby_row_summary(selected)
-	      .. " focus=" .. tostring(focus_pos)
-	      .. " offset=" .. tostring(offset))
-	    MESSAGEMAN:Broadcast("OnlineLobbyJoinSelected", {
-	      code = selected.code,
-	      phase = selected.phase,
-	      acceptsNewMembers = selected.acceptsNewMembers,
-	    })
-	  end
-	}
+    lobby_info_trace("select_lobby" .. lobby_row_summary(selected)
+      .. " selectedIndex=" .. tostring(index)
+      .. " focus=" .. tostring(focus_pos)
+      .. " offset=" .. tostring(offset))
+    MESSAGEMAN:Broadcast("OnlineLobbyJoinSelected", {
+      code = selected.code,
+      visibility = selected.visibility,
+      phase = selected.phase,
+      acceptsNewMembers = selected.acceptsNewMembers,
+    })
+  end
+}
 
--- +2 because we want to have two of the actors for padding purposes.
+-- Two extra rows preserve the original scrolling padding.
 for i=1,num_rows+2 do
   local af = Def.ActorFrame{
     InitCommand=function(self)
       self.idx = i
-      if i > num_rows then
-        self:diffusealpha(0)
-      end
+      if i > num_rows then self:diffusealpha(0) end
       self:y(60 * i)
     end,
     UpdateSelfCommand=function(self)
-      if #data < i or i > num_rows then
+      if i + offset > #data or i > num_rows then
         self:diffusealpha(0)
       else
         self:diffusealpha(1)
@@ -120,25 +164,32 @@ for i=1,num_rows+2 do
     end,
     GainFocusCommand=function(self)
       self.focus = true
-      self:diffuse(i == focus_pos and Color.Green or Color.White)
+      self:queuecommand("UpdateSelf")
     end,
     LoseFocusCommand=function(self)
       self.focus = false
-      self:diffuse(Color.White)
+      self:queuecommand("UpdateSelf")
     end,
     UpdateSelfCommand=function(self)
-      self:diffuse(self.focus and i == focus_pos and Color.Green or Color.White)
+      local row = data[i + offset]
+      if row and tostring(row.visibility or "public") == "private" then
+        self:diffuse(private_border_color)
+      elseif self.focus and i == focus_pos then
+        self:diffuse(Color.Green)
+      else
+        self:diffuse(Color.White)
+      end
     end
   }
 
   af[#af+1] = Def.Quad{
     InitCommand=function(self)
-      self:zoomto(220-2, 50-2):diffuse(Color.Black)
+      self:zoomto(218, 48):diffuse(Color.Black)
     end
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-	    Text="Code salon",
+    Text="Code salon",
     InitCommand=function(self)
       self:zoom(0.58):x(-72):y(-10)
     end,
@@ -147,17 +198,16 @@ for i=1,num_rows+2 do
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-			self:zoom(0.44):x(-72):y(10)
+      self:zoom(0.44):x(-72):y(10)
     end,
     UpdateSelfCommand=function(self)
-      if i + offset <= #data then
-        self:settext(data[i + offset].code)
-      end
+      local row = data[i + offset]
+      self:settext(row and row.code or "")
     end
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-	    Text="Joueurs",
+    Text="Joueurs",
     InitCommand=function(self)
       self:zoom(0.58):y(-10)
     end,
@@ -166,12 +216,11 @@ for i=1,num_rows+2 do
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-			self:zoom(0.44):y(10)
+      self:zoom(0.44):y(10)
     end,
     UpdateSelfCommand=function(self)
-      if i + offset <= #data then
-        self:settext(data[i + offset].playerCount)
-      end
+      local row = data[i + offset]
+      self:settext(row and row.playerCount or "")
     end
   }
 
@@ -188,14 +237,12 @@ for i=1,num_rows+2 do
       self:zoom(0.44):x(72):y(10)
     end,
     UpdateSelfCommand=function(self)
-      if i + offset <= #data then
-        self:settext(data[i + offset].phase or "")
-      end
+      local row = data[i + offset]
+      self:settext(row and row.phase or "")
     end
   }
 
   t[#t+1] = af
 end
-
 
 return t

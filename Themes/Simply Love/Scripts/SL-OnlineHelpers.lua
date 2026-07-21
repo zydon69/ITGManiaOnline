@@ -4393,7 +4393,7 @@ CreateOnlineHandler = function()
 							finish_actor_operation(self, "search_lobby", searchToken)
 							online_trace("FLOW SearchLobbyMessage result ok=" .. tostring(ok == true)
 								.. " status=" .. tostring(response and response.statusCode or "nil")
-								.. " publicRooms=" .. tostring(decoded and decoded.public_rooms and #decoded.public_rooms or decoded and decoded.lobbies and #decoded.lobbies or 0)
+								.. " visibleRooms=" .. tostring(decoded and decoded.visible_rooms and #decoded.visible_rooms or 0)
 								.. " onlineUsers=" .. tostring(decoded and decoded.online_users and #decoded.online_users or decoded and decoded.onlinePlayers and #decoded.onlinePlayers or 0)
 								.. " error=" .. tostring(decoded and decoded.message or response and response.errorMessage or "nil"))
 							if ok then

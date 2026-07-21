@@ -831,6 +831,8 @@ local function clear_active_profile_auth()
 	return true
 end
 
+local lastInvalidProfileBindingSignature = nil
+
 local function secure_access_token_get(apiBaseUrl, deviceName)
 	if not profile_prefers_persistent_online_token() then
 		return nil, false, nil
@@ -841,9 +843,20 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 	if not auth or trim(auth.scope) ~= scope or trim(auth.onlineUserId) == ""
 		or tostring(auth.accessToken or "") == ""
 	then
-		online_trace("stored token ignored reason=profile_binding_missing_or_invalid")
+		local signature = table.concat({
+			tostring(identity and identity.guid or ""),
+			tostring(identity and identity.name or ""),
+			tostring(scope or ""),
+			trim(auth and auth.scope or ""),
+			trim(auth and auth.onlineUserId or ""),
+		}, "|")
+		if signature ~= lastInvalidProfileBindingSignature then
+			lastInvalidProfileBindingSignature = signature
+			online_trace("stored token ignored reason=profile_binding_missing_or_invalid", "auth")
+		end
 		return nil, false, nil
 	end
+	lastInvalidProfileBindingSignature = nil
 
 	return tostring(auth.accessToken), true, {
 		profileGuid = identity.guid,
@@ -8423,7 +8436,7 @@ function ITGOnline:Sync(callback)
 	local generation = self.syncGeneration
 	local accumulator = {
 		online_users = {},
-		public_rooms = {},
+		visible_rooms = {},
 		pending_join_requests = {},
 		pending_invitations = {},
 		events = {},
@@ -8468,7 +8481,7 @@ function ITGOnline:FinishSync(generation, ok, decoded, response)
 		.. " ok=" .. tostring(ok == true)
 		.. " status=" .. tostring(response and response.statusCode or "nil")
 		.. " hasCurrentRoom=" .. tostring(decoded and decoded.current_room ~= nil)
-		.. " publicRooms=" .. tostring(decoded and decoded.public_rooms and #decoded.public_rooms or 0)
+		.. " visibleRooms=" .. tostring(decoded and decoded.visible_rooms and #decoded.visible_rooms or 0)
 		.. " onlineUsers=" .. tostring(decoded and decoded.online_users and #decoded.online_users or 0)
 		.. " events=" .. tostring(decoded and decoded.events and #decoded.events or 0)
 		.. " nextCursor=" .. tostring(decoded and decoded.next_cursor or "nil")
@@ -8483,7 +8496,7 @@ function ITGOnline:FinishSync(generation, ok, decoded, response)
 		status = response and response.statusCode or "nil",
 		roomSnapshot = decoded and decoded.current_room or self.currentRoom,
 		hasCurrentRoom = decoded and decoded.current_room ~= nil,
-		publicRooms = decoded and decoded.public_rooms and #decoded.public_rooms or 0,
+		visibleRooms = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0,
 		onlineUsers = decoded and decoded.online_users and #decoded.online_users or 0,
 		events = decoded and decoded.events and #decoded.events or 0,
 		nextCursor = decoded and decoded.next_cursor or "nil",
@@ -8526,7 +8539,7 @@ function ITGOnline:ApplySyncPayload(decoded)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " incomingCurrentRoomId=" .. tostring(decoded.current_room and decoded.current_room.id or "nil")
 		.. " incomingCurrentRoomPhase=" .. tostring(decoded.current_room and decoded.current_room.phase or "nil")
-		.. " publicRooms=" .. tostring(decoded.public_rooms and #decoded.public_rooms or 0)
+		.. " visibleRooms=" .. tostring(decoded.visible_rooms and #decoded.visible_rooms or 0)
 		.. " onlineUsers=" .. tostring(decoded.online_users and #decoded.online_users or 0)
 		.. " pendingJoinRequests=" .. tostring(decoded.pending_join_requests and #decoded.pending_join_requests or 0)
 		.. " pendingInvitations=" .. tostring(decoded.pending_invitations and #decoded.pending_invitations or 0)
@@ -8565,7 +8578,7 @@ function ITGOnline:ApplySyncPayload(decoded)
 			online_flow_trace("sync_current_room_ignored reason=leaving_room room=" .. tostring(decoded.current_room.id))
 			safe_broadcast("LobbySearched", self:LobbySearchPayload(decoded))
 			online_flow_trace("sync_apply_broadcast lobby_searched_only reason=leaving_room"
-				.. " lobbies=" .. tostring(decoded.public_rooms and #decoded.public_rooms or 0)
+				.. " lobbies=" .. tostring(decoded.visible_rooms and #decoded.visible_rooms or 0)
 				.. " onlineUsers=" .. tostring(decoded.online_users and #decoded.online_users or 0))
 			for eventId in pairs(pendingEventIds) do self:CommitRealtimeEventProcessed(eventId) end
 			return true
@@ -8600,7 +8613,7 @@ function ITGOnline:ApplySyncPayload(decoded)
 	end
 	safe_broadcast("LobbySearched", self:LobbySearchPayload(decoded))
 	online_flow_trace("sync_apply_broadcast lobby_searched"
-		.. " lobbies=" .. tostring(decoded.public_rooms and #decoded.public_rooms or 0)
+		.. " lobbies=" .. tostring(decoded.visible_rooms and #decoded.visible_rooms or 0)
 		.. " onlineUsers=" .. tostring(decoded.online_users and #decoded.online_users or 0)
 		.. " pendingJoinRequests=" .. tostring(decoded.pending_join_requests and #decoded.pending_join_requests or 0)
 		.. " pendingInvitations=" .. tostring(decoded.pending_invitations and #decoded.pending_invitations or 0)
@@ -8755,7 +8768,7 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " onlineUsers=" .. tostring(decoded and decoded.online_users and #decoded.online_users or 0)
-			.. " publicRooms=" .. tostring(decoded and decoded.public_rooms and #decoded.public_rooms or 0)
+			.. " visibleRooms=" .. tostring(decoded and decoded.visible_rooms and #decoded.visible_rooms or 0)
 			.. " joinRequests=" .. tostring(decoded and decoded.pending_join_requests and #decoded.pending_join_requests or 0)
 			.. " invitations=" .. tostring(decoded and decoded.pending_invitations and #decoded.pending_invitations or 0)
 			.. " events=" .. tostring(decoded and decoded.events and #decoded.events or 0)
@@ -8785,7 +8798,7 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 				end
 
 			accumulator.seen = accumulator.seen or {}
-			for _, key in ipairs({ "online_users", "public_rooms", "pending_join_requests", "pending_invitations", "events" }) do
+			for _, key in ipairs({ "online_users", "visible_rooms", "pending_join_requests", "pending_invitations", "events" }) do
 				accumulator.seen[key] = accumulator.seen[key] or {}
 				for item in ivalues(decoded[key] or {}) do
 					local itemId = type(item) == "table" and (item.id or item.room_id or (item.user and item.user.id)) or nil
@@ -8821,7 +8834,7 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 			end
 			local hasMore = ((not accumulator.cursorTooOld) and eventsMeta.has_more)
 				or (meta.online_users and meta.online_users.has_more)
-				or (meta.public_rooms and meta.public_rooms.has_more)
+				or (meta.visible_rooms and meta.visible_rooms.has_more)
 				or (meta.pending_join_requests and meta.pending_join_requests.has_more)
 				or (meta.pending_invitations and meta.pending_invitations.has_more)
 			local baseBudget = math.max(1, tonumber(self.syncMaxPages or 100) or 100)
@@ -8832,7 +8845,7 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 				.. " hasMore=" .. tostring(hasMore == true)
 				.. " pageBudget=" .. tostring(pageBudget)
 				.. " onlineUsersTotal=" .. tostring(#accumulator.online_users)
-				.. " publicRoomsTotal=" .. tostring(#accumulator.public_rooms)
+				.. " visibleRoomsTotal=" .. tostring(#accumulator.visible_rooms)
 				.. " joinRequestsTotal=" .. tostring(#accumulator.pending_join_requests)
 				.. " invitationsTotal=" .. tostring(#accumulator.pending_invitations)
 				.. " eventsTotal=" .. tostring(#accumulator.events)
@@ -8851,7 +8864,7 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 					accumulator.snapshot_token = nil
 					accumulator.next_cursor = 0
 					accumulator.online_users = {}
-					accumulator.public_rooms = {}
+					accumulator.visible_rooms = {}
 					accumulator.pending_join_requests = {}
 					accumulator.pending_invitations = {}
 					accumulator.events = {}
@@ -14122,9 +14135,9 @@ end
 function ITGOnline:FetchLobby(callback)
 	local accumulator = {
 		online_users = {},
-		public_rooms = {},
+		visible_rooms = {},
 		seen_online_users = {},
-		seen_public_rooms = {},
+		seen_visible_rooms = {},
 		meta = nil,
 	}
 	local onlineCursor = nil
@@ -14152,16 +14165,16 @@ function ITGOnline:FetchLobby(callback)
 						accumulator.online_users[#accumulator.online_users + 1] = user
 					end
 				end
-				for _, room in ipairs(decoded.public_rooms or {}) do
+				for _, room in ipairs(decoded.visible_rooms or {}) do
 					local key = self:RoomKey(type(room) == "table" and room.id or nil)
-					if key ~= "" and not accumulator.seen_public_rooms[key] then
-						accumulator.seen_public_rooms[key] = true
-						accumulator.public_rooms[#accumulator.public_rooms + 1] = room
+					if key ~= "" and not accumulator.seen_visible_rooms[key] then
+						accumulator.seen_visible_rooms[key] = true
+						accumulator.visible_rooms[#accumulator.visible_rooms + 1] = room
 					end
 			end
 
 			local onlineMeta = decoded.meta and decoded.meta.online_users or {}
-			local roomsMeta = decoded.meta and decoded.meta.public_rooms or {}
+			local roomsMeta = decoded.meta and decoded.meta.visible_rooms or {}
 			local hasMoreOnline = onlineMeta.has_more == true and tostring(onlineMeta.next_cursor or "") ~= ""
 			local hasMoreRooms = roomsMeta.has_more == true and tostring(roomsMeta.next_cursor or "") ~= ""
 
@@ -14176,11 +14189,11 @@ function ITGOnline:FetchLobby(callback)
 
 			if accumulator.meta then
 				accumulator.meta.online_users = accumulator.meta.online_users or {}
-				accumulator.meta.public_rooms = accumulator.meta.public_rooms or {}
+				accumulator.meta.visible_rooms = accumulator.meta.visible_rooms or {}
 				accumulator.meta.online_users.has_more = onlineCursor ~= nil
-				accumulator.meta.public_rooms.has_more = roomsCursor ~= nil
+				accumulator.meta.visible_rooms.has_more = roomsCursor ~= nil
 				accumulator.meta.online_users.next_cursor = onlineCursor
-				accumulator.meta.public_rooms.next_cursor = roomsCursor
+				accumulator.meta.visible_rooms.next_cursor = roomsCursor
 			end
 
 				if onlineCursor or roomsCursor then
@@ -14252,7 +14265,7 @@ function ITGOnline:ReconcileCurrentRoomFromLobbyPayload(decoded, source)
 		return false
 	end
 
-	local rooms = decoded.public_rooms or decoded.rooms or decoded.lobbies or {}
+	local rooms = decoded.visible_rooms or {}
 	if type(rooms) ~= "table" then
 		online_flow_trace("current_room_lobby_reconcile_invalid_rooms source=" .. tostring(source)
 			.. " room=" .. tostring(self.currentRoomId)
@@ -14267,6 +14280,12 @@ function ITGOnline:ReconcileCurrentRoomFromLobbyPayload(decoded, source)
 		if type(room) == "table" then
 			local candidateId = room.id or room.room_id or room.roomId or room.code
 			if candidateId and tostring(candidateId) == wantedRoomId then
+				if tostring(room.visibility or "public") == "private" then
+					online_flow_trace("current_room_lobby_reconcile_skipped source=" .. tostring(source)
+						.. " room=" .. wantedRoomId
+						.. " reason=private_lobby_summary_is_not_authoritative")
+					return false
+				end
 				local selectedSong = room.selected_song or room.selectedSong
 				local selectedAt = type(selectedSong) == "table" and (selectedSong.selected_at or selectedSong.selectedAt) or nil
 				online_flow_trace("current_room_lobby_reconcile_match source=" .. tostring(source)
@@ -14587,15 +14606,13 @@ function ITGOnline:QueueLobbyRefresh(options)
 					.. " hasToken=" .. tostring(sessionAccessToken ~= nil))
 				return
 			end
-			local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
-				or decoded and decoded.lobbies and #decoded.lobbies
-				or 0
+			local rawVisibleRoomCount = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0
 			local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
 				or decoded and decoded.online_players and #decoded.online_players
 				or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
 				or 0
 			online_flow_trace("lobby_refresh_response ok=" .. tostring(ok == true)
-				.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+				.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
 				.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
 				.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
 				.. " screen=" .. tostring(self.currentScreenName or "nil")
@@ -14627,7 +14644,7 @@ function ITGOnline:QueueLobbyRefresh(options)
 					end
 					self.lobbyRefreshLastAppliedAt = GetTimeSinceStart()
 					online_flow_trace("lobby_refresh_broadcast source=fetch_lobby"
-						.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+						.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
 						.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
 						.. " normalizedLobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
 						.. " displayOnlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
@@ -16543,9 +16560,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 			decodedOnlineUsersSource = "onlinePlayers"
 		end
 	end
-	local rawPublicRoomCount = decoded and decoded.public_rooms and #decoded.public_rooms
-		or decoded and decoded.lobbies and #decoded.lobbies
-		or 0
+	local rawVisibleRoomCount = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0
 	local rawOnlineUserCount = decodedOnlineUsers and #decodedOnlineUsers or 0
 	local selfOnlineUserFiltered = 0
 	local rawOnlineUserIds = {}
@@ -16557,8 +16572,8 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local retainedSameAccountPresenceIds = {}
 	local retainedSameAccountSessionIds = {}
 
-	if decoded and decoded.public_rooms ~= nil then
-		for room in ivalues(decoded.public_rooms or {}) do
+	if decoded and decoded.visible_rooms ~= nil then
+		for room in ivalues(decoded.visible_rooms or {}) do
 			local roomId = room and (room.id or room.room_id or room.roomId or room.code)
 			if self:ShouldSuppressLobbyCandidate(roomId, "decoded_lobby_payload") then
 				online_flow_trace("lobby_search_room_filtered source=decoded room=" .. tostring(roomId or "nil"))
@@ -16576,6 +16591,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 					code = tostring(roomId or ""),
 					roomId = roomId,
 					name = room.name,
+					visibility = room.visibility,
 					playerCount = room.members_count or 0,
 					phase = phase,
 					acceptsNewMembers = acceptsNewMembers == true,
@@ -16676,7 +16692,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 	self.cachedLobbySearchPayload = payload
 	online_flow_trace("lobby_search_payload_built source=" .. tostring(source)
 		.. " onlineUsersField=" .. tostring(decodedOnlineUsersSource)
-		.. " rawPublicRooms=" .. tostring(rawPublicRoomCount)
+		.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
 		.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
 		.. " normalizedLobbies=" .. tostring(#lobbies)
 		.. " normalizedOnlinePlayers=" .. tostring(#onlinePlayers)
@@ -16694,7 +16710,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
 		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
 		.. " authInvalidatedReason=" .. tostring(self.authSessionInvalidatedReason or "")
-		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.public_rooms ~= nil))
+		.. " usedCachedLobbies=" .. tostring(not (decoded and decoded.visible_rooms ~= nil))
 		.. " usedCachedOnlinePlayers=" .. tostring(decodedOnlineUsers == nil)
 		.. " cachedOnlinePlayers=" .. tostring(cachedPayload.onlinePlayers and #cachedPayload.onlinePlayers or 0)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")

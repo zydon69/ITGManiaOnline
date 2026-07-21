@@ -357,7 +357,7 @@ function ITGOnlineProtocol.normalize_sync_payload(payload)
 
 	for _, collectionName in ipairs({
 		"online_users",
-		"public_rooms",
+		"visible_rooms",
 		"pending_join_requests",
 		"pending_invitations",
 		"events",
@@ -379,12 +379,12 @@ function ITGOnlineProtocol.normalize_sync_payload(payload)
 		if not normalizedRoom then return nil, "invalid_current_room:" .. tostring(roomError) end
 		normalized.current_room = normalizedRoom
 	end
-	for index = 1, #(normalized.public_rooms or {}) do
-		local normalizedRoom, roomError = normalize_room(normalized.public_rooms[index], true)
+	for index = 1, #(normalized.visible_rooms or {}) do
+		local normalizedRoom, roomError = normalize_room(normalized.visible_rooms[index], true)
 		if not normalizedRoom then
-			return nil, "invalid_public_room:" .. tostring(index) .. ":" .. tostring(roomError)
+			return nil, "invalid_visible_room:" .. tostring(index) .. ":" .. tostring(roomError)
 		end
-		normalized.public_rooms[index] = normalizedRoom
+		normalized.visible_rooms[index] = normalizedRoom
 	end
 	for index = 1, #(normalized.events or {}) do
 		local normalizedEvent, eventError = normalize_event(normalized.events[index], true)

@@ -1107,12 +1107,11 @@ end
 			local lobbyList = lobbyContent:GetChild("LobbyList")
 			if lobbyList then
 				lobbyList:playcommand("UpdateData", {data=candidates})
-			end
-
-			local lobbyCount = lobbyContent:GetChild("LobbyCount")
-			if lobbyCount then
-				local total = #candidates
-				lobbyCount:settext(total > 0 and ("1/"..total) or "0/0")
+				if list_selected and lobby_view == "lobbies" and lobbyList.hasSelectableRoom ~= true then
+					list_selected = false
+					lobbyList:playcommand("LoseFocus")
+					lobby_flow_trace("lobby_search_focus_released reason=no_selectable_room")
+				end
 			end
 
 			local emptyText = lobbyContent:GetChild("EmptyStateText")
@@ -3743,7 +3742,9 @@ local function handle_browse_mode_input(event)
 					listSelected = list_selected == true,
 				})
 			end
-			if (lobby_view == "lobbies" and #candidates > 0) or (lobby_view == "players" and #online_users > 0) then
+			local lobbyList = t:GetChild("LobbyContent") and t:GetChild("LobbyContent"):GetChild("LobbyList")
+			local lobbyHasSelectableRoom = lobbyList and lobbyList.hasSelectableRoom == true
+			if (lobby_view == "lobbies" and lobbyHasSelectableRoom) or (lobby_view == "players" and #online_users > 0) then
 				list_selected = true
 				play_online_sound_once("Common", "Start")
 				lobby_flow_trace("input_browse_focus_list_applied"
@@ -4879,7 +4880,7 @@ local af = Def.ActorFrame{
 						ITGOnline:Sync(function(ok, decoded)
 							lobby_flow_trace("Display_sync_result ok=" .. tostring(ok == true)
 								.. " hasRoom=" .. tostring(decoded and decoded.current_room ~= nil)
-								.. " lobbyCount=" .. tostring(decoded and decoded.lobbies and #decoded.lobbies or 0))
+								.. " lobbyCount=" .. tostring(decoded and decoded.visible_rooms and #decoded.visible_rooms or 0))
 							if not ok or not decoded then
 								request_lobby_refresh("display_sync_failed", { immediate=true }, self)
 							end
@@ -5511,8 +5512,13 @@ local af = Def.ActorFrame{
 			lobby_flow_trace("OnlineLobbyJoinSelected_ignored reason=inactive_overlay code=" .. tostring(params and params.code or "nil"))
 			return
 		end
-			if not params or not params.code then
+		if not params or not params.code then
 			lobby_flow_trace("OnlineLobbyJoinSelected_ignored reason=missing_code")
+			play_online_sound_once("Common", "Cancel")
+			return
+		end
+		if tostring(params.visibility or "public") == "private" then
+			lobby_flow_trace("OnlineLobbyJoinSelected_rejected reason=private_room code=" .. tostring(params.code))
 			play_online_sound_once("Common", "Cancel")
 			return
 		end
