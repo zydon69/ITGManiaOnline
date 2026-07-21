@@ -1,10 +1,16 @@
 local player = ...
-local pn = ToEnumShortString(player)
+local style = GAMESTATE:GetCurrentStyle()
+local style_type = style and style:GetStyleType()
+local style_type_name = style_type and ToEnumShortString(style_type) or ""
+local source_player = style_type_name == "TwoPlayersSharedSides"
+	and GAMESTATE:GetMasterPlayerNumber()
+	or player
+local source_pn = ToEnumShortString(source_player)
 
 local width = 16
 local height = 250
 local _x = _screen.cx + (player==PLAYER_1 and -1 or 1) * SL_WideScale(302, 400)
-local show_swoosh = SL[pn].ActiveModifiers.LifeMeterSwoosh == true
+local show_swoosh = SL[source_pn].ActiveModifiers.LifeMeterSwoosh == true
 
 -- if double
 if GAMESTATE:GetCurrentStyle():GetStyleType() == "StyleType_OnePlayerTwoSides"
@@ -17,7 +23,7 @@ or PREFSMAN:GetPreference("Center1Player") and #GAMESTATE:GetHumanPlayers() == 1
 -- and step stats, move their vertical lifemeter to the inside of the notefield
 elseif GetScreenAspectRatio() > 21/9
 and #GAMESTATE:GetHumanPlayers() > 1
-and SL[pn].ActiveModifiers.DataVisualizations == "Step Statistics"
+and SL[source_pn].ActiveModifiers.DataVisualizations == "Step Statistics"
 then
 	_x = _screen.cx + (player==PLAYER_1 and -1 or 1) * 60
 end
@@ -30,7 +36,7 @@ end
 
 -- get SongPosition specific to this player so that
 -- split BPMs are handled if there are any
-local songposition = GAMESTATE:GetPlayerState(player):GetSongPosition()
+local songposition = GAMESTATE:GetPlayerState(source_player):GetSongPosition()
 local swoosh, velocity
 
 local Update = function(self)
@@ -59,7 +65,7 @@ local meter = Def.ActorFrame{
 
 		-- check life (LifeMeterBar)
 		LifeChangedMessageCommand=function(self,params)
-			if params.Player == player then
+			if params.Player == source_player then
 				local life = params.LifeMeter:GetLife() * height
 				self:finishtweening()
 				self:bouncebegin(0.1):zoomy( life )
@@ -88,7 +94,7 @@ local meter = Def.ActorFrame{
 		end,
 		LifeChangedMessageCommand=function(self,params)
 			if not show_swoosh then return end
-			if(params.Player == player) then
+			if params.Player == source_player then
 				local life = params.LifeMeter:GetLife() * height
 				self:finishtweening()
 				self:bouncebegin(0.1):zoomto( life, width )

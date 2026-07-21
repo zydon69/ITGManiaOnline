@@ -88,5 +88,31 @@ require_source_text(
 require_source_text(
   "Themes/Simply Love/BGAnimations/ScreenSelectMusic overlay/PerPlayer/DensityGraph.lua"
   "if p1 == nil or p2 == nil or p1 < 0 or p2 < 0 then return -1 end")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/LifeMeter/Standard.lua"
+  "local source_player = is_shared_sides and GAMESTATE:GetMasterPlayerNumber() or player")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/LifeMeter/Surround.lua"
+  "if params.Player == source_player then")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/LifeMeter/Vertical.lua"
+  "local songposition = GAMESTATE:GetPlayerState(source_player):GetSongPosition()")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/default.lua"
+  "MakeLazyPane(i, mpn, PLAYER_2, ComputedData)")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/InputHandler.lua"
+  "if #players==1 or routine_shared then")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/InputHandler.lua"
+  "if style == \"OnePlayerTwoSides\" or routine_shared then")
+require_source_text("Themes/Simply Love/metrics.ini"
+  "((IsRoutine and IsRoutine()) or #GAMESTATE:GetHumanPlayers()==1) and 610 or 300")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"Early\")")
+reject_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "ScreenString(\"Early\")")
 
 message(STATUS "Routine/Couple source invariants verified")

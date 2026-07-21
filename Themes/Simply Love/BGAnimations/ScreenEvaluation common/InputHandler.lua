@@ -13,6 +13,7 @@ local panes, active_pane = {}, {}
 
 local style = ToEnumShortString(GAMESTATE:GetCurrentStyle():GetStyleType())
 local players = GAMESTATE:GetHumanPlayers()
+local routine_shared = style == "TwoPlayersSharedSides"
 
 local mpn = GAMESTATE:GetMasterPlayerNumber()
 
@@ -68,7 +69,7 @@ for controller=1,2 do
 			-- single, double
 			-- initialize the side ("controller") the player is joined as to their profile's EvalPanePrimary
 			-- and the other side as their profile's EvalPaneSecondary
-			if #players==1 then
+			if #players==1 or routine_shared then
 				if ("P"..controller)==ToEnumShortString(mpn) then
 					if i == primary_i then
 						SetPaneVisible(pane, true)
@@ -112,7 +113,7 @@ end
 -- EvalPaneSecondary=4
 -- because Pane3 is full-width in double and the other pane is supposed to be hidden when it is visible
 
-if style == "OnePlayerTwoSides" then
+if style == "OnePlayerTwoSides" or routine_shared then
 	local cn  = PlayerNumber:Reverse()[mpn] + 1
 	local ocn = (cn % 2) + 1
 
@@ -174,7 +175,7 @@ return function(event)
 				active_pane[cn] = (active_pane[cn] % #panes[cn]) + 1
 				-- don't allow duplicate panes to show in single/double
 				-- if the above change would result in duplicate panes, increment again
-				if #players==1 and active_pane[cn] == active_pane[ocn] then
+				if (#players==1 or routine_shared) and active_pane[cn] == active_pane[ocn] then
 					active_pane[cn] = (active_pane[cn] % #panes[cn]) + 1
 				end
 
@@ -182,14 +183,14 @@ return function(event)
 				active_pane[cn] = ((active_pane[cn] - 2) % #panes[cn]) + 1
 				-- don't allow duplicate panes to show in single/double
 				-- if the above change would result in duplicate panes, decrement again
-				if #players==1 and active_pane[cn] == active_pane[ocn] then
+				if (#players==1 or routine_shared) and active_pane[cn] == active_pane[ocn] then
 					active_pane[cn] = ((active_pane[cn] - 2) % #panes[cn]) + 1
 				end
 			end
 
 
-			-- double
-			if style == "OnePlayerTwoSides" then
+			-- double and Routine have wide panes that temporarily occupy both sides.
+			if style == "OnePlayerTwoSides" or routine_shared then
 				-- if this controller is switching to Pane3 or Pane6, both of which take over both pane widths
 				if PaneExpandsForDouble(panes[cn][active_pane[cn]]) then
 
@@ -223,6 +224,12 @@ return function(event)
 					-- show the panes we want on both sides
 					SetPaneVisible(panes[cn][active_pane[cn]], true)
 					SetPaneVisible(panes[ocn][active_pane[ocn]], true)
+				end
+				if RoutineCoupleTrace and routine_shared then
+					RoutineCoupleTrace("event=evaluation_pane_switch mode=routine controller="
+						.. tostring(event.controller)
+						.. " pane_index=" .. tostring(active_pane[cn])
+						.. " other_pane_index=" .. tostring(active_pane[ocn]))
 				end
 
 

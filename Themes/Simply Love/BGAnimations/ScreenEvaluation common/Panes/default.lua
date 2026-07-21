@@ -1,6 +1,7 @@
 local NumPanes = ...
 local players = GAMESTATE:GetHumanPlayers()
 local lazy_pane_path = THEME:GetPathB("ScreenEvaluation", "common/Panes/LazyPane.lua")
+local routine_shared = IsRoutine and IsRoutine()
 
 local af = Def.ActorFrame{}
 af.Name="Panes"
@@ -98,7 +99,22 @@ end
 -- Note: Some of these Pane actors may be nil. This is not a bug, but
 --       a feature for any panes we want to be conditional.  -teejusb
 
-if #players == 2 or SL.Global.GameMode=="Casual" then
+if routine_shared then
+	local ComputedData = {}
+	local mpn = GAMESTATE:GetMasterPlayerNumber()
+	for i=1, NumPanes do
+		if PaneIsAvailable(i, mpn) then
+			af[#af+1] = MakeLazyPane(i, mpn, PLAYER_1, ComputedData)
+			af[#af+1] = MakeLazyPane(i, mpn, PLAYER_2, ComputedData)
+		end
+	end
+	if RoutineCoupleTrace then
+		RoutineCoupleTrace("event=evaluation_panes_layout mode=routine source="
+			.. tostring(ToEnumShortString(mpn))
+			.. " controllers=2 shared_result=1")
+	end
+
+elseif #players == 2 or SL.Global.GameMode=="Casual" then
 	for player in ivalues(players) do
 		-- add Panes for this player to the ActorFrame using a simple, numerical for-loop
 		for i=1, NumPanes do

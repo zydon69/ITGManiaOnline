@@ -3,6 +3,7 @@ if SL.Global.GameMode == "Casual" then return end
 local player = ...
 local pn = ToEnumShortString(player)
 local NumPlayers = #GAMESTATE:GetHumanPlayers()
+local routine_shared = IsRoutine and IsRoutine()
 
 local GraphWidth  = THEME:GetMetric("GraphDisplay", "BodyWidth")
 local GraphHeight = THEME:GetMetric("GraphDisplay", "BodyHeight")
@@ -19,7 +20,7 @@ local af = Def.ActorFrame{
 	Name="JudgeGraph",
 	InitCommand=function(self)
 		self:y(_screen.cy + 124)
-		if NumPlayers == 1 then
+		if NumPlayers == 1 or routine_shared then
 			-- not quite an even 0.25 because we need to accomodate the extra 10px
 			-- that would normally be between the left and right panes
 			self:addx(GraphWidth * 0.2541)

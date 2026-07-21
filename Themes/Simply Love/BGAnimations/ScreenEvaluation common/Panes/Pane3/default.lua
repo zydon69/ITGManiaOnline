@@ -11,7 +11,7 @@ return Def.ActorFrame{
 	ExpandForDoubleCommand=function() end,
 	InitCommand=function(self)
 		local style = ToEnumShortString(GAMESTATE:GetCurrentStyle():GetStyleType())
-		if style == "OnePlayerTwoSides" then
+		if style == "OnePlayerTwoSides" or style == "TwoPlayersSharedSides" then
 			if controller == PLAYER_2 then self:x(-310) end
 		end
 	end,

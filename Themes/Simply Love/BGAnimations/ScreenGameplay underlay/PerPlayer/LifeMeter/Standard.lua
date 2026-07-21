@@ -4,11 +4,12 @@ local w = 136
 local h = 18
 local _y = 20
 local side_margin = 4
-local show_swoosh = SL[ToEnumShortString(player)].ActiveModifiers.LifeMeterSwoosh == true
 local style = GAMESTATE:GetCurrentStyle()
 local style_type = style and style:GetStyleType()
 local style_type_name = style_type and ToEnumShortString(style_type) or ""
 local is_shared_sides = style_type_name == "TwoPlayersSharedSides"
+local source_player = is_shared_sides and GAMESTATE:GetMasterPlayerNumber() or player
+local show_swoosh = SL[ToEnumShortString(source_player)].ActiveModifiers.LifeMeterSwoosh == true
 
 local function resolve_lifebar_x(player_number)
 	local notefield_x = GetNotefieldX(player_number)
@@ -31,7 +32,7 @@ local _x = resolve_lifebar_x(player)
 
 -- get SongPosition specific to this player so that
 -- split BPMs are handled if there are any
-local songposition = GAMESTATE:GetPlayerState(player):GetSongPosition()
+local songposition = GAMESTATE:GetPlayerState(source_player):GetSongPosition()
 local swoosh, velocity
 
 local Update = function(self)
@@ -47,6 +48,7 @@ local meter = Def.ActorFrame{
 		self:y(_y):SetUpdateFunction(Update):visible(false)
 		Trace("ROUTINE_LAYOUT LifeMeterStandard"
 			.. " player=" .. tostring(ToEnumShortString(player))
+			.. " source=" .. tostring(ToEnumShortString(source_player))
 			.. " style_type=" .. tostring(style_type_name)
 			.. " shared=" .. tostring(is_shared_sides)
 			.. " x=" .. tostring(_x)
@@ -71,7 +73,7 @@ local meter = Def.ActorFrame{
 		-- LifePercentage is greater than or equal to the HOT_VALUE, which is
 		-- defined in Metrics.ini under [LifeMeterBar] like HotValue=1.0
 		HealthStateChangedMessageCommand=function(self,params)
-			if params.PlayerNumber == player then
+			if params.PlayerNumber == source_player then
 				if params.HealthState == 'HealthState_Hot' then
 					self:diffuse(1,1,1,1)
 				else
@@ -84,7 +86,7 @@ local meter = Def.ActorFrame{
 		-- when the engine broadcasts that the player's LifeMeter value has changed
 		-- change the width of this MeterFill Quad to accommodate
 		LifeChangedMessageCommand=function(self,params)
-			if params.Player == player then
+			if params.Player == source_player then
 				local life = params.LifeMeter:GetLife() * w
 				self:finishtweening()
 				self:bouncebegin(0.1):zoomx( life )
@@ -113,7 +115,7 @@ local meter = Def.ActorFrame{
 		end,
 		HealthStateChangedMessageCommand=function(self,params)
 			if not show_swoosh then return end
-			if(params.PlayerNumber == player) then
+			if(params.PlayerNumber == source_player) then
 				if(params.HealthState == 'HealthState_Hot') then
 					self:diffusealpha(1)
 				else
@@ -129,7 +131,7 @@ local meter = Def.ActorFrame{
 		-- synonyms: compelling, life-altering, puissant, blazing
 		LifeChangedMessageCommand=function(self,params)
 			if not show_swoosh then return end
-			if params.Player == player then
+			if params.Player == source_player then
 				local life = params.LifeMeter:GetLife() * w
 				self:finishtweening()
 				self:bouncebegin(0.1):zoomto( life, h )

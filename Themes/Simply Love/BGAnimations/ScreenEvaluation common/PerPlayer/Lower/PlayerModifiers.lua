@@ -1,6 +1,7 @@
 if SL.Global.GameMode == "Casual" then return end
 
 local player = ...
+local routine_shared = IsRoutine and IsRoutine()
 
 local font_zoom = 0.7
 local width = THEME:GetMetric("GraphDisplay", "BodyWidth")
@@ -13,7 +14,7 @@ return Def.ActorFrame{
 	Def.Quad{
 		InitCommand=function(self)
 			self:diffuse(color("#1E282F")):zoomto(width, 26)
-			if #GAMESTATE:GetHumanPlayers()==1 then
+			if #GAMESTATE:GetHumanPlayers()==1 or routine_shared then
 				-- not quite an even 0.25 because we need to accomodate the extra 10px
 				-- that would normally be between the left and right panes
 				self:addx(width*0.2541)

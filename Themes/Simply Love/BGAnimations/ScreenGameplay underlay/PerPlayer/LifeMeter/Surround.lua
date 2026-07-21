@@ -1,4 +1,10 @@
 local player = ...
+local style = GAMESTATE:GetCurrentStyle()
+local style_type = style and style:GetStyleType()
+local style_type_name = style_type and ToEnumShortString(style_type) or ""
+local source_player = style_type_name == "TwoPlayersSharedSides"
+	and GAMESTATE:GetMasterPlayerNumber()
+	or player
 
 local af = Def.ActorFrame{
 	Name="LifeMeter_"..ToEnumShortString(player),
@@ -6,14 +12,14 @@ local af = Def.ActorFrame{
 		self:xy(0,0)
 	end,
 	HealthStateChangedMessageCommand=function(self,params)
-		if (params.PlayerNumber == player) then
+		if params.PlayerNumber == source_player then
 			if params.HealthState == "HealthState_Dead" then
 				self:queuecommand("Dead")
 			end
 		end
 	end,
 	LifeChangedMessageCommand=function(self,params)
-		if (params.Player == player) then
+		if params.Player == source_player then
 			self:playcommand("ChangeSize", {CropAmount=(1-params.LifeMeter:GetLife()) })
 		end
 	end,
