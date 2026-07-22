@@ -6645,7 +6645,9 @@ end,
 			Name="PackSyncKickWarning",
 			Text="",
 			InitCommand=function(self)
-				self:horizalign(center):xy(0, 190):zoom(0.42):maxwidth(1100)
+				-- Keep timeout warnings below the player table and above the
+				-- controls drawn later in this ActorFrame.
+				self:horizalign(center):xy(-120, 188):zoom(0.55):maxwidth(620):draworder(100)
 					:diffuse(color("#FFDD55")):strokecolor(Color.Black):visible(false)
 			end
 		},

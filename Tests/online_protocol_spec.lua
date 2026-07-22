@@ -276,6 +276,23 @@ assert(joinLobbyHandler:find("retryAfterSeconds=(decoded and (decoded.retry_afte
 assert(joinLobbyHandler:find("roomId=params.code", 1, true),
 	"join failures must retain the target room identity")
 
+local onlineClientPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua"
+local onlineClientFile = assert(io.open(onlineClientPath, "rb"), "missing online client: " .. onlineClientPath)
+local onlineClientContent = onlineClientFile:read("*a")
+onlineClientFile:close()
+assert(onlineClientContent:find('self:HandleDeletedRoom(lobbyRoomId, "lobby_updated_room_deleted")', 1, true),
+	"lobby.updated room deletions must clear an active room")
+assert(onlineClientContent:find('self:HandleDeletedRoom(roomId, "room_deleted_event")', 1, true),
+	"direct room.deleted events must share the same cleanup path")
+local deletedRoomHandler = assert(
+	onlineClientContent:match("function ITGOnline:HandleDeletedRoom%b()%s*(.-)%s*function ITGOnline:HandleRealtimeEvent"),
+	"missing deleted-room cleanup handler"
+)
+assert(deletedRoomHandler:find('safe_broadcast("OnlineLobbyLeft"', 1, true),
+	"deleted active rooms must leave the joined-lobby UI")
+assert(deletedRoomHandler:find('self:ClearCurrentRoomState', 1, true),
+	"deleted active rooms must clear cached room state")
+
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
 	event = "room.ready_updated",

@@ -15940,6 +15940,65 @@ function ITGOnline:PendingJoinEventMatches(payload)
 	}, payload)
 end
 
+function ITGOnline:HandleDeletedRoom(roomId, source)
+	roomId = online_canonical_id(roomId)
+	if not roomId then
+		online_flow_trace("room_deleted_event_ignored reason=missing_room_id"
+			.. " source=" .. tostring(source or "unknown")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+		return false
+	end
+
+	local activeRoomDeleted = online_room_ids_match(self.currentRoomId, roomId)
+		or online_room_ids_match(self.pendingJoinRoomId, roomId)
+	local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
+	local roomCode = self.currentRoom and
+		(self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
+	online_flow_trace("room_deleted_event_begin roomId=" .. tostring(roomId)
+		.. " source=" .. tostring(source or "unknown")
+		.. " active=" .. tostring(activeRoomDeleted == true)
+		.. " ignoredAfterLeave=" .. tostring(ignoredAfterLeave == true)
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+
+	self:RememberDeletedRoom(roomId, 60)
+	self:IgnoreRoomEvents(roomId, 30)
+	local refreshQueued = false
+	if self.PurgeStaleLobbyCandidate then
+		self:PurgeStaleLobbyCandidate(roomId, tostring(source or "room_deleted_event"))
+		refreshQueued = true
+	end
+
+	if ignoredAfterLeave then
+		online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. tostring(roomId)
+			.. " source=" .. tostring(source or "unknown"))
+	elseif activeRoomDeleted then
+		self:ClearCurrentRoomState(tostring(source or "room_deleted_event"))
+		safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
+		safe_broadcast("OnlineLobbyLeft", {
+			left = true,
+			roomId = roomId,
+			lobbyCode = roomCode,
+			reason = "room_deleted",
+			source = tostring(source or "room.deleted"),
+		})
+		safe_broadcast("OnlineResponseStatus", {
+			event = "roomDeleted",
+			success = false,
+			message = online_client_text("RoomClosed", "The lobby was closed."),
+		})
+	end
+
+	if not refreshQueued then
+		self:QueueLobbyRefresh({ reason = tostring(source or "room_deleted_event") })
+	end
+	online_flow_trace("room_deleted_event_end roomId=" .. tostring(roomId)
+		.. " source=" .. tostring(source or "unknown")
+		.. " activeCleared=" .. tostring(activeRoomDeleted and not ignoredAfterLeave))
+	return activeRoomDeleted and not ignoredAfterLeave
+end
+
 function ITGOnline:HandleRealtimeEvent(event)
 		if type(event) ~= "table" then
 			online_trace("Ignored malformed realtime event.")
@@ -16185,15 +16244,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 					return
 				end
 				if lobbyUpdateReason == "room.deleted" and lobbyRoomId then
-					local roomKey = self:RoomKey(lobbyRoomId)
-					self:RememberDeletedRoom(roomKey, 60)
-					self:IgnoreRoomEvents(roomKey, 30)
-					online_flow_trace("lobby_updated_room_deleted_marked"
-						.. " room=" .. tostring(roomKey)
-						.. " reason=" .. lobbyUpdateReason)
-					if self.PurgeStaleLobbyCandidate then
-						self:PurgeStaleLobbyCandidate(roomKey, "lobby_updated_room_deleted")
-					end
+					local activeRoomCleared = self:HandleDeletedRoom(lobbyRoomId, "lobby_updated_room_deleted")
+					if activeRoomCleared then return end
 				end
 				local appliedPresence = false
 				if hasUserPayload then
@@ -16490,53 +16542,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 			local roomId = payload.room_id
 				or (event.target and event.target.id)
 				or payload.id
-			if not roomId then
-				online_flow_trace("room_deleted_event_ignored reason=missing_room_id"
-					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-				return
-			end
-			if roomId then
-				local roomKey = tostring(roomId)
-				local activeRoomDeleted = online_room_ids_match(self.currentRoomId, roomId)
-					or online_room_ids_match(self.pendingJoinRoomId, roomId)
-				local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
-				online_flow_trace("room_deleted_event_begin roomId=" .. roomKey
-					.. " active=" .. tostring(activeRoomDeleted == true)
-					.. " ignoredAfterLeave=" .. tostring(ignoredAfterLeave == true)
-					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-				self:RememberDeletedRoom(roomKey, 60)
-				self:IgnoreRoomEvents(roomId, 30)
-				local roomDeletedRefreshQueued = false
-				if self.PurgeStaleLobbyCandidate then
-					self:PurgeStaleLobbyCandidate(roomKey, "room_deleted_event")
-					roomDeletedRefreshQueued = true
-				end
-
-				if ignoredAfterLeave then
-					online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. roomKey)
-					if self.ScheduleDeferredLobbyRefresh and not roomDeletedRefreshQueued then
-						self:ScheduleDeferredLobbyRefresh(0.35, "room_deleted_ignored_after_leave")
-					elseif not roomDeletedRefreshQueued then
-						self:QueueLobbyRefresh({ reason = "room_deleted_ignored_after_leave" })
-					end
-					return
-				elseif activeRoomDeleted then
-					self:ClearCurrentRoomState("room_deleted_event")
-					safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
-				safe_broadcast("OnlineResponseStatus", {
-					event = "roomDeleted",
-					success = false,
-					message = online_client_text("RoomClosed", "The lobby was closed.")
-					})
-				end
-
-				if not roomDeletedRefreshQueued then
-					self:QueueLobbyRefresh({ reason = "room_deleted_event" })
-				end
-				online_flow_trace("room_deleted_event roomId=" .. roomKey)
-			end
+			self:HandleDeletedRoom(roomId, "room_deleted_event")
 		elseif name == "room.load_timeout" then
 			local timeoutRoomId = payload.room_id
 				or (payload.room and (payload.room.id or payload.room_id or payload.roomId))
