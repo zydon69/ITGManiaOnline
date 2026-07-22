@@ -102,6 +102,18 @@ bool IsValidITGOnlineAuthField(const std::string& value, size_t maxBytes) {
          });
 }
 
+bool ITGOnlineAuthLogsEnabledFromThemePrefs() {
+  if (PREFSMAN == nullptr) {
+    return false;
+  }
+
+  IniFile ini;
+  bool enabled = false;
+  return ini.ReadFile("Save/ThemePrefs.ini") &&
+         ini.GetValue(PREFSMAN->m_sTheme, "ITGOnlineAuthLogs", enabled) &&
+         enabled;
+}
+
 int AddProfileIntSaturated(int lhs, int rhs, const char* field) {
   if (lhs < 0) {
     LOG->Warn("Profile: clamped negative %s value %d to 0.", field, lhs);
@@ -2330,9 +2342,11 @@ ProfileLoadResult Profile::LoadEditableDataFromDir(std::string sDir) {
            m_sITGOnlineUserId, MAX_ITG_ONLINE_USER_ID_BYTES) ||
        !IsValidITGOnlineAuthField(
            m_sITGOnlineUserName, MAX_ITG_ONLINE_USER_NAME_BYTES))) {
-    LOG->Warn(
-        "Profile::LoadEditableDataFromDir: discarded invalid ITG Online "
-        "authentication data.");
+    if (ITGOnlineAuthLogsEnabledFromThemePrefs()) {
+      LOG->Warn(
+          "Profile::LoadEditableDataFromDir: discarded invalid ITG Online "
+          "authentication data.");
+    }
     ClearITGOnlineAuth();
   }
 

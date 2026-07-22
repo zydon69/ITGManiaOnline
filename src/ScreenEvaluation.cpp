@@ -102,7 +102,7 @@ bool OnlineVerboseLogsEnabledFromThemePrefs() {
   bool enabled = false;
   if (!ini.GetValue(
           PREFSMAN->m_sTheme,
-          "ITGOnlineGameplayLayoutLogs",
+          "ITGOnlineNetworkLogs",
           enabled)) {
     return false;
   }
@@ -432,8 +432,10 @@ bool ShouldIgnoreOnlineEvaluationNextScreen() {
 
   if (!hasActiveAnswer) {
     LUA->Release(L);
-    LOG->Warn("ITG Online: evaluation active-session gate failed; using observed state=%d.",
-              ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
+    OnlineTrace(
+        "ITG Online: evaluation active-session gate failed; using observed "
+        "state=%d.",
+        ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
     return ITGOnlineSessionGuard::IsObservedActive();
   }
 
@@ -455,7 +457,9 @@ bool ShouldIgnoreOnlineEvaluationNextScreen() {
   LUA->Release(L);
 
   if (!exitOk) {
-    LOG->Warn("ITG Online: evaluation exit-state gate failed; holding evaluation closed.");
+    OnlineTrace(
+        "ITG Online: evaluation exit-state gate failed; holding evaluation "
+        "closed.");
     return true;
   }
   return !exitRequested;
@@ -496,7 +500,9 @@ bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
   if (!hasActiveAnswer) {
     shouldConsume = ITGOnlineSessionGuard::IsObservedActive();
     if (shouldConsume) {
-      LOG->Warn("ITG Online: native evaluation exit active-session gate failed; holding input closed.");
+      OnlineTrace(
+          "ITG Online: native evaluation exit active-session gate failed; "
+          "holding input closed.");
     }
   }
 
@@ -517,7 +523,9 @@ bool TryHandleOnlineEvaluationNativeExit(const std::string& inputName) {
     shouldConsume = handlerOk && handled;
     if (!handlerOk) {
       shouldConsume = true;
-      LOG->Warn("ITG Online: native evaluation exit handler failed; holding input closed.");
+      OnlineTrace(
+          "ITG Online: native evaluation exit handler failed; holding input "
+          "closed.");
     }
     OnlineTrace("ITG Online: ScreenEvaluation consumed native %s input online "
         "handled=%i.",
@@ -1607,7 +1615,9 @@ bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
   lua_settop(L, stackTop);
   LUA->Release(L);
   if (!ok) {
-    LOG->Warn("ITG Online: evaluation auto-advance gate failed; holding evaluation closed.");
+    OnlineTrace(
+        "ITG Online: evaluation auto-advance gate failed; holding evaluation "
+        "closed.");
     return true;
   }
   return blocked;

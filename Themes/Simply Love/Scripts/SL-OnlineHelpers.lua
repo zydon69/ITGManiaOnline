@@ -234,6 +234,7 @@ function online_flow_trace_throttled(key, intervalSeconds, message)
 end
 
 function report_online_error(context, err)
+	if not online_logs_enabled("network") then return end
 	local message = "ITG Online " .. tostring(context or "operation") .. " failed: " .. tostring(err or "unknown")
 	if lua and lua.ReportScriptError then
 		lua.ReportScriptError(message)
@@ -3962,7 +3963,7 @@ CreateOnlineHandler = function()
 									message=online_join_failure_message(decoded, response)
 								})
 							end
-						end)
+						end, { visibility=params.visibility })
 	        else
 						online_trace("FLOW JoinLobbyMessage skipped reason=not_connected_or_no_socket")
 	        end

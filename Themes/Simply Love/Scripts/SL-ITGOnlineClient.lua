@@ -335,7 +335,7 @@ local function safe_call(label, fn)
 		local message = "safe_call_failed label=" .. tostring(label or "unknown") .. " error=" .. tostring(results[2])
 		if online_trace then
 			online_trace(message)
-		elseif Warn then
+		elseif Warn and type(online_logs_enabled) == "function" and online_logs_enabled("network") then
 			local safeMessage = type(online_safe_log_text) == "function"
 				and online_safe_log_text(message, 4096)
 				or tostring(message):gsub("[%c]", " ")
@@ -13963,6 +13963,13 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 		local requestRoomKey = tostring(roomId or "")
 		local activeRoomKey = tostring(self.currentRoomId or "")
 		local requestContextStillCurrent = requestRoomKey == activeRoomKey
+		if roomId ~= nil and self:IsLeavingRoom(roomId) then
+			online_flow_trace("heartbeat_response_ignored reason=room_leave_in_progress"
+				.. " room=" .. tostring(roomId)
+				.. " ok=" .. tostring(ok == true)
+				.. " queuedStatus=" .. tostring(queuedStatus or "nil"))
+			return
+		end
 		if ok and activity == true then
 			self.lastUserActivitySentAt = math.max(
 				tonumber(self.lastUserActivitySentAt) or 0,
@@ -14810,7 +14817,9 @@ function ITGOnline:CreateRoom(callback, visibility)
 	end)
 end
 
-function ITGOnline:RequestJoinRoom(roomId, callback)
+function ITGOnline:RequestJoinRoom(roomId, callback, options)
+	options = type(options) == "table" and options or {}
+	local hintedVisibility = tostring(options.visibility or "")
 	online_flow_trace("join_room_begin room=" .. tostring(roomId)
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
@@ -14844,7 +14853,10 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 		local freshPhase = "nil"
 		local freshRoomFound = false
 		local freshAcceptsNewMembers = nil
+		local freshAcceptsJoinRequests = nil
 		local freshJoinBlockReason = nil
+		local freshVisibility = hintedVisibility
+		local freshJoinMode = nil
 		if prefetchOk and type(prefetchDecoded) == "table" then
 			local lobbyPayload = self:LobbySearchPayload(prefetchDecoded)
 			self.cachedLobbySearchPayload = lobbyPayload
@@ -14853,10 +14865,16 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				if online_room_ids_match(candidateRoomId, joinIntentRoomId) then
 					freshRoomFound = true
 					freshPhase = tostring(lobby.phase or "nil")
+					freshVisibility = tostring(lobby.visibility or freshVisibility or "")
 					freshAcceptsNewMembers = lobby.acceptsNewMembers
 					if freshAcceptsNewMembers == nil then
 						freshAcceptsNewMembers = lobby.accepts_new_members
 					end
+					freshAcceptsJoinRequests = lobby.acceptsJoinRequests
+					if freshAcceptsJoinRequests == nil then
+						freshAcceptsJoinRequests = lobby.accepts_join_requests
+					end
+					freshJoinMode = lobby.joinMode or lobby.join_mode
 					freshJoinBlockReason = lobby.joinBlockReason or lobby.join_block_reason
 					break
 				end
@@ -14864,7 +14882,10 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 			online_flow_trace("join_room_prefetch_applied room=" .. tostring(roomId)
 				.. " found=" .. tostring(freshRoomFound == true)
 				.. " phase=" .. tostring(freshPhase)
+				.. " visibility=" .. tostring(freshVisibility)
 				.. " acceptsNewMembers=" .. tostring(freshAcceptsNewMembers)
+				.. " acceptsJoinRequests=" .. tostring(freshAcceptsJoinRequests)
+				.. " joinMode=" .. tostring(freshJoinMode)
 				.. " lobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
 				.. " onlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
 			safe_broadcast("LobbySearched", lobbyPayload)
@@ -14874,7 +14895,9 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				.. " status=" .. tostring(prefetchResponse and prefetchResponse.statusCode or "nil")
 				.. " error=" .. tostring(prefetchDecoded and prefetchDecoded.error_code or prefetchResponse and prefetchResponse.errorMessage or "nil"))
 		end
-		if prefetchOk and freshRoomFound and freshAcceptsNewMembers == false then
+		local privateRoom = freshVisibility == "private" or freshJoinMode == "manager_approval"
+		local acceptsRequestedJoin = privateRoom and freshAcceptsJoinRequests or freshAcceptsNewMembers
+		if prefetchOk and freshRoomFound and acceptsRequestedJoin == false then
 			local blockedMessages = {
 				song_ready_to_launch = "Une chanson est prete a etre lancee dans ce salon.",
 				players_configuring_options = "Les joueurs configurent leurs options.",
@@ -14907,11 +14930,18 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 			return
 		end
 
-		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/join", {}, function(ok, decoded, response)
+		local requestPath = "/rooms/" .. tostring(roomId)
+			.. (privateRoom and "/join-requests" or "/join")
+		online_flow_trace("join_room_submit room=" .. tostring(roomId)
+			.. " visibility=" .. tostring(freshVisibility)
+			.. " joinMode=" .. tostring(privateRoom and "manager_approval" or "direct")
+			.. " path=" .. requestPath)
+		self:Request("POST", requestPath, {}, function(ok, decoded, response)
 			online_flow_trace("join_room_response room=" .. tostring(roomId)
 				.. " ok=" .. tostring(ok == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+				.. " hasJoinRequest=" .. tostring(decoded and decoded.join_request ~= nil)
 				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
 				.. " prefetched=" .. tostring(prefetchOk == true)
 				.. " prefetchFoundRoom=" .. tostring(freshRoomFound == true)
@@ -14929,10 +14959,34 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 				pendingJoinRoomId = self.pendingJoinRoomId or "nil",
 			})
 			local responseRoomId = decoded and decoded.room and decoded.room.id or nil
+			local responseJoinRequestRoomId = decoded and decoded.join_request
+				and (decoded.join_request.room_id or decoded.join_request.roomId) or nil
 			local pendingIntentMatches = online_room_ids_match(self.pendingJoinRoomId, joinIntentRoomId)
 			local realtimeAlreadyApplied = self.pendingJoinRoomId == nil
 				and online_room_ids_match(self.currentRoomId, joinIntentRoomId)
-			if ok and decoded and decoded.room
+			if privateRoom and ok and decoded and decoded.join_request
+				and not online_room_ids_match(responseJoinRequestRoomId, joinIntentRoomId) then
+				online_flow_trace("join_room_response_ignored reason=join_request_room_mismatch"
+					.. " targetRoom=" .. tostring(joinIntentRoomId)
+					.. " responseRoom=" .. tostring(responseJoinRequestRoomId or "nil"))
+				ok = false
+				decoded = nil
+				response = {
+					cancelled = true,
+					errorMessage = "The join request did not match the requested room.",
+				}
+			elseif privateRoom and ok and decoded and decoded.join_request
+				and not pendingIntentMatches then
+				online_flow_trace("join_room_response_ignored reason=stale_join_request_intent"
+					.. " targetRoom=" .. tostring(joinIntentRoomId)
+					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+				ok = false
+				decoded = nil
+				response = {
+					cancelled = true,
+					errorMessage = "A newer room join attempt superseded this request.",
+				}
+			elseif ok and decoded and decoded.room
 				and not online_room_ids_match(responseRoomId, joinIntentRoomId) then
 				online_flow_trace("join_room_response_ignored reason=room_mismatch"
 					.. " targetRoom=" .. tostring(joinIntentRoomId)
@@ -14955,6 +15009,18 @@ function ITGOnline:RequestJoinRoom(roomId, callback)
 					cancelled = true,
 					errorMessage = "A newer room join attempt superseded this response.",
 				}
+			elseif privateRoom and ok and decoded and decoded.join_request then
+				self.pendingJoinRoomId = joinIntentRoomId
+				self.pendingJoinRequestId = decoded.join_request.id
+				online_flow_trace("join_room_request_pending room=" .. tostring(joinIntentRoomId)
+					.. " joinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+					.. " status=" .. tostring(decoded.join_request.status or "nil"))
+			elseif privateRoom and ok then
+				online_flow_trace("join_room_response_rejected reason=missing_join_request_payload"
+					.. " room=" .. tostring(joinIntentRoomId))
+				ok = false
+				response = response or {}
+				response.errorMessage = "The server returned an incomplete join request response."
 			elseif ok and decoded and decoded.room then
 				local room = self:ApplyDecodedRoomSnapshot(decoded, "join_room")
 				ok = room ~= nil
@@ -15447,9 +15513,9 @@ function ITGOnline:LeaveRoom(callback)
 			phase = self.currentRoom and self.currentRoom.phase or "nil",
 			leaving = self:IsLeavingRoom(roomId) == true,
 		})
-		self:CancelPendingRequests()
 		self:MarkLeavingRoom(roomId, true)
 		self:IgnoreRoomEvents(roomId, 30)
+		self:CancelPendingRequests()
 		online_flow_trace("leave_room_request room=" .. tostring(roomId))
 		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {
 			client_action_id = self:NewClientActionId("room-leave"),
@@ -16671,6 +16737,14 @@ function ITGOnline:LobbySearchPayload(decoded)
 					local normalizedPhase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(phase) or tostring(phase or "")
 					acceptsNewMembers = normalizedPhase == "lobby" or normalizedPhase == "results"
 				end
+				local acceptsJoinRequests = room and room.accepts_join_requests
+				if acceptsJoinRequests == nil and room then
+					acceptsJoinRequests = room.acceptsJoinRequests
+				end
+				if acceptsJoinRequests == nil then
+					local normalizedPhase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(phase) or tostring(phase or "")
+					acceptsJoinRequests = normalizedPhase == "lobby" or normalizedPhase == "results"
+				end
 				lobbies[#lobbies + 1] = {
 					code = tostring(roomId or ""),
 					roomId = roomId,
@@ -16679,6 +16753,8 @@ function ITGOnline:LobbySearchPayload(decoded)
 					playerCount = room.members_count or 0,
 					phase = phase,
 					acceptsNewMembers = acceptsNewMembers == true,
+					acceptsJoinRequests = acceptsJoinRequests == true,
+					joinMode = room.join_mode or room.joinMode,
 					joinBlockReason = room.join_block_reason or room.joinBlockReason,
 				}
 			end

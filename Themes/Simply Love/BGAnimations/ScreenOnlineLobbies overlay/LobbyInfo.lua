@@ -3,6 +3,8 @@ local offset = 0
 local num_rows = 5
 local data = {}
 local private_border_color = color("#777777")
+local public_lobby_color = color("#45E06F")
+local private_lobby_color = color("#FF4B55")
 
 local function lobby_info_trace(message)
   if type(online_logs_enabled) == "function" and not online_logs_enabled() then
@@ -23,7 +25,7 @@ local function lobby_row_summary(row)
 end
 
 local function is_selectable(row)
-  return type(row) == "table" and tostring(row.visibility or "public") ~= "private"
+  return type(row) == "table" and tostring(row.code or "") ~= ""
 end
 
 local function first_selectable_index()
@@ -120,7 +122,7 @@ local t = Def.ActorFrame{
     local selected = index and data[index] or nil
     if not selected or not is_selectable(selected) then
       lobby_info_trace("select_lobby rejected reason="
-        .. tostring(selected and "private_room" or "missing_selection")
+        .. tostring(selected and "invalid_room" or "missing_selection")
         .. " selectedIndex=" .. tostring(index or 0)
         .. " count=" .. tostring(#data))
       SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
@@ -136,6 +138,8 @@ local t = Def.ActorFrame{
       visibility = selected.visibility,
       phase = selected.phase,
       acceptsNewMembers = selected.acceptsNewMembers,
+      acceptsJoinRequests = selected.acceptsJoinRequests,
+      joinMode = selected.joinMode,
     })
   end
 }
@@ -172,10 +176,10 @@ for i=1,num_rows+2 do
     end,
     UpdateSelfCommand=function(self)
       local row = data[i + offset]
-      if row and tostring(row.visibility or "public") == "private" then
-        self:diffuse(private_border_color)
-      elseif self.focus and i == focus_pos then
+      if self.focus and i == focus_pos then
         self:diffuse(Color.Green)
+      elseif row and tostring(row.visibility or "public") == "private" then
+        self:diffuse(private_border_color)
       else
         self:diffuse(Color.White)
       end
@@ -225,7 +229,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Phase",
+    Text="Type",
     InitCommand=function(self)
       self:zoom(0.58):x(72):y(-10)
     end,
@@ -238,7 +242,9 @@ for i=1,num_rows+2 do
     end,
     UpdateSelfCommand=function(self)
       local row = data[i + offset]
-      self:settext(row and row.phase or "")
+      local isPrivate = row and tostring(row.visibility or "public") == "private"
+      self:settext(row and (isPrivate and "Private lobby" or "Public lobby") or "")
+      self:diffuse(isPrivate and private_lobby_color or public_lobby_color)
     end
   }
 

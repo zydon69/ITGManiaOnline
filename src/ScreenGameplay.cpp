@@ -151,7 +151,7 @@ static bool OnlineVerboseLogsEnabledFromThemePrefs() {
 
   bool enabled = false;
   if (!ini.GetValue(
-          PREFSMAN->m_sTheme, "ITGOnlineGameplayLayoutLogs", enabled)) {
+          PREFSMAN->m_sTheme, "ITGOnlineNetworkLogs", enabled)) {
     return false;
   }
 
@@ -627,7 +627,7 @@ static bool GetITGOnlineIsActive() {
     return isActive;
   }
 
-  LOG->Warn(
+  OnlineTrace(
       "ITG Online: active-session gate failed; using observed state=%d.",
       ITGOnlineSessionGuard::IsObservedActive() ? 1 : 0);
   return ITGOnlineSessionGuard::IsObservedActive();
@@ -651,7 +651,7 @@ static bool GetITGOnlineShouldReleaseGameplayForEvaluation() {
   LUA->Release(L);
 
   if (!ran) {
-    LOG->Warn("ITG Online: evaluation release gate failed.");
+    OnlineTrace("ITG Online: evaluation release gate failed.");
   }
 
   return shouldRelease;
@@ -678,7 +678,7 @@ static bool GetITGOnlineShouldHoldGameplayForStart() {
 
   if (!ran) {
     const bool isOnlineActive = GetITGOnlineIsActive();
-    LOG->Warn(
+    OnlineTrace(
         "ITG Online: start hold gate failed; %s",
         isOnlineActive ? "holding gameplay closed"
                        : "local gameplay unaffected");
@@ -705,7 +705,7 @@ static bool MarkITGOnlineFailedEarly() {
   LUA->Release(L);
 
   if (!ran) {
-    LOG->Warn("ITG Online: failed-state notification failed.");
+    OnlineTrace("ITG Online: failed-state notification failed.");
   }
   return marked;
 }
@@ -4850,7 +4850,7 @@ bool ScreenGameplay::OnlineShouldHoldBeforeEvaluation() {
   }
   if (!ok) {
     const bool isOnlineActive = GetITGOnlineIsActive();
-    LOG->Warn(
+    OnlineTrace(
         "ITG Online: evaluation hold gate failed; %s",
         isOnlineActive ? "holding gameplay closed"
                        : "local gameplay unaffected");
@@ -4880,7 +4880,7 @@ bool ScreenGameplay::OnlineShouldKeepGameplayAliveAfterLocalFail() {
 
   if (!ok) {
     const bool isOnlineActive = GetITGOnlineIsActive();
-    LOG->Warn(
+    OnlineTrace(
         "ITG Online: local fail keep-alive gate failed; %s",
         isOnlineActive ? "keeping gameplay alive"
                        : "local gameplay unaffected");
@@ -5192,7 +5192,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       } else if (
           m_timerOnlineEvaluationHoldStarted.Ago() >=
           ITGONLINE_EVALUATION_HOLD_MAX_SECONDS) {
-        LOG->Warn(
+        OnlineTrace(
             "ITG Online: evaluation hold timed out after %.2fs; continuing to "
             "evaluation",
             m_timerOnlineEvaluationHoldStarted.Ago());
@@ -5591,7 +5591,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         } else if (
             m_timerOnlineFailedHoldStarted.Ago() >=
             ITGONLINE_FAILED_HOLD_MAX_SECONDS) {
-          LOG->Warn(
+          OnlineTrace(
               "ITG Online: failed-player hold timed out after %.2fs; "
               "continuing to evaluation.",
               m_timerOnlineFailedHoldStarted.Ago());

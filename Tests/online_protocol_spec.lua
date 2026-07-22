@@ -187,7 +187,7 @@ equal(protocol.online_player_room_label({
 	id = "206",
 	name = "Public lobby",
 	visibility = "public",
-}), "[PUB] Public lobby", "public room player label")
+}), "Public lobby n°206", "public room player label")
 equal(protocol.online_player_room_label(nil), "", "missing room player label")
 
 for _, language in ipairs({ "de", "en", "es", "fr", "it", "ja", "pl", "pt-br", "ru" }) do

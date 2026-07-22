@@ -4250,7 +4250,9 @@ local af = Def.ActorFrame{
 			local room = roomLabel ~= "" and (" " .. roomLabel) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
 			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
-			local line = clamp_text(selected .. i .. ". " .. display_name .. status .. room, 44)
+			-- Keep the room suffix intact: it carries the room number required to
+			-- identify private rooms. The actor's maxwidth handles final scaling.
+			local line = selected .. i .. ". " .. clamp_text(display_name, 24) .. status .. room
 			if list_selected and lobby_view == "players" and i == online_player_index then
 				selected_start = text_length
 				selected_length = online_utf8_length(line)
@@ -5514,20 +5516,20 @@ local af = Def.ActorFrame{
 			play_online_sound_once("Common", "Cancel")
 			return
 		end
-		if tostring(params.visibility or "public") == "private" then
-			lobby_flow_trace("OnlineLobbyJoinSelected_rejected reason=private_room code=" .. tostring(params.code))
-			play_online_sound_once("Common", "Cancel")
-			return
-		end
 		lobby_flow_trace("OnlineLobbyJoinSelected_received code=" .. tostring(params.code)
+			.. " visibility=" .. tostring(params.visibility or "public")
 			.. " acceptsNewMembers=" .. tostring(params.acceptsNewMembers)
+			.. " acceptsJoinRequests=" .. tostring(params.acceptsJoinRequests)
+			.. " joinMode=" .. tostring(params.joinMode)
 			.. " phase=" .. tostring(params.phase)
 			.. " mode=" .. tostring(mode)
 			.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		-- The lobby list is only a cache.  RequestJoinRoom performs a mandatory
 		-- FetchLobby preflight immediately before POST /join, so a stale config
 		-- snapshot must never reject a room that has just returned to lobby.
-		if params.acceptsNewMembers == false then
+		local cachedAcceptsJoin = tostring(params.visibility or "public") == "private"
+			and params.acceptsJoinRequests or params.acceptsNewMembers
+		if cachedAcceptsJoin == false then
 			lobby_flow_trace("OnlineLobbyJoinSelected_stale_non_joinable_hint_ignored code=" .. tostring(params.code)
 				.. " cachedPhase=" .. tostring(params.phase)
 				.. " action=refresh_then_server_authoritative_join")
@@ -5545,6 +5547,7 @@ local af = Def.ActorFrame{
 		lobby_flow_trace("OnlineLobbyJoinSelected_broadcast_join code=" .. tostring(params.code))
 		MESSAGEMAN:Broadcast("JoinLobby", {
 			code=params.code,
+			visibility=params.visibility,
 		})
 	end,
 		OnlineLobbyLeftMessageCommand=function(self, params)
