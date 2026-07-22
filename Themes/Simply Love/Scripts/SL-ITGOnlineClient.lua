@@ -10444,6 +10444,20 @@ function ITGOnline:CopyServerJudgments(judgments)
 	return copy
 end
 
+function ITGOnline:MergeMonotonicServerJudgments(current, previous)
+	local merged = self:CopyServerJudgments(current)
+	local restored = {}
+	for _, key in ipairs({ "fantastic", "excellent", "great", "decent", "way_off", "miss", "mine", "hold_ok", "hold_ng" }) do
+		local previousCount = math.max(0, math.floor(tonumber(previous and previous[key]) or 0))
+		local currentCount = math.max(0, math.floor(tonumber(merged[key]) or 0))
+		if previousCount > currentCount then
+			merged[key] = previousCount
+			restored[#restored + 1] = key .. ":" .. tostring(currentCount) .. "->" .. tostring(previousCount)
+		end
+	end
+	return merged, restored
+end
+
 function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
 	local j = judgments or {}
 	return table.concat({
@@ -11354,6 +11368,16 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	local judgmentRoundKey = validRoundKey and roundKey or tostring(self.currentRoomId or "")
 	self.lastScoreJudgmentsByRoundKey = self.lastScoreJudgmentsByRoundKey or {}
 	if self:HasScoredJudgments(judgments) then
+		local previousJudgments = self.lastScoreJudgmentsByRoundKey[judgmentRoundKey]
+		local restored
+		judgments, restored = self:MergeMonotonicServerJudgments(judgments, previousJudgments)
+		if restored and #restored > 0 then
+			online_flow_trace("score_judgment_regression_restored"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(judgmentRoundKey)
+				.. " final=" .. tostring(final == true)
+				.. " counters=" .. table.concat(restored, ","))
+		end
 		self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] = self:CopyServerJudgments(judgments)
 	elseif final and self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] then
 		judgments = self:CopyServerJudgments(self.lastScoreJudgmentsByRoundKey[judgmentRoundKey])
