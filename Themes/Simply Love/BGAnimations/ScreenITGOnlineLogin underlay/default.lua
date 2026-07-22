@@ -200,11 +200,8 @@ local function friendly_login_error(decoded, response, fallbackKey)
 		return THEME:GetString("ScreenITGOnlineLogin", "ConnectionFailed")
 	end
 
-	-- Server validation messages are useful when short and safe to render.  Raw
-	-- transport diagnostics remain in the gated logs instead of the UI.
-	if detail ~= "" and #detail <= 160 and not detail:find("[%c]") then
-		return detail
-	end
+	-- Server messages are protocol diagnostics and are not localized. Keep them
+	-- in the gated logs; the UI always uses the current language catalog.
 	return THEME:GetString("ScreenITGOnlineLogin", fallbackKey or "ConnectionFailed")
 end
 
@@ -582,7 +579,7 @@ local function render_qr(panel)
 
 	if code then
 		local codeText = normalize_short_code(state.shortCode)
-		code:settext(codeText ~= "" and ("CODE: " .. codeText) or "")
+		code:settext(codeText ~= "" and THEME:GetString("ScreenITGOnlineLogin", "ShortCode"):format(codeText) or "")
 	end
 end
 

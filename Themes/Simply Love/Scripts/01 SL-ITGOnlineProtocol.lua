@@ -428,18 +428,24 @@ function ITGOnlineProtocol.pending_join_event_matches(state, payload)
 	return true, "request_match"
 end
 
-function ITGOnlineProtocol.online_player_room_label(room)
+function ITGOnlineProtocol.online_player_room_label(room, labels)
 	if type(room) ~= "table" then return "" end
 
 	local roomId = canonical_decimal_id(room.id or room.room_id or room.roomId or room.code)
 	if room.visibility == "private" then
-		return roomId and ("Private lobby n°" .. roomId) or "Private lobby"
+		local label = type(labels) == "table" and type(labels.private) == "string"
+			and labels.private ~= "" and labels.private or "Private lobby"
+		return roomId and (label .. " n°" .. roomId) or label
 	end
 
 	if room.visibility == "public" then
-		return roomId and ("Public lobby n°" .. roomId) or "Public lobby"
+		local label = type(labels) == "table" and type(labels.public) == "string"
+			and labels.public ~= "" and labels.public or "Public lobby"
+		return roomId and (label .. " n°" .. roomId) or label
 	end
-	return roomId and ("Lobby n°" .. roomId) or "Lobby"
+	local label = type(labels) == "table" and type(labels.generic) == "string"
+		and labels.generic ~= "" and labels.generic or "Lobby"
+	return roomId and (label .. " n°" .. roomId) or label
 end
 
 function ITGOnlineProtocol.new_event_reducer(roomId)

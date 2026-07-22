@@ -9,6 +9,19 @@ ITGOnline = ITGOnline or {}
 ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
+
+local function pack_text(key, fallback, ...)
+	local value = fallback or key
+	if THEME and THEME.HasString and THEME:HasString("ScreenOnlineLobbies", key) then
+		value = THEME:GetString("ScreenOnlineLobbies", key)
+	end
+	if select("#", ...) > 0 then
+		local ok, formatted = pcall(string.format, value, ...)
+		if ok then return formatted end
+	end
+	return value
+end
+
 PackSync.scriptVersion = "2026-06-21-pack-status-download-sequence-v2"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
@@ -81,19 +94,35 @@ PackSync.status = {
 }
 
 PackSync.statusText = {
-	unknown = "Etat inconnu",
-	ready = "Pret",
-	manager_browsing_unknown_pack = "Pack absent - telechargement apres selection",
-	searching_local_charts = "Recherche locale",
-	local_chart_match_found = "Chart compatible trouvee",
-	no_compatible_chart_found = "Aucune chart compatible",
-	awaiting_pack_choice = "Choisissez un pack",
-	download_requested = "Telechargement demande",
-	download_in_progress = "Telechargement en cours",
-	download_failed = "Telechargement echoue",
-	reloading_songs = "Rechargement chansons",
-	downloaded_ok = "Telechargement OK",
-	chart_mismatch = "Chart differente",
+	unknown = "Unknown status",
+	ready = "Ready",
+	manager_browsing_unknown_pack = "Pack missing - download after selection",
+	searching_local_charts = "Searching local charts",
+	local_chart_match_found = "Compatible chart found",
+	no_compatible_chart_found = "No compatible chart",
+	awaiting_pack_choice = "Choose a pack",
+	download_requested = "Download requested",
+	download_in_progress = "Download in progress",
+	download_failed = "Download failed",
+	reloading_songs = "Reloading songs",
+	downloaded_ok = "Download complete",
+	chart_mismatch = "Different chart",
+}
+
+PackSync.statusTextKeys = {
+	unknown = "PackStatusUnknown",
+	ready = "PackStatusReady",
+	manager_browsing_unknown_pack = "PackStatusManagerBrowsingUnknown",
+	searching_local_charts = "PackStatusSearchingLocal",
+	local_chart_match_found = "PackStatusCompatibleFound",
+	no_compatible_chart_found = "PackStatusNoCompatible",
+	awaiting_pack_choice = "PackStatusAwaitingChoice",
+	download_requested = "PackStatusDownloadRequested",
+	download_in_progress = "PackStatusDownloadInProgress",
+	download_failed = "PackStatusDownloadFailed",
+	reloading_songs = "PackStatusReloadingSongs",
+	downloaded_ok = "PackStatusDownloaded",
+	chart_mismatch = "PackStatusChartMismatch",
 }
 
 local function early_trim(value)
@@ -201,7 +230,7 @@ function PackSync:DiscardPendingStatusPost(reason)
 	for _, pendingCallback in ipairs(pending.callbacks or {}) do
 		safe_invoke_callback(pendingCallback, false, nil, {
 			errorCode = "client_status_post_coalesced",
-			errorMessage = "Le statut online a été remplacé par un état plus récent.",
+			errorMessage = pack_text("PackStatusSuperseded", "The online status was replaced by a newer state."),
 		})
 	end
 	review_src_trace("discarded pending pack status reason=" .. tostring(reason or "unknown")
@@ -218,7 +247,9 @@ function PackSync:QueuePendingStatusPost(signature, status, message, progress, c
 			if #pending.callbacks < 16 then
 				pending.callbacks[#pending.callbacks + 1] = callback
 			else
-				safe_invoke_callback(callback, false, nil, { errorMessage = "Trop de statuts online en attente." })
+				safe_invoke_callback(callback, false, nil, {
+					errorMessage = pack_text("TooManyPendingPackStatuses", "Too many online pack statuses are pending.")
+				})
 			end
 		end
 		return
@@ -257,7 +288,7 @@ function PackSync:FlushPendingStatusPost(reason)
 		for _, pendingCallback in ipairs(pending.callbacks or {}) do
 			safe_invoke_callback(pendingCallback, false, nil, {
 				errorCode = "client_status_context_changed",
-				errorMessage = "Le salon ou la sélection a changé avant la publication du statut.",
+				errorMessage = pack_text("PackStatusContextChanged", "The lobby or selection changed before the status was published."),
 			})
 		end
 		review_src_trace("dropped pending pack status after context change reason=" .. tostring(reason or "unknown")
@@ -300,7 +331,7 @@ function PackSync:ExpireStatusPostInFlight(reason)
 		.. " signature=" .. tostring(signature)
 		.. " age=" .. tostring(startedAt > 0 and string.format("%.3f", now - startedAt) or "unknown")
 		.. " callbacks=" .. tostring(#callbacks))
-	local response = { errorMessage = "La publication du statut online a expire." }
+	local response = { errorMessage = pack_text("PackStatusPublishTimeout", "Publishing the online status timed out.") }
 	for _, queuedCallback in ipairs(callbacks) do
 		safe_invoke_callback(queuedCallback, false, nil, response)
 	end
@@ -321,7 +352,7 @@ function PackSync:CancelStatusPostInFlight(reason)
 		.. " callbacks=" .. tostring(#callbacks))
 	local response = {
 		errorCode = "client_status_post_cancelled",
-		errorMessage = "La publication du statut online a été annulée car son contexte a changé.",
+		errorMessage = pack_text("PackStatusCancelledContextChanged", "Publishing the online status was cancelled because its context changed."),
 	}
 	for _, waitingCallback in ipairs(callbacks) do
 		safe_invoke_callback(waitingCallback, false, nil, response)
@@ -375,7 +406,7 @@ end
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
 
 local function download_already_in_progress_message()
-	return "Telechargement deja en cours."
+	return pack_text("DownloadAlreadyInProgress", "A download is already in progress.")
 end
 
 local function status_progress_signature(progress)
@@ -1061,7 +1092,9 @@ local function song_matches_text_prefilter(song, songInfo)
 end
 
 function PackSync:DisplayText(status)
-	return self.statusText[tostring(status or "")] or self.statusText.unknown
+	status = tostring(status or "")
+	local fallback = self.statusText[status] or self.statusText.unknown
+	return pack_text(self.statusTextKeys[status] or self.statusTextKeys.unknown, fallback)
 end
 
 function PackSync:MarkPackInstalled(packName)
@@ -1185,7 +1218,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 	options = type(options) == "table" and options or {}
 	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
 		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
-		safe_invoke_callback(callback, false, nil, { errorMessage = "Aucun salon online actif." })
+		safe_invoke_callback(callback, false, nil, {
+			errorMessage = pack_text("NoActiveOnlineLobby", "No active online lobby.")
+		})
 		return
 	end
 	local previousStatus = tostring(self.currentStatus or "")
@@ -1216,7 +1251,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			self:ApplyLocalStatus(status, message, progress)
 			safe_invoke_callback(callback, false, nil, {
 				errorCode = "client_download_identity_missing",
-				errorMessage = "L'identifiant immuable du téléchargement est manquant.",
+				errorMessage = pack_text("MissingDownloadIdentity", "The immutable download identifier is missing."),
 			})
 			return
 		end
@@ -1393,7 +1428,9 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 					waitingCallbacks[#waitingCallbacks + 1] = callback
 				else
 					trace("Status duplicate_in_flight callback rejected reason=queue_full signature=" .. tostring(signature))
-					safe_invoke_callback(callback, false, nil, { errorMessage = "Trop de statuts online en attente." })
+					safe_invoke_callback(callback, false, nil, {
+						errorMessage = pack_text("TooManyPendingPackStatuses", "Too many online pack statuses are pending.")
+					})
 				end
 			end
 			return
@@ -1478,7 +1515,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				.. " selected_at=" .. tostring(requestSelectedAt))
 			local staleResponse = response or {}
 			staleResponse.errorCode = "client_stale_status_response"
-			staleResponse.errorMessage = "Une réponse de statut online obsolète a été ignorée."
+			staleResponse.errorMessage = pack_text("StalePackStatusIgnored", "An outdated online status response was ignored.")
 			local waitingCallbacks = self.statusPostInFlightCallbacks[signature] or {}
 			self.statusPostInFlightCallbacks[signature] = nil
 			for _, waitingCallback in ipairs(waitingCallbacks) do
@@ -1618,13 +1655,13 @@ function PackSync:WatchdogTick()
 				.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
 			if browseOnly then
 				self:UpdateStatus(self.status.DownloadedOk,
-					"Pack telecharge. En attente du choix de chanson du manager.", 100,
+					pack_text("PackDownloadedWaitingManager", "Pack downloaded. Waiting for the manager's song selection."), 100,
 					function(statusOk, decoded, response)
 						trace("Browse-only completion retry response ok=" .. tostring(statusOk == true)
 							.. " status=" .. tostring(response and response.statusCode or "nil")
 							.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 						if statusOk then
-							self:CompletePendingPostReload(true, "Pack telecharge et valide apres reload.",
+							self:CompletePendingPostReload(true, pack_text("PackDownloadedValidated", "Pack downloaded and validated after reload."),
 								"browse_reload_validation_retry_ok")
 						end
 					end)
@@ -1674,7 +1711,7 @@ function PackSync:WatchdogTick()
 	if self.watchdogLastKey == key then return end
 	self.watchdogLastKey = key
 
-	local message = "Opération interrompue (timeout). Réessayez le téléchargement du pack."
+	local message = pack_text("PackOperationTimeout", "Operation timed out. Try downloading the pack again.")
 	trace("Watchdog timeout status=" .. tostring(status) .. " age=" .. tostring(math.floor(age)))
 	self.downloadInFlightKey = nil
 	self.downloadStartedAt = nil
@@ -1980,7 +2017,7 @@ function PackSync:CancelPendingPackChoice(reason)
 	else
 		self:UpdateStatus(
 			self.status.NoCompatibleChartFound,
-			"Telechargement du pack annule.",
+			pack_text("PackDownloadCancelled", "Pack download cancelled."),
 			nil,
 			nil,
 			{ downloadCancelled = true })
@@ -2065,10 +2102,10 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	-- downloaded_ok status reserved for an identified download acknowledged at
 	-- 100%, as required by the server protocol.
 	local status = exists and self.status.LocalChartMatchFound or self.status.ManagerBrowsingUnknownPack
-	local message = exists and "Pack disponible localement."
-		or "Pack absent. Vous pouvez rechercher un pack correspondant."
+	local message = exists and pack_text("PackAvailableLocally", "Pack available locally.")
+		or pack_text("PackMissingSearchAvailable", "Pack missing. You can search for a matching pack.")
 	if exists and self.downloadedPackKey == packKey then
-		message = "Pack téléchargé et disponible localement."
+		message = pack_text("PackDownloadedAvailable", "Pack downloaded and available locally.")
 	end
 	-- downloaded_ok is a terminal transfer acknowledgement and requires the
 	-- immutable download id plus progress=100.  A later preview refresh must not
@@ -2250,8 +2287,8 @@ function PackSync:FindLocalMatch(songInfo)
 			trace("Matching local chart found " .. tostring(source or song:GetSongDir()))
 			local matchSource = source == "manager pack" and "manager_pack" or "alternate_pack"
 			local matchMessage = matchSource == "manager_pack"
-				and "Pack+chart trouvées"
-				or "Pack KO / chart compatible trouvée"
+				and pack_text("PackAndChartFound", "Pack and chart found")
+				or pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
 			self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
 			local result = { ok = true, song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
 			self.localScanCache[scanKey] = result
@@ -2287,7 +2324,7 @@ function PackSync:FindLocalMatch(songInfo)
 			local payloadOk, reason = payload_matches_selected(payload, songInfo)
 			if payloadOk then
 				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
-				local matchMessage = "Pack KO / chart compatible trouvée"
+				local matchMessage = pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
 				self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
 				local result = { ok = true, song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
 				self.localScanCache[scanKey] = result
@@ -2302,15 +2339,15 @@ function PackSync:FindLocalMatch(songInfo)
 
 	if mismatchReason then
 		local message = mismatchReason == "song_hash_mismatch"
-			and "La stepchart existe localement, mais l'audio differe de celui du manager."
-			or "La musique ou la stepchart trouvée est différente de celle du manager."
+			and pack_text("LocalChartAudioMismatch", "The chart exists locally, but its audio differs from the manager's.")
+			or pack_text("SongOrChartMismatch", "The song or chart differs from the manager's.")
 		self:UpdateStatus(self.status.ChartMismatch, message)
 		self.localScanCache[scanKey] = { ok = false, status = "mismatch", reason = mismatchReason, message = message }
 		return { ok = false, status = "mismatch", reason = mismatchReason }
 	end
 
 	trace("No compatible chart found title=" .. selected_title(songInfo))
-	local message = "Aucune stepchart identique à celle du manager n’a été trouvée."
+	local message = pack_text("NoIdenticalManagerChart", "No chart identical to the manager's was found.")
 	self:UpdateStatus(self.status.NoCompatibleChartFound, message)
 	self.localScanCache[scanKey] = { ok = false, status = "missing", reason = "no_compatible_chart_found", message = message }
 	return { ok = false, status = "missing", reason = "no_compatible_chart_found" }
@@ -2596,12 +2633,12 @@ local function request_json(url, callback, options)
 	local requestLabel = tostring(options.logLabel or "stepmaniaonline")
 	if not (NETWORK and NETWORK.HttpRequest) then
 		trace("HTTP JSON skipped reason=network_unavailable request=" .. requestLabel)
-		safe_invoke_callback(callback, false, nil, { errorMessage = "Le reseau du moteur n'est pas disponible." })
+		safe_invoke_callback(callback, false, nil, { errorMessage = pack_text("EngineNetworkUnavailable", "The engine network service is unavailable.") })
 		return
 	end
 	if type(JsonDecode) ~= "function" then
 		trace("HTTP JSON skipped reason=json_decode_unavailable request=" .. requestLabel)
-		safe_invoke_callback(callback, false, nil, { errorMessage = "Le decodeur JSON n'est pas disponible." })
+		safe_invoke_callback(callback, false, nil, { errorMessage = pack_text("JsonDecoderUnavailable", "The JSON decoder is unavailable.") })
 		return
 	end
 	local okRequest, requestOrError = pcall(function()
@@ -2636,7 +2673,7 @@ local function request_json(url, callback, options)
 					if firstByte == 0x1f and secondByte == 0x8b then
 						safe_invoke_callback(callback, false, nil, {
 							statusCode = statusCode,
-							errorMessage = "Compressed StepManiaOnline response could not be decoded.",
+							errorMessage = pack_text("CompressedCatalogResponseInvalid", "The compressed StepManiaOnline response could not be decoded."),
 						})
 						return
 					end
@@ -2647,7 +2684,7 @@ local function request_json(url, callback, options)
 	end)
 	if not okRequest then
 		trace("HTTP JSON request failed request=" .. requestLabel .. " err=" .. tostring(requestOrError))
-		safe_invoke_callback(callback, false, nil, { errorMessage = "La requete StepManiaOnline a echoue." })
+		safe_invoke_callback(callback, false, nil, { errorMessage = pack_text("CatalogRequestFailed", "The StepManiaOnline request failed.") })
 	end
 end
 
@@ -2751,7 +2788,7 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	local nestedGroup = single_nested_group_folder(quarantinePath, expectedPackName)
 	if nestedGroup == "" then
 		log_dir_listing("Install quarantine invalid", quarantinePath)
-		return nil, "Le zip téléchargé ne contient pas un dossier de pack unique."
+		return nil, pack_text("ArchiveMissingSinglePackFolder", "The downloaded archive does not contain exactly one pack folder.")
 	end
 
 	local sourcePath = quarantinePath .. nestedGroup
@@ -2767,10 +2804,10 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 		remove_directory_if_possible(quarantinePath)
 		trace("Install extracted pack rejected existing target=" .. tostring(rootGroupPath)
 			.. " quarantineExistsAfterCleanup=" .. tostring(path_exists(quarantinePath) or path_exists(quarantinePath .. "/")))
-		return nil, "Un dossier de pack du meme nom existe deja localement."
+		return nil, pack_text("PackFolderAlreadyExists", "A local pack folder with the same name already exists.")
 	end
 	if not FILEMAN or not FILEMAN.MoveOnlineSongPack then
-		return nil, "Le moteur ne permet pas d'installer le pack téléchargé."
+		return nil, pack_text("EngineCannotInstallPack", "The engine cannot install the downloaded pack.")
 	end
 	local moved = FILEMAN:MoveOnlineSongPack(sourcePath, rootGroupPath)
 	flush_dir_cache("/Songs/")
@@ -2783,7 +2820,7 @@ local function install_extracted_pack_at_songs_root(quarantinePath, expectedPack
 	if not moved then
 		trace("MoveOnlineSongPack failed; refusing non-transactional recursive copy source=" .. tostring(sourcePath) .. " target=" .. tostring(rootGroupPath))
 		remove_directory_if_possible(quarantinePath)
-		return nil, "Impossible d'installer le pack téléchargé de manière atomique."
+		return nil, pack_text("AtomicPackInstallFailed", "Could not install the downloaded pack atomically.")
 	elseif path_exists(sourcePath) or path_exists(sourcePath .. "/") then
 		trace("MoveOnlineSongPack left source visible after cache flush; removing source=" .. tostring(sourcePath))
 		log_dir_listing("Install source still visible after move", sourcePath .. "/")
@@ -2906,7 +2943,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 				.. " results=" .. tostring(artistDecoded and artistDecoded.results and #artistDecoded.results or 0)
 				.. " artist=" .. tostring(artist))
 			if not artistOk then
-				callback(false, nil, { errorMessage = "La recherche artiste StepManiaOnline a echoue." })
+				callback(false, nil, { errorMessage = pack_text("CatalogArtistSearchFailed", "The StepManiaOnline artist search failed.") })
 				return
 			end
 
@@ -2995,7 +3032,7 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 							if built then payload[#payload + 1] = built end
 						end
 						finish_once(false, nil, {
-							errorMessage = "La chart StepManiaOnline correspond a plusieurs packs.",
+							errorMessage = pack_text("CatalogChartMatchesMultiplePacks", "The StepManiaOnline chart matches several packs."),
 							candidates = dedupe_candidates(payload),
 						}, "chart_key_candidates")
 						return
@@ -3018,13 +3055,13 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 							.. " results=" .. tostring(titleDecoded and titleDecoded.results and #titleDecoded.results or 0)
 							.. " title=" .. tostring(title))
 						if not titleOk then
-							callback(false, nil, { errorMessage = "Les recherches pack et titre StepManiaOnline ont echoue." })
+							callback(false, nil, { errorMessage = pack_text("CatalogPackAndTitleSearchFailed", "The StepManiaOnline pack and title searches failed.") })
 							return
 						end
 						finish_title_results(titleDecoded)
 					end)
 				else
-					callback(false, nil, { errorMessage = "La recherche de pack StepManiaOnline a echoue." })
+					callback(false, nil, { errorMessage = pack_text("CatalogPackSearchFailed", "The StepManiaOnline pack search failed.") })
 				end
 				return
 			end
@@ -3052,13 +3089,13 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 			end
 				if #packCandidatesPayload == 1 then
 					callback(false, nil, {
-						errorMessage = "La recherche de pack StepManiaOnline doit etre confirmee par titre ou chart.",
+						errorMessage = pack_text("CatalogPackNeedsConfirmation", "The StepManiaOnline pack search must be confirmed by title or chart."),
 						candidates = packCandidatesPayload,
 					})
 					return
 				elseif #packCandidatesPayload > 1 then
 					callback(false, nil, {
-					errorMessage = "La recherche de pack StepManiaOnline correspond a plusieurs packs.",
+					errorMessage = pack_text("CatalogPackMatchesMultiplePacks", "The StepManiaOnline pack search matches several packs."),
 					candidates = packCandidatesPayload,
 				})
 				return
@@ -3073,11 +3110,11 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 							callback(true, exactPackMatches[1])
 						elseif #packCandidatesPayload > 0 then
 							callback(false, nil, {
-								errorMessage = "La recherche titre StepManiaOnline a echoue.",
+								errorMessage = pack_text("CatalogTitleSearchFailed", "The StepManiaOnline title search failed."),
 								candidates = packCandidatesPayload,
 						})
 					else
-						callback(false, nil, { errorMessage = "La recherche titre StepManiaOnline a echoue." })
+						callback(false, nil, { errorMessage = pack_text("CatalogTitleSearchFailed", "The StepManiaOnline title search failed.") })
 					end
 					return
 				end
@@ -3089,12 +3126,12 @@ function PackSync:SearchStepManiaOnline(songInfo, callback)
 			trace("SMO title search result ok=" .. tostring(ok == true)
 				.. " results=" .. tostring(decoded and decoded.results and #decoded.results or 0)
 				.. " title=" .. tostring(title))
-			if not ok then callback(false, nil, { errorMessage = "La recherche titre StepManiaOnline a echoue." }); return end
+			if not ok then callback(false, nil, { errorMessage = pack_text("CatalogTitleSearchFailed", "The StepManiaOnline title search failed.") }); return end
 			finish_title_results(decoded)
 		end)
 	else
 		trace("SearchStepManiaOnline failed reason=no_pack_no_title")
-		callback(false, nil, { errorMessage = "Aucun pack ou titre disponible pour la recherche StepManiaOnline." })
+		callback(false, nil, { errorMessage = pack_text("CatalogSearchMissingTerms", "No pack or title is available for the StepManiaOnline search.") })
 	end
 end
 
@@ -3127,23 +3164,23 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				.. " packId=" .. tostring(pack and pack.id or "nil")
 				.. " title=" .. tostring(selected_title(songInfo))
 				.. " selected_at=" .. tostring(selected_at(songInfo)))
-			if callback then callback(false, "Pack candidat invalide.") end
+			if callback then callback(false, pack_text("InvalidPackCandidate", "Invalid pack candidate.")) end
 			return
 		end
 		local trustedCatalogCandidate = pack.trusted_catalog_candidate == true
 		if not trustedCatalogCandidate then
 			trace("DownloadPackByCandidate blocked reason=untrusted_source packId=" .. tostring(pack.id))
-			if callback then callback(false, "La source du pack n'est pas autorisee.") end
+			if callback then callback(false, pack_text("PackSourceNotAllowed", "The pack source is not allowed.")) end
 			return
 		end
 		if not (NETWORK and NETWORK.HttpRequest) then
 			trace("DownloadPackByCandidate blocked reason=network_unavailable")
-			if callback then callback(false, "Le reseau du moteur n'est pas disponible.") end
+			if callback then callback(false, pack_text("EngineNetworkUnavailable", "The engine network service is unavailable.")) end
 			return
 		end
 			if not (FILEMAN and FILEMAN.DoesFileExist and NETWORK.ProcessPackArchive) then
 			trace("DownloadPackByCandidate blocked reason=fileman_unavailable")
-			if callback then callback(false, "Le gestionnaire de fichiers du moteur n'est pas disponible.") end
+			if callback then callback(false, pack_text("EngineFileManagerUnavailable", "The engine file manager is unavailable.")) end
 			return
 		end
 		if not current_user_is_active_room_member() then
@@ -3153,7 +3190,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
 			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
-		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		if callback then callback(false, pack_text("NoLongerInLobby", "You are no longer in the lobby.")) end
 		return
 	end
 	options = type(options) == "table" and options or {}
@@ -3183,7 +3220,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	if not packId or packId == "0" then
 		trace("DownloadPackByCandidate blocked reason=invalid_pack_id raw=" .. tostring(pack.id)
 			.. " packName=" .. tostring(pack.name or "nil"))
-		if callback then callback(false, "StepManiaOnline a renvoye un identifiant de pack invalide.") end
+		if callback then callback(false, pack_text("InvalidCatalogPackId", "StepManiaOnline returned an invalid pack identifier.")) end
 		return
 	end
 
@@ -3198,14 +3235,14 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		if url ~= expectedCatalogUrl then
 			trace("DownloadPackByCandidate blocked reason=invalid_catalog_url packId=" .. tostring(packId)
 				.. " url=" .. tostring(url))
-			if callback then callback(false, "L'URL du pack StepManiaOnline est invalide.") end
+			if callback then callback(false, pack_text("InvalidCatalogPackUrl", "The StepManiaOnline pack URL is invalid.")) end
 			return
 		end
 		expectedArchiveHash = tostring(pack.archive_sha256 or ""):lower()
 		if expectedArchiveHash ~= "" and (#expectedArchiveHash ~= 64 or not expectedArchiveHash:match("^[a-f0-9]+$")) then
 			trace("DownloadPackByCandidate blocked reason=invalid_catalog_archive_hash packId="
 				.. tostring(pack.id))
-			if callback then callback(false, "Le manifeste du pack catalogue est invalide.") end
+			if callback then callback(false, pack_text("InvalidCatalogManifest", "The catalog pack manifest is invalid.")) end
 			return
 		end
 	end
@@ -3233,12 +3270,12 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				.. " pack=" .. tostring(packName))
 			self.downloadInFlightKey = nil
 			self:ClearActiveDownloadId("download_disk_preflight_failed")
-			if callback then callback(false, "Espace disque insuffisant pour télécharger ce pack.") end
+			if callback then callback(false, pack_text("InsufficientDiskDownload", "Not enough disk space to download this pack.")) end
 			return
 		end
 
 		if url == "" then
-			if callback then callback(false, "Le serveur n'a pas fourni d'URL de telechargement securisee.") end
+			if callback then callback(false, pack_text("MissingSecureDownloadUrl", "The server did not provide a secure download URL.")) end
 			return
 		end
 	local downloadMessage = "Telechargement de " .. tostring(packName)
@@ -3287,7 +3324,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 		end
 		if downloadCompleted then return end
 		downloadCompleted = true
-		message = message or "Le téléchargement du pack a échoué."
+		message = message or pack_text("PackDownloadFailed", "Pack download failed.")
 		trace("Download failed pack=" .. tostring(packName)
 			.. " id=" .. tostring(packId)
 			.. " generation=" .. tostring(downloadGeneration)
@@ -3386,7 +3423,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			statusCode = response and response.statusCode or "",
 			error = tostring(result),
 		})
-		fail_candidate_download("Le téléchargement a rencontré une erreur interne. Réessayez le pack.")
+		fail_candidate_download(pack_text("PackDownloadInternalError", "The download encountered an internal error. Try the pack again."))
 		return false
 	end
 
@@ -3412,10 +3449,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				trace("Download file error pack=" .. tostring(packName) .. " err=" .. tostring(errorMessage))
 				local normalizedError = tostring(errorMessage or "unknown error")
 				if normalizedError:lower():find("maximum allowed size", 1, true) then
-					fail_candidate_download("Le pack dépasse la limite de téléchargement de 5 Gio.")
+					fail_candidate_download(pack_text("PackTooLarge", "The pack exceeds the 5 GiB download limit."))
 					return
 				end
-				fail_candidate_download("Erreur d'écriture du fichier téléchargé: " .. normalizedError)
+				fail_candidate_download(pack_text("DownloadWriteError", "Could not write the downloaded file: %s", normalizedError))
 				end)
 			end,
 			onProgress = function(current, total)
@@ -3424,7 +3461,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					if downloadCompleted then return false end
 					if not current_user_is_active_room_member() then
 						trace("Download aborted reason=not_active_room_member pack=" .. tostring(packName))
-						fail_candidate_download("Vous n'etes plus dans le salon.", false)
+						fail_candidate_download(pack_text("NoLongerInLobby", "You are no longer in the lobby."), false)
 						return false
 					end
 					local now = GetTimeSinceStart and GetTimeSinceStart() or 0
@@ -3448,7 +3485,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 								.. " total=" .. tostring(totalBytes)
 								.. " current=" .. tostring(currentBytes)
 								.. " pack=" .. tostring(packName))
-							fail_candidate_download("Espace disque insuffisant pour télécharger et extraire ce pack.")
+							fail_candidate_download(pack_text("InsufficientDiskDownloadExtract", "Not enough disk space to download and extract this pack."))
 							return false
 						end
 						diskCapacityChecked = true
@@ -3459,7 +3496,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					end
 					if now - (tonumber(self.downloadLastByteAt) or now) >= 45 then
 						trace("Download stalled for 45s, aborting pack=" .. tostring(packName))
-						fail_candidate_download("Le téléchargement du pack n'a pas progressé depuis 45 secondes.")
+						fail_candidate_download(pack_text("PackDownloadStalled", "The pack download has not progressed for 45 seconds."))
 						return false
 					end
 
@@ -3498,7 +3535,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			if downloadCompleted then return end
 			if not current_user_is_active_room_member() then
 				trace("Download response ignored reason=not_active_room_member pack=" .. tostring(packName))
-				fail_candidate_download("Vous n'etes plus dans le salon.", false)
+				fail_candidate_download(pack_text("NoLongerInLobby", "You are no longer in the lobby."), false)
 				return
 			end
 			self.downloadStartedAt = nil
@@ -3509,10 +3546,10 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 				trace("Download failed transport_error pack=" .. tostring(packName)
 					.. " error=" .. tostring(transportError))
 				if transportError:lower():find("response body exceeded maximum allowed size", 1, true) then
-					fail_candidate_download("Ce build du jeu limite encore les téléchargements à 8 Mo. Reconstruisez le jeu avec la version actuelle avant de réessayer.")
+					fail_candidate_download(pack_text("LegacyDownloadLimit", "This game build still limits downloads to 8 MiB. Rebuild the current version before trying again."))
 					return
 				end
-				fail_candidate_download("Telechargement impossible : " .. transportError)
+				fail_candidate_download(pack_text("DownloadTransportError", "Download failed: %s", transportError))
 				return
 			end
 				local statusCode = tonumber(response and response.statusCode) or 0
@@ -3526,23 +3563,23 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					browseOnly = browseOnly == true,
 				})
 				if statusCode < 200 or statusCode >= 300 then
-				local message = "Le téléchargement du pack a échoué."
+				local message = pack_text("PackDownloadFailed", "Pack download failed.")
 				trace("Download failed status=" .. tostring(statusCode))
 				fail_candidate_download(message)
 				return
 			end
 				-- The bytes are complete, but the archive is not usable yet. Make the
 				-- post-transfer phase explicit instead of leaving a misleading 100%.
-				self:UpdateStatus(self.status.DownloadInProgress, "Verification du pack", 100)
+				self:UpdateStatus(self.status.DownloadInProgress, pack_text("VerifyingPack", "Verifying pack"), 100)
 
 			if not FILEMAN:DoesFileExist(zipPath) then
 				trace("Download failed missing zip pack=" .. tostring(packName)
 					.. " zipPath=" .. tostring(zipPath)
 					.. " fileName=" .. tostring(fileName))
-				fail_candidate_download("Le fichier téléchargé est introuvable.")
+				fail_candidate_download(pack_text("DownloadedFileMissing", "The downloaded file could not be found."))
 				return
 			end
-				self:UpdateStatus(self.status.DownloadInProgress, "Installation du pack", 100)
+				self:UpdateStatus(self.status.DownloadInProgress, pack_text("InstallingPack", "Installing pack"), 100)
 				local extractionFreeBytes = disk_free_bytes("/Songs/")
 				local extractionRequiredBytes = (tonumber(self.extractionReserveBytes) or (5 * 1024 * 1024 * 1024))
 					+ (tonumber(self.diskSafetyMarginBytes) or (256 * 1024 * 1024))
@@ -3550,7 +3587,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					trace("Download extraction blocked reason=insufficient_disk_space free="
 						.. tostring(extractionFreeBytes) .. " required=" .. tostring(extractionRequiredBytes)
 						.. " pack=" .. tostring(packName))
-					fail_candidate_download("Espace disque insuffisant pour extraire ce pack.")
+					fail_candidate_download(pack_text("InsufficientDiskExtract", "Not enough disk space to extract this pack."))
 					return
 				end
 				remove_directory_if_possible(quarantinePath)
@@ -3581,15 +3618,15 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 									remove_directory_if_possible(quarantinePath)
 									trace("Download archive worker failed pack=" .. tostring(packName)
 										.. " errorCode=" .. tostring(errorCode))
-									local message = "Le zip téléchargé est invalide ou impossible à extraire."
+									local message = pack_text("InvalidPackArchive", "The downloaded archive is invalid or cannot be extracted.")
 									if errorCode == "hash_unavailable" then
-										message = "Impossible de verifier l'integrite du pack catalogue."
+										message = pack_text("CatalogIntegrityUnavailable", "Could not verify the catalog pack integrity.")
 									elseif errorCode == "hash_mismatch" then
-										message = "Le hash SHA-256 du pack catalogue ne correspond pas au manifeste."
+										message = pack_text("CatalogHashMismatch", "The catalog pack SHA-256 does not match the manifest.")
 									elseif errorCode == "engine_unavailable" then
-										message = "Le moteur de fichiers n'est plus disponible."
+										message = pack_text("EngineFileManagerUnavailable", "The engine file manager is unavailable.")
 									elseif errorCode == "cancelled" then
-										message = "L'installation du pack a été annulée."
+										message = pack_text("PackInstallationCancelled", "Pack installation was cancelled.")
 									end
 									fail_candidate_download(message)
 									return
@@ -3614,7 +3651,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 								if not installedPath then
 									remove_path_if_exists(zipPath)
 									remove_directory_if_possible(quarantinePath)
-									fail_candidate_download(installError or "Impossible d'installer le pack téléchargé.")
+									fail_candidate_download(installError
+										or pack_text("PackInstallFailed", "Could not install the downloaded pack."))
 									return
 								end
 								remove_path_if_exists(zipPath)
@@ -3627,7 +3665,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 								self.pendingQuarantinePath = installedPath
 								self.pendingPostReloadBrowseOnly = browseOnly
 								self.pendingPostReloadCallback = callback
-								self:UpdateStatus(self.status.ReloadingSongs, "Rechargement des chansons")
+								self:UpdateStatus(self.status.ReloadingSongs,
+									pack_text("ReloadingSongs", "Reloading songs"))
 								trace_online_state("download_reload_requested", {
 									selected_at = selected_at(songInfo), packId = packId, packName = packName,
 									generation = downloadGeneration, activeDownloadId = self.activeDownloadId or "",
@@ -3639,7 +3678,7 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 									self.pendingQuarantinePath = nil
 									self.pendingPostReloadBrowseOnly = false
 									self.pendingPostReloadCallback = nil
-									fail_candidate_download("Le rechargement des chansons n'a pas pu démarrer.", false)
+									fail_candidate_download(pack_text("SongReloadFailed", "Song reload could not start."), false)
 									return
 								end
 								finish_candidate_download()
@@ -3648,8 +3687,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 					})
 				end)
 				if not archiveQueued or not archiveFuture then
-					fail_candidate_download("Le traitement du pack n'a pas pu démarrer: "
-						.. tostring(archiveFuture or "worker unavailable"))
+					fail_candidate_download(pack_text("PackProcessingFailed", "Pack processing could not start: %s",
+						tostring(archiveFuture or "worker unavailable")))
 					return
 				end
 				self.downloadFuture = archiveFuture
@@ -3664,7 +3703,8 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	-- a Lua future. `nil` is therefore not a submission failure; only a thrown
 	-- request call is terminal here. Completion still arrives through callbacks.
 	if not okRequest then
-		fail_candidate_download("La requete de telechargement a echoue: " .. tostring(requestOrError or "unknown error"))
+		fail_candidate_download(pack_text("DownloadRequestFailed", "The download request failed: %s",
+			tostring(requestOrError or "unknown error")))
 	end
 end
 
@@ -3672,7 +3712,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	songInfo = with_current_room_selection(songInfo, "download_selected")
 	if not songInfo then
 		trace("DownloadSelectedPack blocked reason=no_song_info")
-		if callback then callback(false, "Aucune chanson selectionnee.") end
+		if callback then callback(false, pack_text("NoSongSelected", "No song selected.")) end
 		return
 	end
 	trace("DownloadSelectedPack begin title=" .. tostring(selected_title(songInfo))
@@ -3687,7 +3727,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil)
 			.. " hasUser=" .. tostring(ITGOnline and ITGOnline.user ~= nil))
-		if callback then callback(false, "Vous n'etes plus dans le salon.") end
+		if callback then callback(false, pack_text("NoLongerInLobby", "You are no longer in the lobby.")) end
 		return
 	end
 	if trim(self.downloadInFlightKey) ~= "" then
@@ -3749,14 +3789,14 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 			-- deliberately does not start a download, but the server rearms the
 			-- missing-pack deadline once for this selection.
 			self:UpdateStatus(self.status.AwaitingPackChoice,
-				"Choisissez le pack correspondant dans les 30 secondes.", nil,
+				pack_text("ChoosePackWithinSeconds", "Choose the matching pack within %d seconds.", 30), nil,
 				function(statusOk, _, statusResponse)
 					if not statusOk then
 						trace("DownloadSelectedPack candidate choice deadline rearm failed"
 							.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
 							.. " error=" .. tostring(statusResponse and statusResponse.errorMessage or "unknown"))
 						if callback then
-							callback(false, "Impossible de reinitialiser le delai de choix du pack. Reessayez.")
+							callback(false, pack_text("PackChoiceDeadlineResetFailed", "Could not reset the pack choice deadline. Try again."))
 						end
 						return
 					end
@@ -3764,7 +3804,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 				end)
 			return
 		end
-		fail_download(catalogMessage or "Aucun pack catalogue compatible n'a ete trouve.")
+		fail_download(catalogMessage or pack_text("NoCompatibleCatalogPack", "No compatible catalog pack was found."))
 	end)
 end
 
@@ -3772,7 +3812,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 	songInfo = with_current_room_selection(songInfo, "download_browsing")
 	if not songInfo then
 		trace("DownloadBrowsingPack blocked reason=no_song_info")
-		if callback then callback(false, "Aucun pack a telecharger.") end
+		if callback then callback(false, pack_text("NoPackToDownload", "No pack to download.")) end
 		return
 	end
 
@@ -3804,7 +3844,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 		if #candidates == 0 then
 			if callback then
 				callback(false, (type(details) == "table" and details.errorMessage)
-					or "Aucun pack StepManiaOnline correspondant n'a ete trouve.")
+					or pack_text("NoMatchingStepManiaOnlinePack", "No matching StepManiaOnline pack was found."))
 			end
 			return
 		end
@@ -3812,7 +3852,7 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			callback(false, {
 				kind = "pack_candidates",
 				candidates = candidates,
-				message = "Choisissez le pack correspondant a cette previsualisation.",
+				message = pack_text("ChoosePreviewPack", "Choose the pack matching this preview."),
 			})
 		end
 	end)
@@ -3851,7 +3891,8 @@ function PackSync:ValidatePendingPostReload()
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 	if not songInfo then
 		trace("ValidatePendingPostReload skipped reason=no_pending_song")
-		complete_pending(false, "Aucun téléchargement en attente de validation.", "post_reload_no_pending_song")
+		complete_pending(false, pack_text("NoDownloadPendingValidation", "No download is pending validation."),
+			"post_reload_no_pending_song")
 		return false
 	end
 
@@ -3865,22 +3906,28 @@ function PackSync:ValidatePendingPostReload()
 			trace("Browse-only pack download did not expose the expected pack after reload")
 			rollback_installed_pack_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "browse_reload_validation_failed")
-			self:UpdateStatus(self.status.DownloadFailed, "Le pack telecharge n'a pas ete trouve apres reload.")
+			self:UpdateStatus(self.status.DownloadFailed,
+				pack_text("DownloadedPackMissingAfterReload", "The downloaded pack was not found after reload."))
 				if MESSAGEMAN then
 					MESSAGEMAN:Broadcast("OnlinePackDownloadFailed", { songInfo = songInfo, reason = "download_failed" })
 				end
-				complete_pending(false, "Le pack telecharge n'a pas ete trouve apres reload.", "browse_reload_validation_failed")
+				complete_pending(false,
+					pack_text("DownloadedPackMissingAfterReload", "The downloaded pack was not found after reload."),
+					"browse_reload_validation_failed")
 				return false
 			end
 			self:MarkPackInstalled(packName)
-			self:UpdateStatus(self.status.DownloadedOk, "Pack telecharge. En attente du choix de chanson du manager.", 100,
+			self:UpdateStatus(self.status.DownloadedOk,
+				pack_text("PackDownloadedWaitingManager", "Pack downloaded. Waiting for the manager's song selection."), 100,
 				function(statusOk, decoded, response)
 					trace("PostReload browse-only completion acknowledged ok=" .. tostring(statusOk == true)
 						.. " status=" .. tostring(response and response.statusCode or "nil")
 						.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
 						.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
 					if statusOk then
-						complete_pending(true, "Pack telecharge et valide apres reload.", "browse_reload_validation_ok")
+						complete_pending(true,
+							pack_text("PackDownloadedValidated", "Pack downloaded and validated after reload."),
+							"browse_reload_validation_ok")
 					else
 						self.pendingBrowseCompletionRetryAt = GetTimeSinceStart() + 5.25
 						trace("PostReload browse-only completion retained for retry reason=browse_reload_status_not_acknowledged")
@@ -3924,11 +3971,14 @@ function PackSync:ValidatePendingPostReload()
 				trace("Downloaded pack did not contain the selected chart; matched existing local chart instead")
 				rollback_installed_pack_if_possible(quarantinePath)
 			self:UnmarkPackInstalled(packName, "selected_chart_not_in_downloaded_pack")
-			self:UpdateStatus(self.status.DownloadFailed, "Le pack téléchargé ne contient pas la stepchart attendue.")
+			self:UpdateStatus(self.status.DownloadFailed,
+				pack_text("DownloadedPackMissingExpectedChart", "The downloaded pack does not contain the expected chart."))
 				if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
 					MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "download_failed" })
 				end
-				complete_pending(false, "Le pack téléchargé ne contient pas la stepchart attendue.", "selected_chart_not_in_downloaded_pack")
+				complete_pending(false,
+					pack_text("DownloadedPackMissingExpectedChart", "The downloaded pack does not contain the expected chart."),
+					"selected_chart_not_in_downloaded_pack")
 				return false
 			end
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_reload_apply_selected_chart")
@@ -3948,7 +3998,7 @@ function PackSync:ValidatePendingPostReload()
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 			self:UpdateStatus(self.status.DownloadedOk,
-				"Pack telecharge. En attente du choix de chanson du manager.", 100,
+				pack_text("PackDownloadedWaitingManager", "Pack downloaded. Waiting for the manager's song selection."), 100,
 				function(statusOk, statusDecoded, statusResponse)
 					if not statusOk then
 						trace("Stale-selection completion acknowledgement failed; retaining transfer identity"
@@ -3960,7 +4010,7 @@ function PackSync:ValidatePendingPostReload()
 					if MESSAGEMAN then
 						MESSAGEMAN:Broadcast("OnlinePackDownloaded", { songInfo = songInfo, staleSelection = true })
 					end
-					complete_pending(true, "Pack telecharge et valide apres reload.",
+					complete_pending(true, pack_text("PackDownloadedValidated", "Pack downloaded and validated after reload."),
 						"selected_reload_validation_stale_selection")
 				end)
 			if currentSelectedSong and currentSelectedAt ~= "" then
@@ -3984,7 +4034,8 @@ function PackSync:ValidatePendingPostReload()
 			-- has been validated. Release the download guard before availability is
 			-- confirmed; otherwise ReportSongAvailability defers itself forever on
 			-- the very download that has just completed.
-			complete_pending(true, "Pack telecharge et valide apres reload.", "selected_reload_validation_ok")
+			complete_pending(true, pack_text("PackDownloadedValidated", "Pack downloaded and validated after reload."),
+				"selected_reload_validation_ok")
 			if MESSAGEMAN then
 				MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 			end
@@ -3994,7 +4045,8 @@ function PackSync:ValidatePendingPostReload()
 	end
 
 	if result.status == "mismatch" then
-		self:UpdateStatus(self.status.ChartMismatch, "La musique ou la stepchart trouvée est différente de celle du manager.")
+		self:UpdateStatus(self.status.ChartMismatch,
+			pack_text("SongOrChartMismatch", "The song or chart differs from the manager's."))
 		rollback_installed_pack_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "chart_mismatch")
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
@@ -4003,9 +4055,11 @@ function PackSync:ValidatePendingPostReload()
 			if MESSAGEMAN and self:SongInfoMatchesCurrentSelection(songInfo) then
 				MESSAGEMAN:Broadcast("OnlineMissingSong", { songInfo = songInfo, reason = "chart_mismatch", chartMismatch = true })
 			end
-			complete_pending(false, "La musique ou la stepchart trouvée est différente de celle du manager.", "post_reload_chart_mismatch")
+			complete_pending(false, pack_text("SongOrChartMismatch", "The song or chart differs from the manager's."),
+				"post_reload_chart_mismatch")
 		else
-			self:UpdateStatus(self.status.DownloadFailed, "La chanson est introuvable après reload.")
+			self:UpdateStatus(self.status.DownloadFailed,
+				pack_text("SongMissingAfterReload", "The song could not be found after reload."))
 			rollback_installed_pack_if_possible(quarantinePath)
 		self:UnmarkPackInstalled(packName, "downloaded_song_missing_after_reload")
 		if ITGOnline and ITGOnline.ReportSongAvailability and self:SongInfoMatchesCurrentSelection(songInfo) then
@@ -4018,7 +4072,8 @@ function PackSync:ValidatePendingPostReload()
 					.. " selectedAt=" .. tostring(selected_at(songInfo))
 					.. " roomSelectedAt=" .. tostring(current_room_selected_at()))
 			end
-			complete_pending(false, "La chanson est introuvable après reload.", "post_reload_missing")
+			complete_pending(false, pack_text("SongMissingAfterReload", "The song could not be found after reload."),
+				"post_reload_missing")
 		end
 	return false
 end

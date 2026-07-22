@@ -38,6 +38,18 @@ local lastGameplayResultsForceKey = ""
 UnlockOnlineInput = nil
 local onlineInputCallbacks = {}
 
+local function online_lobby_text(key, fallback, ...)
+	local value = fallback or key
+	if THEME and THEME.HasString and THEME:HasString("ScreenOnlineLobbies", key) then
+		value = THEME:GetString("ScreenOnlineLobbies", key)
+	end
+	if select("#", ...) > 0 then
+		local ok, formatted = pcall(string.format, value, ...)
+		if ok then return formatted end
+	end
+	return value
+end
+
 local function current_config_ready_key(room)
 	if ITGOnline and ITGOnline.ConfigReadyIntentKey then
 		local ok, key = pcall(function() return ITGOnline:ConfigReadyIntentKey(room or ITGOnline.currentRoom) end)
@@ -51,11 +63,11 @@ local function online_join_failure_message(decoded, response)
 	local phase = tostring(decoded and decoded.room_phase or "")
 	local errorCode = tostring(decoded and decoded.error_code or response and response.errorCode or "")
 	local blockedMessages = {
-		song_ready_to_launch = "Une chanson est prete a etre lancee dans ce salon.",
-		players_configuring_options = "Les joueurs configurent leurs options.",
-		game_starting = "La partie est sur le point de commencer.",
-		game_in_progress = "Une partie est en cours.",
-		room_closed = "Ce salon est ferme.",
+		song_ready_to_launch = online_lobby_text("JoinBlockedSongReady", "A song is ready to start in this lobby."),
+		players_configuring_options = online_lobby_text("JoinBlockedOptions", "Players are configuring their options."),
+		game_starting = online_lobby_text("JoinBlockedStarting", "The game is about to start."),
+		game_in_progress = online_lobby_text("JoinBlockedPlaying", "A game is in progress."),
+		room_closed = online_lobby_text("JoinBlockedClosed", "This lobby is closed."),
 	}
 	if errorCode == "room_no_longer_accepting" or reason ~= "" then
 		return blockedMessages[reason]
@@ -63,11 +75,11 @@ local function online_join_failure_message(decoded, response)
 			or (phase == "config" and blockedMessages.players_configuring_options)
 			or (phase == "starting" and blockedMessages.game_starting)
 			or (phase == "playing" and blockedMessages.game_in_progress)
-			or "Ce salon n'accepte pas de nouveau joueur pour le moment."
+			or online_lobby_text("JoinBlockedGeneric", "This lobby is not accepting new players right now.")
 	end
 	return (decoded and decoded.message)
 		or (response and response.errorMessage)
-		or "Echec de connexion au salon."
+		or online_lobby_text("JoinLobbyFailed", "Could not join the lobby.")
 end
 -- These screens are the ones we want to display the player's scores for.
 local scoreScreens = {"ScreenGameplay", "ScreenGameplayShared", "ScreenEvaluationStage", "ScreenEvaluationNonstop", "ScreenEvaluationSummary"}
@@ -604,7 +616,7 @@ function expire_actor_operations(actor)
 				event = operation.eventName or key,
 				success = false,
 				errorCode = "client_request_timeout",
-				message = "Le serveur n'a pas repondu. Reessayez.",
+				message = online_lobby_text("ServerDidNotRespond", "The server did not respond. Try again."),
 			})
 		end
 	end
@@ -820,10 +832,10 @@ OnlineStartCountdownText = function()
 	if not seconds then return nil end
 
 	if seconds > 0 then
-		return "La chanson demarre dans " .. tostring(math.ceil(seconds)) .. "..."
+		return online_lobby_text("SongStartsIn", "Song starts in %d...", math.ceil(seconds))
 	end
 
-	return "Chanson demarree. Synchronisation audio..."
+	return online_lobby_text("SongStartedSyncingAudio", "Song started. Synchronizing audio...")
 end
 
 OnlinePlayingSpinner = function()
@@ -867,7 +879,8 @@ OnlineRemainingText = function(data)
 	end
 
 	if remaining == nil then return nil end
-	return "Joueurs encore en chanson : " .. FormatRemainingSeconds(remaining) .. " restantes"
+	return online_lobby_text("PlayersStillPlaying", "Players still playing: %s remaining",
+		FormatRemainingSeconds(remaining))
 end
 
 QueueOnlineGameplayStartRelease = function(actor)
@@ -977,11 +990,12 @@ InputHandler = function(event)
 				local holdDuration = GetTimeSinceStart() - startHoldTime[pn]
 				local remainingSeconds = math.max(0, 5 - math.floor(holdDuration))
 				if remainingSeconds ~= lastDisconnectCountdown then
-					SM("Maintenez &START; encore " .. remainingSeconds .. " secondes pour vous deconnecter...")
+					SM(online_lobby_text("HoldStartToDisconnect", "Hold &START; for %d more seconds to disconnect...",
+						remainingSeconds))
 					lastDisconnectCountdown = remainingSeconds
 				end
 					if holdDuration >= 5.0 then
-					SM("Deconnecte du salon.")
+					SM(online_lobby_text("DisconnectedFromLobby", "Disconnected from lobby."))
 					startHoldTime[pn] = 0
 					lastDisconnectCountdown = nil
 						isWaiting = false
@@ -1104,7 +1118,8 @@ ApplyOnlineSongSelection = function(songInfo)
 	end
 	if not song then
 		online_flow_trace("legacy_apply_song_selection_missing_song path=" .. tostring(songInfo.songPath))
-		SM("Chanson online introuvable localement : " .. tostring(songInfo.songPath))
+		SM(online_lobby_text("OnlineSongMissingLocally", "Online song not found locally: %s",
+			tostring(songInfo.songPath)))
 		safe_broadcast("OnlineMissingSong", {songInfo=songInfo})
 		return false
 	end
@@ -1124,7 +1139,8 @@ ApplyOnlineSongSelection = function(songInfo)
 	if requiresExactChartHash and not matchedSteps then
 		online_flow_trace("legacy_apply_song_selection_chart_hash_missing path=" .. tostring(songInfo.songPath)
 			.. " chart_hash=" .. tostring(songInfo.chartHash or ""):sub(1, 12))
-		SM("Chart online introuvable localement pour : " .. tostring(songInfo.songPath))
+		SM(online_lobby_text("OnlineChartMissingLocally", "Online chart not found locally for: %s",
+			tostring(songInfo.songPath)))
 		safe_broadcast("OnlineMissingSong", {songInfo=songInfo, reason="chart_hash_mismatch"})
 		restorePreviousSelection()
 		return false
@@ -1151,7 +1167,8 @@ ApplyOnlineSongSelection = function(songInfo)
 
 	if not matchedSteps then
 		online_flow_trace("legacy_apply_song_selection_no_playable_steps path=" .. tostring(songInfo.songPath))
-		SM("Aucun chart jouable trouve pour : " .. tostring(songInfo.songPath))
+		SM(online_lobby_text("NoPlayableChartForSong", "No playable chart found for: %s",
+			tostring(songInfo.songPath)))
 		safe_broadcast("OnlineMissingSong", {songInfo=songInfo, reason="no_playable_steps"})
 		restorePreviousSelection()
 		return false
@@ -1179,7 +1196,8 @@ ApplyOnlineSongSelection = function(songInfo)
 		or (songInfo.chartHash and songInfo.chartHash ~= "")
 	if requiresHashVerification and not localPayload then
 		online_flow_trace("legacy_apply_song_selection_payload_unavailable path=" .. tostring(songInfo.songPath))
-		SM("Chanson online impossible a verifier localement : " .. tostring(songInfo.songPath))
+		SM(online_lobby_text("OnlineSongCannotVerify", "Online song cannot be verified locally: %s",
+			tostring(songInfo.songPath)))
 		safe_broadcast("OnlineMissingSong", {songInfo=songInfo, reason="local_payload_unavailable"})
 		restorePreviousSelection()
 		return false
@@ -1190,7 +1208,8 @@ ApplyOnlineSongSelection = function(songInfo)
 			online_flow_trace("legacy_apply_song_selection_song_hash_mismatch path=" .. tostring(songInfo.songPath)
 				.. " expected=" .. tostring(songInfo.songHash):sub(1, 12)
 				.. " local=" .. tostring(localPayload.song_hash):sub(1, 12))
-			SM("Hash audio online different pour : " .. tostring(songInfo.songPath))
+			SM(online_lobby_text("OnlineAudioHashMismatch", "Online audio hash differs for: %s",
+				tostring(songInfo.songPath)))
 			safe_broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
 			restorePreviousSelection()
 			return false
@@ -1199,7 +1218,8 @@ ApplyOnlineSongSelection = function(songInfo)
 			online_flow_trace("legacy_apply_song_selection_chart_hash_mismatch path=" .. tostring(songInfo.songPath)
 				.. " expected=" .. tostring(songInfo.chartHash):sub(1, 12)
 				.. " local=" .. tostring(localPayload.chart_hash):sub(1, 12))
-			SM("Hash chart online different pour : " .. tostring(songInfo.songPath))
+			SM(online_lobby_text("OnlineChartHashMismatch", "Online chart hash differs for: %s",
+				tostring(songInfo.songPath)))
 			safe_broadcast("OnlineMissingSong", {songInfo=songInfo, reason="hash_mismatch"})
 			restorePreviousSelection()
 			return false
@@ -1458,7 +1478,7 @@ SelectOnlineSongAsManager = function(actor)
 			safe_broadcast("OnlineResponseStatus", {
 				event="selectSong",
 				success=false,
-				message="Session online indisponible. Reconnecte-toi au mode online."
+				message=online_lobby_text("OnlineSessionUnavailable", "The online session is unavailable. Sign in again.")
 			})
 			return
 		end
@@ -1528,7 +1548,8 @@ SelectOnlineSongAsManager = function(actor)
 			})
 			online_flow_trace("song_selected_handler_failed status=" .. tostring(response and response.statusCode or "nil")
 				.. " error=" .. errorCode)
-			local message = (decoded and decoded.message) or (response and response.errorMessage) or "Echec de selection de la chanson."
+			local message = (decoded and decoded.message) or (response and response.errorMessage)
+				or online_lobby_text("SongSelectionFailed", "Song selection failed.")
 			if SCREENMAN and SCREENMAN.SystemMessage then
 				SCREENMAN:SystemMessage(message)
 			end
@@ -1564,7 +1585,8 @@ SelectOnlineSongAsManager = function(actor)
 			safe_broadcast("OnlineResponseStatus", {
 				event="selectSong",
 				success=false,
-				message=(response and response.errorMessage) or "Impossible de recuperer l'etat du salon."
+				message=(response and response.errorMessage)
+					or online_lobby_text("FetchLobbyStateFailed", "Could not retrieve the lobby state.")
 			})
 		end)
 		return
@@ -1948,6 +1970,21 @@ OrderPlayers = function(data, localScreenName)
 	return updatedData
 end
 
+local function online_screen_label(screenName)
+	local labels = {
+		ScreenGameplay = online_lobby_text("ScreenGameplayLabel", "Gameplay"),
+		ScreenGameplayShared = online_lobby_text("ScreenGameplayLabel", "Gameplay"),
+		ScreenEvaluationStage = online_lobby_text("ScreenEvaluationLabel", "Evaluation"),
+		ScreenEvaluationNonstop = online_lobby_text("ScreenEvaluationLabel", "Evaluation"),
+		ScreenEvaluationSummary = online_lobby_text("ScreenEvaluationLabel", "Evaluation"),
+		ScreenOnlineLobbies = online_lobby_text("ScreenLobbyLabel", "Lobby"),
+		ScreenPlayerOptions = online_lobby_text("ScreenOptionsLabel", "Options"),
+		ScreenSelectMusic = online_lobby_text("ScreenMusicSelectionLabel", "Song selection"),
+		NoScreen = online_lobby_text("ScreenTransitionLabel", "Transition"),
+	}
+	return labels[tostring(screenName or "")] or tostring(screenName or ""):gsub("^Screen", "")
+end
+
 DisplayLobbyState = function(data, actor)
 	if not actor or not actor.GetChild then
 		if online_trace then online_trace("FLOW display_lobby skipped reason=no_actor") end
@@ -2127,7 +2164,7 @@ DisplayLobbyState = function(data, actor)
 						SetGameplayPaused(topScreen, false)
 					end
 			else
-			lines[#lines+1] = "Synchronisation des ecrans des joueurs...\n"
+			lines[#lines+1] = online_lobby_text("SynchronizingPlayerScreens", "Synchronizing player screens...") .. "\n"
 			local readyStates = {}
 			for _, player in ivalues(updatedData.players or {}) do
 				if type(player) == "table" then
@@ -2165,7 +2202,7 @@ DisplayLobbyState = function(data, actor)
 			if countdown then
 				lines[#lines+1] = countdown .. "\n"
 			else
-				lines[#lines+1] = "Chargement de la chanson par tous les joueurs...\n"
+				lines[#lines+1] = online_lobby_text("PlayersLoadingSong", "All players are loading the song...") .. "\n"
 			end
 			QueueOnlineGameplayStartRelease(actor)
 				elseif gameplayScreens[screenName] and data.phase == "playing" then
@@ -2221,14 +2258,14 @@ DisplayLobbyState = function(data, actor)
 
 	for i, player in ipairs(updatedData.players or {}) do
 		if type(player) ~= "table" then
-			lines[#lines+1] = tostring(i)..". Unknown player"
+			lines[#lines+1] = tostring(i)..". " .. online_lobby_text("UnknownPlayer", "Player")
 			lines[#lines+1] = ""
 		else
-				local displayedScreen = player.screenName ~= "NoScreen" and player.screenName:gsub("Screen", "") or "Transition"
+				local displayedScreen = online_screen_label(player.screenName)
 			local readyText = ""
 			if (data.phase == "lobby" or data.phase == "lobby_ready" or data.phase == "config")
 				and not updatedData.aux.allPlayersReady then
-					readyText =" ["..(player.ready and "OK" or "ATTENTE").."]"
+					readyText =" ["..(player.ready and "OK" or online_lobby_text("WaitingShort", "WAITING")).."]"
 			end
 
 			-- Only display the screen name of the players that are on a different
@@ -2238,28 +2275,30 @@ DisplayLobbyState = function(data, actor)
 			if (data.phase == "playing" or data.phase == "results") and player.playState and player.playState ~= "playing" then
 				if data.phase == "results" and player.waitingOnEvaluation == true then
 					if player.playState == "failed" then
-						stateText = " - evaluation [F]"
+						stateText = " - " .. online_lobby_text("AwaitingEvaluation", "evaluation") .. " [F]"
 					elseif player.playState == "disconnected" then
-						stateText = " - evaluation [X]"
+						stateText = " - " .. online_lobby_text("AwaitingEvaluation", "evaluation") .. " [X]"
 					else
-						stateText = " - evaluation [OK]"
+						stateText = " - " .. online_lobby_text("AwaitingEvaluation", "evaluation") .. " [OK]"
 					end
 				elseif player.playState == "finished" then
-					stateText = " - termine [OK]"
+					stateText = " - " .. online_lobby_text("FinishedStatus", "finished") .. " [OK]"
 				elseif player.playState == "failed" then
-					stateText = " - echoue [F]"
+					stateText = " - " .. online_lobby_text("FailedStatus", "failed") .. " [F]"
 				elseif player.playState == "returned_to_lobby" then
-					stateText = " - a quitte la chanson [X]"
+					stateText = " - " .. online_lobby_text("LeftSongStatus", "left the song") .. " [X]"
 				elseif player.playState == "disconnected" then
-					stateText = " - deconnecte [X]"
+					stateText = " - " .. online_lobby_text("DisconnectedStatus", "disconnected") .. " [X]"
 				else
 					stateText = " - " .. tostring(player.playState)
 				end
 			end
-			local playerName = tostring(player.profileName or player.displayName or player.name or "Joueur")
+			local playerName = tostring(player.profileName or player.displayName or player.name
+				or online_lobby_text("UnknownPlayer", "Player"))
 			local playerAndScreen = tostring(i)..'. '..playerName..playingText..readyText..stateText
 			if screenName ~= player.screenName then
-				playerAndScreen = playerAndScreen.." - in "..displayedScreen
+				playerAndScreen = playerAndScreen .. " - "
+					.. online_lobby_text("PlayerOnScreen", "on %s", displayedScreen)
 			end
 
 			lines[#lines+1] = playerAndScreen
@@ -2271,7 +2310,9 @@ DisplayLobbyState = function(data, actor)
 					local accuracy = (player.accuracy ~= nil and player.accuracy) or nil
 					local scoreStr = string.format("%.2f", score).."%"
 					if accuracy ~= nil and math.abs((tonumber(accuracy) or 0) - (tonumber(score) or 0)) > 0.05 then
-						lines[#lines+1] = "    "..scoreStr.." (acc "..string.format("%.2f", accuracy).."%)"
+						lines[#lines+1] = "    " .. scoreStr .. " ("
+							.. online_lobby_text("AccuracyShort", "acc") .. " "
+							.. string.format("%.2f", accuracy) .. "%)"
 					else
 						lines[#lines+1] = "    "..scoreStr
 					end
@@ -2285,21 +2326,23 @@ DisplayLobbyState = function(data, actor)
 	end
 
 	if screenName == "ScreenOnlineLobbies" and data.finalResults and #data.finalResults > 0 then
-			lines[#lines+1] = "Resultats de la derniere partie"
+			lines[#lines+1] = online_lobby_text("LastGameResults", "Last game results")
 		for result in ivalues(data.finalResults) do
 			local user = result.user or {}
 			local score = math.floor(tonumber(result.score) or 0)
 			local scorePercent = tonumber(result.displayed_percent or result.displayedPercent or result.score_percent)
 			local accuracy = tonumber(result.accuracy) or 0
-				local failedText = result.failed and " echoue [F]" or ""
+				local failedText = result.failed and (" " .. online_lobby_text("FailedStatus", "failed") .. " [F]") or ""
 			local scoreText = scorePercent ~= nil
-				and (string.format("%.2f", scorePercent) .. "% (" .. tostring(score) .. " pts)")
-				or (tostring(score) .. " pts")
-			local displayName = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
+				and (string.format("%.2f", scorePercent) .. "% (" .. online_lobby_text("PointsValue", "%d pts", score) .. ")")
+				or online_lobby_text("PointsValue", "%d pts", score)
+			local unknownPlayer = online_lobby_text("UnknownPlayer", "Player")
+			local displayName = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, unknownPlayer)
+				or tostring(user.display_name or user.displayName or user.name or unknownPlayer)
 			lines[#lines+1] = tostring(result.rank or "?")
 					.. ". " .. tostring(displayName)
 				.. " - " .. scoreText
-					.. " precision " .. string.format("%.2f", accuracy) .. "%"
+					.. " " .. online_lobby_text("AccuracyValue", "accuracy %.2f%%", accuracy)
 				.. failedText
 		end
 		lines[#lines+1] = ""
@@ -2414,8 +2457,8 @@ DisplayLobbyState = function(data, actor)
         -- Split the song path into pack and song name for easier reading.
         -- It looks like "<pack>/<song>" so we can just split on the first "/"
         local pack, song = split_online_song_path(data.songInfo.songPath)
-        pack = pack or "Inconnu"
-        song = song or "Inconnue"
+		pack = pack or online_lobby_text("UnknownPack", "Unknown pack")
+		song = song or online_lobby_text("UnknownSong", "Unknown song")
 
         -- Sometimes the pack or song can get quite long, so add ... if it's too long.
         local maxLength = 30
@@ -2426,8 +2469,8 @@ DisplayLobbyState = function(data, actor)
           song = string.sub(song, 1, maxLength) .. "..."
         end
 
-        lines[#lines+1] = "Pack : "..pack
-        lines[#lines+1] = "Chanson : "..song
+		lines[#lines+1] = online_lobby_text("PackValue", "Pack: %s", pack)
+		lines[#lines+1] = online_lobby_text("SongValue", "Song: %s", song)
       end
 		end
 	end
@@ -2444,7 +2487,8 @@ DisplayLobbyState = function(data, actor)
 							.. " previousKey=" .. tostring(lastOnlineGameplayRoomId)
 							.. " screen=" .. tostring(screenName))
 					end
-					lines[#lines+1] = OnlineStartCountdownText() or "Demarrage de la chanson..."
+					lines[#lines+1] = OnlineStartCountdownText()
+						or online_lobby_text("StartingSong", "Starting song...")
 					pendingOnlineStartRoomId = data.roomId
 					lastOnlineGameplayRoomId = gameplaySongKey
 					actor.onlineStartPollCount = 0
@@ -2850,7 +2894,7 @@ CreateOnlineHandler = function()
 							self.connecting = false
 							self.inLobby = false
 							self.connected = false
-							self.errorMsg = message or "Connexion echouee"
+							self.errorMsg = message or online_lobby_text("ConnectionFailed", "Connection failed")
 							self:GetChild("Display"):GetChild("Text"):settext("")
 							self:GetChild("Display"):visible(false)
 						end,
@@ -3022,7 +3066,7 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="websocket",
 								success=false,
-								message="Realtime connection timed out. Reconnecting..."
+								message=online_lobby_text("RealtimeConnectionTimeout", "Realtime connection timed out. Reconnecting...")
 								})
 								self:playcommand("ReconnectOnline")
 							end
@@ -3398,7 +3442,8 @@ CreateOnlineHandler = function()
 										safe_broadcast("OnlineResponseStatus", {
 											event="songLoaded",
 											success=false,
-											message=(decoded and decoded.message) or (response and response.errorMessage) or "Impossible de confirmer le chargement de la chanson."
+											message=(decoded and decoded.message) or (response and response.errorMessage)
+												or online_lobby_text("ConfirmSongLoadFailed", "Could not confirm song loading.")
 										})
 									end
 								end)
@@ -3640,7 +3685,7 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="ready",
 									success=false,
-									message="Echec de synchronisation de l'etat pret."
+									message=online_lobby_text("ReadySyncFailed", "Ready-state synchronization failed.")
 								})
 								return
 							end
@@ -3699,7 +3744,7 @@ CreateOnlineHandler = function()
 										success = false,
 										message = (decoded and decoded.message)
 											or (response and response.errorMessage)
-											or "Echec de synchronisation de l'etat pret."
+											or online_lobby_text("ReadySyncFailed", "Ready-state synchronization failed.")
 									})
 								end)
 		      end,
@@ -3713,7 +3758,7 @@ CreateOnlineHandler = function()
 						safe_broadcast("OnlineResponseStatus", {
 							event="sessionExpired",
 							success=false,
-							message="Online session expired. Please reconnect."
+							message=online_lobby_text("OnlineSessionExpired", "The online session expired. Please sign in again.")
 						})
 					end,
 					OnlineLobbyStateMessageCommand=function(self, params)
@@ -3931,7 +3976,7 @@ CreateOnlineHandler = function()
 									safe_broadcast("OnlineResponseStatus", {
 										event="joinLobby",
 										success=true,
-										message="Demande envoyee. En attente du manager du salon."
+									message=online_lobby_text("JoinRequestSent", "Request sent. Waiting for the lobby manager.")
 									})
 								elseif decoded and (decoded.error_code == "already_in_room" or decoded.message == "You are already in this room.") and params and params.code then
 								online_trace("FLOW JoinLobbyMessage restore_existing_room code=" .. tostring(params.code))
@@ -3952,7 +3997,8 @@ CreateOnlineHandler = function()
 										safe_broadcast("OnlineResponseStatus", {
 											event="joinLobby",
 											success=false,
-											message=(fetchDecoded and fetchDecoded.message) or (fetchResponse and fetchResponse.errorMessage) or "Impossible de restaurer l'etat du salon."
+											message=(fetchDecoded and fetchDecoded.message) or (fetchResponse and fetchResponse.errorMessage)
+												or online_lobby_text("RestoreLobbyStateFailed", "Could not restore the lobby state.")
 										})
 									end
 								end)
@@ -3960,7 +4006,13 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="joinLobby",
 									success=false,
-									message=online_join_failure_message(decoded, response)
+									message=online_join_failure_message(decoded, response),
+									errorCode=(decoded and (decoded.error_code or decoded.errorCode))
+										or (response and response.errorCode) or nil,
+									retryAfterSeconds=(decoded and (decoded.retry_after_seconds or decoded.retryAfterSeconds))
+										or (response and response.retryAfterSeconds) or nil,
+									roomId=params.code,
+									reason=decoded and (decoded.reason or decoded.decline_reason) or nil,
 								})
 							end
 						end, { visibility=params.visibility })
@@ -3981,7 +4033,7 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="createLobby",
 								success=false,
-								message="Une creation de salon est deja en cours."
+								message=online_lobby_text("LobbyCreationAlreadyInProgress", "Lobby creation is already in progress.")
 							})
 							return
 						end
@@ -4014,7 +4066,7 @@ CreateOnlineHandler = function()
 										safe_broadcast("OnlineResponseStatus", {
 											event="createLobby",
 											success=false,
-									message="Echec de creation du salon : l'utilisateur est deja dans un salon ouvert."
+									message=online_lobby_text("LobbyCreationAlreadyInLobby", "Lobby creation failed: the user is already in an open lobby.")
 										})
 									end
 								end)
@@ -4022,7 +4074,8 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="createLobby",
 									success=false,
-								message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de creation du salon."
+								message=(decoded and decoded.message) or (response and response.errorMessage)
+									or online_lobby_text("LobbyCreationFailed", "Lobby creation failed.")
 								})
 							end
 						end, params and params.visibility or "public")
@@ -4031,7 +4084,7 @@ CreateOnlineHandler = function()
 						safe_broadcast("OnlineResponseStatus", {
 							event="createLobby",
 							success=false,
-							message="Le service en ligne n'est pas encore connecte. Reessayez dans un instant."
+							message=online_lobby_text("OnlineServiceNotConnected", "The online service is not connected yet. Try again shortly.")
 						})
 	        end
 	      end,
@@ -4056,7 +4109,7 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="startRoom",
 								success=false,
-								message="Le salon n'est pas encore pret a demarrer."
+								message=online_lobby_text("LobbyNotReadyToStart", "The lobby is not ready to start yet.")
 							})
 							return
 						end
@@ -4090,7 +4143,8 @@ CreateOnlineHandler = function()
 									safe_broadcast("OnlineResponseStatus", {
 										event="startRoom",
 											success=false,
-											message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec du lancement."
+										message=(decoded and decoded.message) or (response and response.errorMessage)
+											or online_lobby_text("GameStartFailed", "Game start failed.")
 									})
 								end
 							end)
@@ -4109,7 +4163,7 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="startRoom",
 								success=false,
-								message="Le salon n'est pas encore pret a demarrer."
+								message=online_lobby_text("LobbyNotReadyToStart", "The lobby is not ready to start yet.")
 						})
 					else
 						online_trace("FLOW StartOnlineRoomMessage skipped reason=not_ready connected=" .. tostring(self.connected)
@@ -4153,7 +4207,7 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="invitePlayer",
 								success=true,
-								message="Invitation sent."
+								message=online_lobby_text("InvitationSent", "Invitation sent.")
 							})
 						else
 							safe_broadcast("OnlineResponseStatus", {
@@ -4206,7 +4260,7 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="joinLobby",
 									success=true,
-									message="Demande envoyee. En attente d'approbation."
+									message=online_lobby_text("JoinRequestAwaitingApproval", "Request sent. Waiting for approval.")
 								})
 						else
 							safe_broadcast("OnlineResponseStatus", {
@@ -4214,7 +4268,8 @@ CreateOnlineHandler = function()
 								success=false,
 								errorCode=decoded and decoded.error_code or nil,
 								retryAfterSeconds=decoded and decoded.retry_after_seconds or nil,
-								message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de la demande de connexion."
+								message=(decoded and decoded.message) or (response and response.errorMessage)
+									or online_lobby_text("JoinRequestFailed", "Join request failed.")
 							})
 						end
 					end)
@@ -4261,7 +4316,9 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="privateJoinAnswer",
 								success=ok and true or false,
-									message=ok and "Demande acceptee." or ((decoded and decoded.message) or (response and response.errorMessage) or "Impossible de repondre a la demande.")
+									message=ok and online_lobby_text("RequestAccepted", "Request accepted.")
+										or ((decoded and decoded.message) or (response and response.errorMessage)
+											or online_lobby_text("AnswerRequestFailed", "Could not answer the request."))
 							})
 						end)
 						else
@@ -4283,7 +4340,9 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 								event="privateJoinAnswer",
 								success=ok and true or false,
-									message=ok and "Demande refusee." or ((decoded and decoded.message) or (response and response.errorMessage) or "Impossible de repondre a la demande.")
+									message=ok and online_lobby_text("RequestDeclined", "Request declined.")
+										or ((decoded and decoded.message) or (response and response.errorMessage)
+											or online_lobby_text("AnswerRequestFailed", "Could not answer the request."))
 							})
 						end)
 						end
@@ -4331,7 +4390,9 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="roomInvitationAnswer",
 									success=ok and true or false,
-										message=ok and "Invitation acceptee." or ((decoded and decoded.message) or (response and response.errorMessage) or "Impossible de repondre a l'invitation.")
+										message=ok and online_lobby_text("InvitationAccepted", "Invitation accepted.")
+											or ((decoded and decoded.message) or (response and response.errorMessage)
+												or online_lobby_text("AnswerInvitationFailed", "Could not answer the invitation."))
 								})
 							end)
 						else
@@ -4352,7 +4413,9 @@ CreateOnlineHandler = function()
 								safe_broadcast("OnlineResponseStatus", {
 									event="roomInvitationAnswer",
 									success=ok and true or false,
-										message=ok and "Invitation refusee." or ((decoded and decoded.message) or (response and response.errorMessage) or "Impossible de repondre a l'invitation.")
+										message=ok and online_lobby_text("InvitationDeclined", "Invitation declined.")
+											or ((decoded and decoded.message) or (response and response.errorMessage)
+												or online_lobby_text("AnswerInvitationFailed", "Could not answer the invitation."))
 								})
 							end)
 						end
@@ -4405,7 +4468,8 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="searchLobby",
 								success=false,
-									message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de recherche des salons."
+									message=(decoded and decoded.message) or (response and response.errorMessage)
+										or online_lobby_text("LobbySearchFailed", "Lobby search failed.")
 							})
 						end
 					end)
@@ -4448,7 +4512,7 @@ CreateOnlineHandler = function()
 									event="leaveLobby",
 									success=false,
 									errorCode="phase_not_leaveable",
-									message="La manche se termine. Sortie disponible apres les resultats."
+									message=online_lobby_text("RoundFinishingLeaveAfterResults", "The round is finishing. You can leave after the results.")
 								})
 								return
 							end
@@ -4517,7 +4581,8 @@ CreateOnlineHandler = function()
 										event="leaveLobby",
 										success=false,
 										errorCode=(decoded and (decoded.error_code or decoded.errorCode)) or (response and response.errorCode) or nil,
-										message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de sortie du salon."
+										message=(decoded and decoded.message) or (response and response.errorMessage)
+											or online_lobby_text("LeaveLobbyFailed", "Could not leave the lobby.")
 									})
 								end
 								if online_trace then

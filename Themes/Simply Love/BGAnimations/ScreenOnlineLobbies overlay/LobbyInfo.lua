@@ -6,6 +6,14 @@ local private_border_color = color("#777777")
 local public_lobby_color = color("#45E06F")
 local private_lobby_color = color("#FF4B55")
 
+local function localized_lobby_type(isPrivate)
+  local key = isPrivate and "PrivateLobby" or "PublicLobby"
+  if THEME:HasString("ScreenOnlineLobbies", key) then
+    return THEME:GetString("ScreenOnlineLobbies", key)
+  end
+  return isPrivate and "Private lobby" or "Public lobby"
+end
+
 local function lobby_info_trace(message)
   if type(online_logs_enabled) == "function" and not online_logs_enabled() then
     return
@@ -193,7 +201,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Code salon",
+    Text=THEME:GetString("ScreenOnlineLobbies", "LobbyCodeColumn"),
     InitCommand=function(self)
       self:zoom(0.58):x(-72):y(-10)
     end,
@@ -211,7 +219,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Joueurs",
+    Text=THEME:GetString("ScreenOnlineLobbies", "PlayersColumn"),
     InitCommand=function(self)
       self:zoom(0.58):y(-10)
     end,
@@ -229,7 +237,7 @@ for i=1,num_rows+2 do
   }
 
   af[#af+1] = LoadFont("Common Normal")..{
-    Text="Type",
+    Text=THEME:GetString("ScreenOnlineLobbies", "TypeColumn"),
     InitCommand=function(self)
       self:zoom(0.58):x(72):y(-10)
     end,
@@ -238,12 +246,12 @@ for i=1,num_rows+2 do
   af[#af+1] = LoadFont("Common Bold")..{
     Text="",
     InitCommand=function(self)
-      self:zoom(0.44):x(72):y(10)
+      self:zoom(0.30):maxwidth(210):x(72):y(10)
     end,
     UpdateSelfCommand=function(self)
       local row = data[i + offset]
       local isPrivate = row and tostring(row.visibility or "public") == "private"
-      self:settext(row and (isPrivate and "Private lobby" or "Public lobby") or "")
+      self:settext(row and localized_lobby_type(isPrivate) or "")
       self:diffuse(isPrivate and private_lobby_color or public_lobby_color)
     end
   }

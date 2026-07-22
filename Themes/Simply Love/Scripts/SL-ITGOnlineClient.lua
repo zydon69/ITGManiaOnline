@@ -27,6 +27,18 @@ ITGOnline = ITGOnline or {}
 ITGOnline.runtimeGeneration = (tonumber(ITGOnline.runtimeGeneration) or 0) + 1
 ITGOnline.runtimeLoaded = true
 
+local function online_client_text(key, fallback, ...)
+	local value = fallback or key
+	if THEME and THEME.HasString and THEME:HasString("ScreenOnlineLobbies", key) then
+		value = THEME:GetString("ScreenOnlineLobbies", key)
+	end
+	if select("#", ...) > 0 then
+		local ok, formatted = pcall(string.format, value, ...)
+		if ok then return formatted end
+	end
+	return value
+end
+
 ITGOnline.configPath = "/Save/ITGOnline.ini"
 ITGOnline.debugConfigPath = "/Save/ITGOnlineDebug.ini"
 ITGOnline.defaults = {
@@ -1919,7 +1931,7 @@ function ITGOnline:SaveConfig(values)
 		safe_broadcast("OnlineResponseStatus", {
 			event = "saveConfig",
 			success = false,
-			message = "Impossible d'enregistrer la configuration ITG Online.",
+			message = online_client_text("SaveOnlineConfigFailed", "Unable to save the ITG Online configuration."),
 		})
 		return nil, "config_write_failed"
 	end
@@ -1971,7 +1983,9 @@ function ITGOnline:ApplyStoredAccessToken(callback)
 	local accessToken, storedSecurely, binding = secure_access_token_get(config.apiBaseUrl, config.deviceName)
 	if not storedSecurely or tostring(accessToken or "") == "" then
 		online_flow_trace("stored_access_token_apply_failed reason=missing_or_unbound")
-		safe_callback(callback, false, nil, { message = "No profile-bound access token is available." })
+		safe_callback(callback, false, nil, {
+			message = online_client_text("NoProfileToken", "No access token is associated with this profile.")
+		})
 		return false
 	end
 
@@ -2025,7 +2039,7 @@ function ITGOnline:ClearStoredAccessToken()
 			.. tostring(access_token_scope(config.apiBaseUrl, config.deviceName)))
 		safe_broadcast("OnlineResponseStatus", {
 			ok = false,
-			message = "Impossible de supprimer completement le jeton enregistre.",
+			message = online_client_text("DeleteStoredTokenFailed", "Unable to delete the saved access token."),
 			errorCode = "access_token_delete_failed",
 		})
 	end
@@ -2038,9 +2052,9 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	local message = tostring(payload.message or payload.reason_message or "")
 	if message == "" then
 		if reason == "auth.session_revoked" then
-			message = "Cette session a ete ouverte ailleurs. Reconnecte ce joueur avec un compte different."
+			message = online_client_text("SessionOpenedElsewhere", "This session was opened elsewhere. Sign in again with a different account.")
 		else
-			message = "La session en ligne n'est plus valide. Reconnecte ce joueur."
+			message = online_client_text("OnlineSessionInvalid", "The online session is no longer valid. Sign in again.")
 		end
 	end
 
@@ -2395,27 +2409,27 @@ function ITGOnline:RealtimeHealthSnapshot()
 	local staleAt = tonumber(self.realtimeStaleSeconds) or 45.0
 	local ghostAt = tonumber(self.realtimeGhostSeconds) or 75.0
 	local state = "offline"
-	local label = "HTTP ONLY"
+	local label = online_client_text("RealtimeHttpOnly", "HTTP only")
 	local color = {0.55, 0.55, 0.55, 0.90}
 
 	if self.disconnecting then
 		state = "offline"
-		label = "OFFLINE"
+		label = online_client_text("RealtimeOffline", "Offline")
 	elseif connecting then
 		state = "reconnecting"
-		label = "RECONNEXION"
+		label = online_client_text("RealtimeReconnecting", "Reconnecting")
 		color = {1.00, 0.25, 0.20, 1.00}
 	elseif connected and age <= staleAt then
 		state = "ok"
-		label = "ONLINE OK"
+		label = online_client_text("RealtimeOnline", "Online")
 		color = {0.10, 1.00, 0.20, 1.00}
 	elseif connected and age <= ghostAt then
 		state = "stale"
-		label = "SYNC..."
+		label = online_client_text("RealtimeSyncing", "Syncing...")
 		color = {1.00, 0.72, 0.10, 1.00}
 	elseif connected then
 		state = "ghost"
-		label = "RECONNEXION"
+		label = online_client_text("RealtimeReconnecting", "Reconnecting")
 		color = {1.00, 0.25, 0.20, 1.00}
 	end
 
@@ -3008,7 +3022,7 @@ function ITGOnline:SetCurrentRoomBlocked(errorCode, openRoomCount, source)
 			event = "current_room",
 			success = false,
 			error_code = errorCode,
-			message = "Plusieurs salons ouverts detectes. Quittez les anciens salons puis relancez la synchronisation."
+			message = online_client_text("MultipleOpenLobbies", "Several open lobbies were detected. Leave the other lobbies, then synchronize again.")
 		})
 	end
 
@@ -3214,7 +3228,7 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 				ok = false
 				decoded = {
 					error_code = "invalid_json_response",
-					message = "Invalid JSON response.",
+					message = online_client_text("InvalidServerResponse", "The server returned an invalid response."),
 				}
 				response.errorMessage = "Invalid JSON response."
 			end
@@ -4039,7 +4053,7 @@ function ITGOnline:ExpireOnlineOptionsReady(source, callback)
 	safe_broadcast("OnlineResponseStatus", {
 		event = "ready",
 		success = false,
-		message = "Options timeout. You left the lobby."
+		message = online_client_text("OptionsTimeoutLeftLobby", "The options timer expired. You left the lobby.")
 	})
 
 	self:LeaveRoom(function(ok, decoded, response)
@@ -8145,7 +8159,7 @@ function ITGOnline:Connect(callbacks)
 		socket = self.socket ~= nil,
 	})
 	if self.authSessionInvalidated and not sessionAccessToken then
-		local message = "Session ouverte ailleurs. Utilise un compte different ou reconnecte-toi depuis l'ecran de connexion."
+		local message = online_client_text("SessionOpenedElsewhere", "This session was opened elsewhere. Sign in again with a different account.")
 		online_flow_trace("connect_blocked reason=auth_session_invalidated authReason="
 			.. tostring(self.authSessionInvalidatedReason or ""))
 		safe_callback(callbacks and callbacks.error, message)
@@ -9496,11 +9510,12 @@ function ITGOnline:SelectSong(callback, options)
 				return
 			end
 
-		safe_callback(callback, false, nil, { errorMessage = "Server scoring policy is unavailable." })
+		local policyMessage = online_client_text("ServerScoringUnavailable", "The server scoring rules are unavailable.")
+		safe_callback(callback, false, nil, { errorMessage = policyMessage })
 			safe_broadcast("OnlineResponseStatus", {
 				event = "selectSong",
 				success = false,
-				message = "Server scoring policy is unavailable."
+				message = policyMessage
 			})
 		end)
 		return
@@ -9544,11 +9559,12 @@ function ITGOnline:SelectSong(callback, options)
 			.. " music_file=" .. tostring(musicPath)
 			.. " music_file_exists=" .. tostring(musicFileExists)
 			.. " room=" .. tostring(self.currentRoomId or "nil"))
-		safe_callback(callback, false, nil, { errorMessage = "No selected song or chart." })
+		local missingSelectionMessage = online_client_text("NoSelectedSongOrChart", "No song or chart is selected.")
+		safe_callback(callback, false, nil, { errorMessage = missingSelectionMessage })
 		safe_broadcast("OnlineResponseStatus", {
 			event = "selectSong",
 			success = false,
-			message = "No selected song or chart."
+			message = missingSelectionMessage
 		})
 		return
 	end
@@ -9808,7 +9824,7 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 				safe_broadcast("OnlineResponseStatus", {
 					event = "globalOptions",
 					success = true,
-					message = "Options globales mises a jour."
+					message = online_client_text("GlobalOptionsUpdated", "Global options updated.")
 				})
 			end
 		end
@@ -9816,7 +9832,8 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 			safe_broadcast("OnlineResponseStatus", {
 				event = "globalOptions",
 				success = false,
-				message = response_message(response, decoded, "Impossible de mettre a jour les options globales.")
+				message = response_message(response, decoded,
+					online_client_text("GlobalOptionsUpdateFailed", "Unable to update the global options."))
 			})
 		end
 
@@ -9859,7 +9876,7 @@ function ITGOnline:TransferRoomManager(userId, callback)
 				safe_broadcast("OnlineResponseStatus", {
 					event = "managerTransfer",
 					success = true,
-					message = "Role manager transfere."
+					message = online_client_text("ManagerRoleTransferred", "Manager role transferred.")
 				})
 			end
 		end
@@ -9867,7 +9884,8 @@ function ITGOnline:TransferRoomManager(userId, callback)
 			safe_broadcast("OnlineResponseStatus", {
 				event = "managerTransfer",
 				success = false,
-				message = response_message(response, decoded, "Impossible de transferer le role manager.")
+				message = response_message(response, decoded,
+					online_client_text("ManagerRoleTransferFailed", "Unable to transfer the manager role."))
 			})
 		end
 
@@ -9910,7 +9928,7 @@ function ITGOnline:KickRoomMember(userId, callback)
 				safe_broadcast("OnlineResponseStatus", {
 					event = "memberKick",
 					success = true,
-					message = "Joueur exclu du salon."
+					message = online_client_text("PlayerRemovedFromLobby", "Player removed from the lobby.")
 				})
 			end
 		end
@@ -9918,7 +9936,8 @@ function ITGOnline:KickRoomMember(userId, callback)
 			safe_broadcast("OnlineResponseStatus", {
 				event = "memberKick",
 				success = false,
-				message = response_message(response, decoded, "Impossible d'exclure ce joueur.")
+				message = response_message(response, decoded,
+					online_client_text("RemovePlayerFromLobbyFailed", "Unable to remove this player from the lobby."))
 			})
 		end
 
@@ -9987,7 +10006,7 @@ function ITGOnline:CancelSongSelection(callback)
 				safe_broadcast("OnlineResponseStatus", {
 					event = "cancelSongSelection",
 					success = true,
-					message = "Choix de chanson annule."
+					message = online_client_text("SongSelectionCancelled", "Song selection cancelled.")
 				})
 			end
 		end
@@ -15053,7 +15072,9 @@ function ITGOnline:CancelJoinRequest(callback)
 		local joinRoomId = self.pendingJoinRoomId
 		if not joinRequestId then
 			self.pendingJoinRoomId = nil
-			safe_callback(callback, true, { message = "No pending join request." }, nil)
+			safe_callback(callback, true, {
+				message = online_client_text("NoPendingJoinRequest", "No room join request is pending.")
+			}, nil)
 			return
 		end
 
@@ -16079,7 +16100,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 		safe_broadcast("OnlineResponseStatus", {
 			event = "realtime",
 			success = false,
-			message = "Erreur de communication temps reel : " .. errorCode,
+			message = online_client_text("RealtimeCommunicationError", "Realtime communication error: %s", errorCode),
 		})
 		return
 		elseif name == "connection.closed" then
@@ -16130,8 +16151,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 				event = "leaveLobby",
 				success = true,
 				message = reason == "pack_sync_timeout"
-					and "Vous avez ete ejecte du salon car le telechargement du pack n'a pas commence a temps."
-					or "Vous avez quitte le salon."
+					and online_client_text("PackSyncTimeoutRemoved", "You were removed from the lobby because the pack download did not start in time.")
+					or online_client_text("LeftLobby", "You left the lobby.")
 			})
 			return
 			elseif name == "lobby.updated" then
@@ -16224,7 +16245,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 				errorCode = "room_join_request_declined",
 				reason = payload.reason,
 				retryAfterSeconds = tonumber(payload.retry_after_seconds) or 30,
-				message = "The room manager declined your request. You can try again in 30 seconds."
+				message = online_client_text("JoinRequestDeclined", "The room manager declined your request. You can try again in %d seconds.",
+					tonumber(payload.retry_after_seconds) or 30)
 			})
 		elseif name == "room.join_request.expired" then
 			if tostring(payload.recipient_role or "") == "manager" then
@@ -16254,8 +16276,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 				roomId = payload.room_id,
 				errorCode = payload.reason == "cancelled_by_user" and "room_join_request_cancelled" or "room_join_request_expired",
 				message = payload.reason == "cancelled_by_user"
-					and "La demande d'accès au salon a été annulée."
-					or "La demande d'accès au salon a expiré."
+					and online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
+					or online_client_text("JoinRequestExpired", "Your room join request expired.")
 			})
 		elseif name == "room.join_request.cancelled" then
 			if tostring(payload.recipient_role or "") == "manager" then
@@ -16284,7 +16306,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 				joinRequestId = payload.join_request_id,
 				roomId = payload.room_id,
 				errorCode = "room_join_request_cancelled",
-				message = "La demande d'accès au salon a été annulée."
+				message = online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
 			})
 		elseif name == "room.join_request.accepted" and payload.room_id then
 			if online_room_ids_match(payload.room_id, self.currentRoomId) then
@@ -16503,10 +16525,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 				elseif activeRoomDeleted then
 					self:ClearCurrentRoomState("room_deleted_event")
 					safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
-					safe_broadcast("OnlineResponseStatus", {
-						event = "roomDeleted",
-						success = false,
-						message = "Room closed."
+				safe_broadcast("OnlineResponseStatus", {
+					event = "roomDeleted",
+					success = false,
+					message = online_client_text("RoomClosed", "The lobby was closed.")
 					})
 				end
 
@@ -16528,10 +16550,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 				self.songLoadedAckKey = ""
 				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
 			end
-			safe_broadcast("OnlineResponseStatus", {
-				event = "songLoaded",
+		safe_broadcast("OnlineResponseStatus", {
+			event = "songLoaded",
 			success = false,
-			message = "Song loading timed out. Returning to lobby."
+			message = online_client_text("SongLoadTimeout", "Song loading timed out. Returning to the lobby.")
 		})
 		elseif name and name:match("^room%.") then
 			local roomId = payload.room_id

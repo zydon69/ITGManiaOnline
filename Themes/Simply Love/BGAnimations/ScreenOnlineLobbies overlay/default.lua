@@ -1,6 +1,24 @@
+local function online_lobby_text(key, fallback, ...)
+	local value = fallback or key
+	if THEME and THEME.HasString and THEME:HasString("ScreenOnlineLobbies", key) then
+		value = THEME:GetString("ScreenOnlineLobbies", key)
+	end
+	if select("#", ...) > 0 then
+		local ok, formatted = pcall(string.format, value, ...)
+		if ok then return formatted end
+	end
+	return value
+end
+
 local active_index = 3
 local list_selected = false
-local options = { "Salons disponibles", "Joueurs en ligne", "Rafraichir", "Creer un salon", "Retour" }
+local options = {
+	online_lobby_text("AvailableLobbies", "Available lobbies"),
+	online_lobby_text("OnlinePlayers", "Online players"),
+	online_lobby_text("Refresh", "Refresh"),
+	online_lobby_text("CreateLobby", "Create lobby"),
+	online_lobby_text("Back", "Back"),
+}
 local t = nil
 local connected = false
 local has_error = false
@@ -42,10 +60,10 @@ local pack_choice_all_candidates_exhausted = false
 local pack_choice_browse_only = false
 local pack_choice_download_key = nil
 local private_join_options = {
-	{label="Accepter", accept=true, reason=""},
-	{label="Refuser", accept=false, reason=""},
-	{label="Occupe", accept=false, reason="Occupe pour le moment."},
-	{label="Plus tard", accept=false, reason="Plus tard."},
+	{label=online_lobby_text("Accept", "Accept"), accept=true, reason=""},
+	{label=online_lobby_text("Decline", "Decline"), accept=false, reason=""},
+	{label=online_lobby_text("Busy", "Busy"), accept=false, reason=online_lobby_text("BusyReason", "Busy right now.")},
+	{label=online_lobby_text("Later", "Later"), accept=false, reason=online_lobby_text("LaterReason", "Later.")},
 }
 
 local function private_prompt_key(params, kind)
@@ -91,9 +109,9 @@ local function finish_private_prompt(actor)
 end
 
 local room_invitation_options = {
-	{label="Accepter l'invitation", accept=true},
-	{label="Refuser l'invitation", accept=false},
-	{label="Fermer", dismiss=true},
+	{label=online_lobby_text("AcceptInvitation", "Accept invitation"), accept=true},
+	{label=online_lobby_text("DeclineInvitation", "Decline invitation"), accept=false},
+	{label=online_lobby_text("Close", "Close"), dismiss=true},
 }
 local pending_join_action_id = 0
 local pending_join_deadline = 0
@@ -187,7 +205,7 @@ local function realtime_health_snapshot()
 	end
 	return {
 		state = "offline",
-		label = "HTTP ONLY",
+		label = online_lobby_text("HttpOnly", "HTTP ONLY"),
 		color = {0.55, 0.55, 0.55, 0.90},
 		age = 999,
 		connected = false,
@@ -815,8 +833,8 @@ end
 			request_lobby_ui_repaint(root, "begin_leave_lobby")
 			root:sleep(4.0):queuecommand("LeaveLobbyWatchdog")
 			root:playcommand("SetStatus", {
-			text="Sortie du salon...",
-			showSpinner=true,
+				text=online_lobby_text("LeavingLobby", "Leaving lobby..."),
+				showSpinner=true,
 				showPrompt=false
 			})
 		end
@@ -1341,14 +1359,14 @@ end
 
 function rebuild_global_options_choices()
 	global_options_choices = {
-		{ label="Score: ITG", scoreMode="itg" },
-		{ label="Score: EX", scoreMode="ex" },
-		{ label="Score: HardEX", scoreMode="hardex" },
-		{ label="Rate: 0.75x", musicRate=0.75 },
-		{ label="Rate: 1.00x", musicRate=1.0 },
-		{ label="Rate: 1.10x", musicRate=1.1 },
-		{ label="Rate: 1.20x", musicRate=1.2 },
-		{ label="Rate: 1.50x", musicRate=1.5 },
+		{ label=online_lobby_text("ScoreOption", "Score: %s", "ITG"), scoreMode="itg" },
+		{ label=online_lobby_text("ScoreOption", "Score: %s", "EX"), scoreMode="ex" },
+		{ label=online_lobby_text("ScoreOption", "Score: %s", "HardEX"), scoreMode="hardex" },
+		{ label=online_lobby_text("RateOption", "Rate: %s", "0.75x"), musicRate=0.75 },
+		{ label=online_lobby_text("RateOption", "Rate: %s", "1.00x"), musicRate=1.0 },
+		{ label=online_lobby_text("RateOption", "Rate: %s", "1.10x"), musicRate=1.1 },
+		{ label=online_lobby_text("RateOption", "Rate: %s", "1.20x"), musicRate=1.2 },
+		{ label=online_lobby_text("RateOption", "Rate: %s", "1.50x"), musicRate=1.5 },
 	}
 	global_options_index = math.min(math.max(1, global_options_index), #global_options_choices)
 end
@@ -1538,21 +1556,22 @@ function update_joined_song_card(joinedContent)
 	if title then
 		local titleText = hasSong and song_info_title(songInfo) or ""
 		title:visible(hasSong)
-		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or "Chanson inconnue", 58) or "")
+		title:settext(hasSong and clamp_text(titleText ~= "" and titleText or online_lobby_text("UnknownSong", "Unknown song"), 58) or "")
 	end
 
 	local artist = joinedContent:GetChild("JoinedSongArtist")
 	if artist then
 		local artistText = hasSong and song_info_artist(songInfo) or ""
 		artist:visible(hasSong)
-		artist:settext("Artiste : " .. (artistText ~= "" and clamp_text(artistText, 44) or "Artiste inconnu"))
+		artist:settext(online_lobby_text("ArtistValue", "Artist: %s",
+			artistText ~= "" and clamp_text(artistText, 44) or online_lobby_text("UnknownArtist", "Unknown artist")))
 	end
 
 	local pack = joinedContent:GetChild("JoinedSongPack")
 	if pack then
 		local packText = hasSong and song_info_pack(songInfo) or ""
 		pack:visible(hasSong and packText ~= "")
-		pack:settext(packText ~= "" and ("Pack : " .. clamp_text(packText, 46)) or "")
+		pack:settext(packText ~= "" and online_lobby_text("PackValue", "Pack: %s", clamp_text(packText, 46)) or "")
 	end
 
 	local banner = joinedContent:GetChild("JoinedSongBanner")
@@ -1604,8 +1623,8 @@ end
 function pack_sync_display_text(status)
 	status = trim_text(status)
 	if status == "" or status == "unknown" or status == "idle" then return "" end
-	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.statusText then
-		return ITGOnline.PackSync.statusText[status] or status
+	if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DisplayText then
+		return ITGOnline.PackSync:DisplayText(status)
 	end
 	return status:gsub("_", " ")
 end
@@ -1800,7 +1819,7 @@ local function joined_download_kick_warning_text()
 	local remaining = joined_missing_song_countdown_seconds()
 	if remaining == nil then return "" end
 	play_online_warning_countdown_tick("pack_sync_kick:download_button", remaining)
-	return "Expulsion dans " .. tostring(math.ceil(remaining)) .. " s : telechargez le pack"
+	return online_lobby_text("PackKickCountdown", "Removal in %d s: download the pack", math.ceil(remaining))
 end
 
 local function joined_inactivity_warning_text()
@@ -1815,7 +1834,8 @@ local function joined_inactivity_warning_text()
 				local remaining = math.ceil((deadlineMs - serverTimeMs) / 1000)
 				local warningSeconds = tonumber(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.inactivity_warning_seconds) or 300
 				if remaining <= warningSeconds then
-					return "Expulsion pour inactivite dans " .. tostring(math.max(1, math.ceil(remaining / 60))) .. " min"
+					return online_lobby_text("InactivityKickCountdown", "Removal for inactivity in %d min",
+						math.max(1, math.ceil(remaining / 60)))
 				end
 			end
 		end
@@ -2374,15 +2394,18 @@ local function pack_sync_line_for_player(player)
 		-- else merely needs to know that this member is still synchronising.
 		local progress = isCurrentUser and tonumber(player.packSyncDownloadProgress) or nil
 		local suffix = progress and (" " .. tostring(math.floor(progress)) .. "%") or ""
-		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours" .. suffix,
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
+			online_lobby_text("PackDownloading", "Downloading") .. suffix,
 			isCurrentUser and "local_progress" or "remote_progress_hidden")
 	end
 	if status == "download_requested" or status == "reloading_songs" then
-		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours", "transient_download")
+		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
+			online_lobby_text("PackDownloading", "Downloading"), "transient_download")
 	end
 	if status == "searching_local_charts" then
 		if not isCurrentUser then
-			return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "Telechargement en cours", "remote_scan_hidden")
+			return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
+				online_lobby_text("PackDownloading", "Downloading"), "remote_scan_hidden")
 		end
 		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
 			message ~= "" and message or pack_sync_display_text(status), "local_scan")
@@ -2396,14 +2419,14 @@ local function pack_sync_line_for_player(player)
 			return message ~= "" and message or pack_sync_display_text(status)
 		end
 		if status == "manager_browsing_unknown_pack" then
-			return "Pack inconnu"
+			return online_lobby_text("UnknownPack", "Unknown pack")
 		end
 		return ""
 	end
 
 	if player_missing_song_for_ui(player) then
 		if status == "local_chart_match_found" or songAvailable then
-			return "Pack KO / chart compatible trouvée"
+			return online_lobby_text("CompatibleChartFound", "Pack missing / compatible chart found")
 		end
 		local remaining = pack_sync_countdown_seconds_for_player(player)
 		if remaining ~= nil then
@@ -2416,14 +2439,11 @@ local function pack_sync_line_for_player(player)
 				or reason == "hash_mismatch"
 				or status == "no_compatible_chart_found"
 				or status == "chart_mismatch" then
-				return "Pack KO / aucune chart compatible trouvée"
+				return online_lobby_text("NoCompatibleChartFound", "Pack missing / no compatible chart found")
 			end
 		end
 
 	if songAvailable or status == "ready" or status == "local_chart_match_found" then
-		if message == "Pack KO / chart compatible trouvée" then
-			return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, message, "compatible_chart_fallback")
-		end
 		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status, "", "available_hidden")
 	end
 
@@ -2542,34 +2562,52 @@ local function build_player_action_options(user)
 	if not user then return {} end
 	if user.actionContext == "joined_manager_transfer" then
 		if not joined_player_can_receive_manager(user) then
-			return {{label="Transfert impossible", action="cancel"}, {label="Annuler", action="cancel"}}
+			return {
+				{label=online_lobby_text("TransferUnavailable", "Transfer unavailable"), action="cancel"},
+				{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+			}
 		end
 		return {
-			{label="Transferer manager", action="transfer_manager"},
-			{label="Exclure du salon", action="exclude_player_confirm"},
-			{label="Annuler", action="cancel"},
+			{label=online_lobby_text("TransferManager", "Transfer manager"), action="transfer_manager"},
+			{label=online_lobby_text("RemoveFromLobby", "Remove from lobby"), action="exclude_player_confirm"},
+			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
 		}
 	end
 	if user.isSelf then
-		return {{label="C'est vous", action="cancel"}, {label="Annuler", action="cancel"}}
+		return {
+			{label=online_lobby_text("ThisIsYou", "This is you"), action="cancel"},
+			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+		}
 	end
 	if user.room and user.room.visibility == "public" then
 		if not room_accepts_new_members(user.room) then
-			return {{label="Salon public non joignable", action="cancel"}, {label="Annuler", action="cancel"}}
+			return {
+				{label=online_lobby_text("PublicLobbyUnavailable", "Public lobby unavailable"), action="cancel"},
+				{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+			}
 		end
 		if user.room.id then
-			return {{label="Rejoindre le salon public", action="join_public_room", room_id=user.room.id}, {label="Annuler", action="cancel"}}
+			return {
+				{label=online_lobby_text("JoinPublicLobby", "Join public lobby"), action="join_public_room", room_id=user.room.id},
+				{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+			}
 		end
 
-		return {{label="Rejoindre le salon public", action="join_user_room"}, {label="Annuler", action="cancel"}}
+		return {
+			{label=online_lobby_text("JoinPublicLobby", "Join public lobby"), action="join_user_room"},
+			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+		}
 	end
 	if user.room and user.room.visibility == "private" then
-		return {{label="Demander a rejoindre le salon prive", action="join_user_room"}, {label="Annuler", action="cancel"}}
+		return {
+			{label=online_lobby_text("RequestPrivateLobbyAccess", "Request access to private lobby"), action="join_user_room"},
+			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+		}
 	end
 	return {
-		{label="Inviter dans un salon prive", action="invite_private"},
-		{label="Inviter dans un salon public", action="invite_public"},
-		{label="Annuler", action="cancel"},
+		{label=online_lobby_text("InviteToPrivateLobby", "Invite to private lobby"), action="invite_private"},
+		{label=online_lobby_text("InviteToPublicLobby", "Invite to public lobby"), action="invite_public"},
+		{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
 	}
 end
 
@@ -2619,7 +2657,7 @@ local function cancel_pending_create(message)
 		t:GetChild("JoinedLobbyContent"):visible(false)
 		request_lobby_ui_repaint(t, "connection_cancel_pending_create")
 		t:playcommand("SetStatus", {
-			text=message or "La creation du salon a expire. Verifiez la connexion puis reessayez.",
+			text=message or online_lobby_text("CreateLobbyTimeout", "Lobby creation timed out. Check the connection and try again."),
 			showSpinner=false,
 			showPrompt=true
 		})
@@ -2662,7 +2700,7 @@ end
 		t:GetChild("JoinedLobbyContent"):visible(false)
 		request_lobby_ui_repaint(t, "join_request_timeout")
 		t:playcommand("SetStatus", {
-			text=message or "La tentative de rejoindre le salon a expire. Rafraichissement...",
+			text=message or online_lobby_text("JoinLobbyTimeout", "The attempt to join the lobby timed out. Refreshing..."),
 			showSpinner=false,
 			showPrompt=false
 		})
@@ -2698,14 +2736,14 @@ local function execute_player_action(option, user)
 		local targetUserId = user.playerId or user.id
 		if not joined_player_can_receive_manager(user) or not ITGOnline or not ITGOnline.TransferRoomManager then
 			t:playcommand("SetStatus", {
-				text="Impossible de transferer le role manager a ce joueur.",
+				text=online_lobby_text("TransferManagerPlayerUnavailable", "The manager role cannot be transferred to this player."),
 				showSpinner=false,
 				showPrompt=true
 			})
 			return
 		end
 		t:playcommand("SetStatus", {
-			text="Transfert du role manager...",
+			text=online_lobby_text("TransferringManager", "Transferring manager role..."),
 			showSpinner=true,
 			showPrompt=false
 		})
@@ -2718,7 +2756,7 @@ local function execute_player_action(option, user)
 				joined_players_selected = false
 				if t then
 					t:playcommand("SetStatus", {
-						text="Role manager transfere.",
+						text=online_lobby_text("ManagerTransferred", "Manager role transferred."),
 						showSpinner=false,
 						showPrompt=false
 					})
@@ -2726,7 +2764,7 @@ local function execute_player_action(option, user)
 					t:queuecommand("Hover")
 				end
 			elseif t then
-				local message = "Impossible de transferer le role manager."
+				local message = online_lobby_text("TransferManagerFailed", "Could not transfer the manager role.")
 				if response and response.errorMessage then message = response.errorMessage end
 				if decoded and decoded.message then message = decoded.message end
 				t:playcommand("SetStatus", {
@@ -2740,14 +2778,14 @@ local function execute_player_action(option, user)
 		local targetUserId = user.playerId or user.id
 		if not joined_player_can_receive_manager(user) or not ITGOnline or not ITGOnline.KickRoomMember then
 			t:playcommand("SetStatus", {
-				text="Impossible d'exclure ce joueur du salon.",
+				text=online_lobby_text("RemovePlayerUnavailable", "This player cannot be removed from the lobby."),
 				showSpinner=false,
 				showPrompt=true
 			})
 			return
 		end
 		t:playcommand("SetStatus", {
-			text="Exclusion du joueur...",
+			text=online_lobby_text("RemovingPlayer", "Removing player..."),
 			showSpinner=true,
 			showPrompt=false
 		})
@@ -2760,7 +2798,7 @@ local function execute_player_action(option, user)
 				joined_players_selected = false
 				if t then
 					t:playcommand("SetStatus", {
-						text="Joueur exclu du salon.",
+						text=online_lobby_text("PlayerRemoved", "Player removed from lobby."),
 						showSpinner=false,
 						showPrompt=false
 					})
@@ -2768,7 +2806,7 @@ local function execute_player_action(option, user)
 					t:queuecommand("Hover")
 				end
 			elseif t then
-				local message = "Impossible d'exclure ce joueur."
+				local message = online_lobby_text("RemovePlayerFailed", "Could not remove this player.")
 				if response and response.errorMessage then message = response.errorMessage end
 				if decoded and decoded.message then message = decoded.message end
 				t:playcommand("SetStatus", {
@@ -2781,23 +2819,23 @@ local function execute_player_action(option, user)
 	elseif option.action == "invite_private" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-			t:playcommand("SetStatus", {text="Creation du salon prive et envoi de l'invitation...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text=online_lobby_text("CreatingPrivateLobbyInvite", "Creating private lobby and sending invitation..."), showSpinner=true, showPrompt=false})
 		MESSAGEMAN:Broadcast("InviteOnlinePlayer", {user_id=user.id, visibility="private"})
 	elseif option.action == "invite_public" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-			t:playcommand("SetStatus", {text="Creation du salon public et envoi de l'invitation...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text=online_lobby_text("CreatingPublicLobbyInvite", "Creating public lobby and sending invitation..."), showSpinner=true, showPrompt=false})
 		MESSAGEMAN:Broadcast("InviteOnlinePlayer", {user_id=user.id, visibility="public"})
 	elseif option.action == "join_user_room" then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-			t:playcommand("SetStatus", {text="Contact du salon du joueur...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text=online_lobby_text("ContactingPlayerLobby", "Contacting the player's lobby..."), showSpinner=true, showPrompt=false})
 		begin_join_timeout(t)
 		MESSAGEMAN:Broadcast("JoinOnlinePlayerRoom", {user_id=user.id})
 	elseif option.action == "join_public_room" and option.room_id then
 		t:GetChild("LobbyContent"):visible(false)
 		t:GetChild("OnlinePlayersContent"):visible(false)
-			t:playcommand("SetStatus", {text="Connexion au salon public...", showSpinner=true, showPrompt=false})
+			t:playcommand("SetStatus", {text=online_lobby_text("JoiningPublicLobby", "Joining public lobby..."), showSpinner=true, showPrompt=false})
 		begin_join_timeout(t)
 		MESSAGEMAN:Broadcast("JoinLobby", {code=option.room_id})
 	end
@@ -2859,11 +2897,11 @@ local function update_pack_choice_menu()
 		local title = menu:GetChild("PackChoiceTitle")
 		local hint = menu:GetChild("PackChoiceHint")
 		local options = menu:GetChild("PackChoiceOptions")
-		if title then title:settext("Choisir le pack a telecharger") end
+		if title then title:settext(online_lobby_text("ChoosePackToDownload", "Choose a pack to download")) end
 		if hint then
 			hint:settext(pack_choice_requires_selection()
-				and "&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | choix obligatoire"
-				or "&MENULEFT;/&MENURIGHT; pour choisir | &START; pour telecharger | &SELECT; pour annuler")
+				and online_lobby_text("PackChoiceRequiredHint", "&MENULEFT;/&MENURIGHT; choose | &START; download | choice required")
+				or online_lobby_text("PackChoiceOptionalHint", "&MENULEFT;/&MENURIGHT; choose | &START; download | &SELECT; cancel"))
 		end
 	if options then
 		local lines = {}
@@ -2875,13 +2913,13 @@ local function update_pack_choice_menu()
 			local prefix = (i == pack_choice_index) and "> " or "  "
 			local songsCount = tonumber(candidate.songs_count) or 0
 				lines[#lines + 1] = prefix .. tostring(candidate.name or ("Pack " .. tostring(candidate.id)))
-					.. " (" .. tostring(songsCount) .. " chansons)"
+					.. " " .. online_lobby_text("SongCount", "(%d songs)", songsCount)
 		end
 		lines[#lines + 1] = ""
 		if pack_choice_requires_selection() then
-			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger. Choix obligatoire avant expulsion."
+			lines[#lines + 1] = online_lobby_text("PackChoiceRequiredHelp", "Left/Right to choose, START to download. A choice is required before removal.")
 		else
-			lines[#lines + 1] = "Gauche/Droite pour choisir, START pour telecharger, Select pour annuler."
+			lines[#lines + 1] = online_lobby_text("PackChoiceOptionalHelp", "Left/Right to choose, START to download, Select to cancel.")
 		end
 		options:settext(table.concat(lines, "\n"))
 		end
@@ -2994,7 +3032,7 @@ local function start_browse_pack_download(songInfo)
 		lobby_flow_trace("browse_pack_download_start blocked reason=no_download_api")
 		if t then
 			t:playcommand("SetStatus", {
-				text="Le telechargement anticipe du pack n'est pas disponible.",
+				text=online_lobby_text("EarlyPackDownloadUnavailable", "Early pack download is unavailable."),
 				showSpinner=false,
 				showPrompt=true
 			})
@@ -3023,7 +3061,7 @@ local function start_browse_pack_download(songInfo)
 			open_pack_choice_menu(
 				songInfo,
 				message.candidates,
-				message.message or "Plusieurs packs correspondent. Choisissez-en un.",
+				message.message or online_lobby_text("MultiplePacksFound", "Several packs match. Choose one."),
 				true
 			)
 			pack_choice_download_key = message.downloadKey
@@ -3034,7 +3072,7 @@ local function start_browse_pack_download(songInfo)
 		end
 		if not ok and t then
 			t:playcommand("SetStatus", {
-				text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+				text=message or online_lobby_text("PackDownloadFailedRetry", "Pack download failed.\nTry again or install the pack manually."),
 				showSpinner=false,
 				showPrompt=true
 			})
@@ -3253,7 +3291,7 @@ local function handle_pack_choice_menu_input(event)
 				refresh_joined_room_snapshot("pack_choice_download_callback", t)
 				if not ok and t then
 					t:playcommand("SetStatus", {
-						text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+						text=message or online_lobby_text("PackDownloadFailedRetry", "Pack download failed.\nTry again or install the pack manually."),
 						showSpinner=false,
 						showPrompt=true
 					})
@@ -3309,7 +3347,9 @@ local function handle_transfer_manager_confirm_input(event)
 			local action = transfer_manager_confirm_action
 			close_transfer_manager_confirm()
 			execute_player_action({
-				label=action == "exclude_player" and "Exclure du salon" or "Transferer manager",
+				label=action == "exclude_player"
+					and online_lobby_text("RemoveFromLobby", "Remove from lobby")
+					or online_lobby_text("TransferManager", "Transfer manager"),
 				action=action,
 			}, user)
 		else
@@ -3421,7 +3461,7 @@ local function handle_joined_mode_input(event)
 					joined_song_transition_notice_at = now
 					lobby_flow_trace("input_joined_song_action_blocked reason=transition_inflight")
 					t:playcommand("SetStatus", {
-						text="Mise a jour du choix de chanson en cours...",
+						text=online_lobby_text("SongSelectionUpdating", "Updating song selection..."),
 						showSpinner=true,
 						showPrompt=false,
 						duration=1.5
@@ -3443,7 +3483,7 @@ local function handle_joined_mode_input(event)
 					lobby_flow_trace("input_joined_cancel_song_selection_request shared_index=2")
 					lobby_flow_trace("input_joined_action_resolved action=cancel_song_selection activeIndex=" .. tostring(joined_active_index))
 					t:playcommand("SetStatus", {
-						text="Annulation du choix de chanson...",
+						text=online_lobby_text("CancellingSongSelection", "Cancelling song selection..."),
 						showSpinner=true,
 						showPrompt=false
 					})
@@ -3462,7 +3502,8 @@ local function handle_joined_mode_input(event)
 							.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
 						if not ok and t then
 							t:playcommand("SetStatus", {
-								text=(response and response.errorMessage) or (decoded and decoded.message) or "Impossible d'annuler le choix de chanson.",
+								text=(response and response.errorMessage) or (decoded and decoded.message)
+									or online_lobby_text("CancelSongSelectionFailed", "Could not cancel the song selection."),
 								showSpinner=false,
 								showPrompt=true,
 								duration=4
@@ -3471,7 +3512,7 @@ local function handle_joined_mode_input(event)
 					end)
 				else
 					t:playcommand("SetStatus", {
-						text="Annulation du choix indisponible dans cette version.",
+						text=online_lobby_text("CancelSelectionUnavailable", "Cancelling the selection is unavailable in this version."),
 						showSpinner=false,
 						showPrompt=true,
 						duration=4
@@ -3481,7 +3522,7 @@ local function handle_joined_mode_input(event)
 			end
 			if not joined_phase_allows_song_selection() then
 				t:playcommand("SetStatus", {
-					text="La manche actuelle se termine encore. Attendez les resultats avant de choisir une autre chanson.",
+					text=online_lobby_text("RoundStillFinishing", "The current round is still finishing. Wait for the results before choosing another song."),
 					showSpinner=false,
 					showPrompt=true
 				})
@@ -3509,7 +3550,7 @@ local function handle_joined_mode_input(event)
 					.. " status=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.currentStatus or "nil")
 					.. " key=" .. tostring(ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.downloadInFlightKey or "nil"))
 				t:playcommand("SetStatus", {
-					text="Telechargement du pack en cours...",
+					text=online_lobby_text("PackDownloadInProgress", "Pack download in progress..."),
 					showSpinner=true,
 					showPrompt=false
 				})
@@ -3544,7 +3585,7 @@ local function handle_joined_mode_input(event)
 						open_pack_choice_menu(
 							joined_missing_song_info or joined_song_preview,
 							message.candidates,
-							message.message or "Plusieurs packs correspondent. Choisissez-en un."
+							message.message or online_lobby_text("MultiplePacksFound", "Several packs match. Choose one.")
 						)
 						pack_choice_download_key = message.downloadKey
 						if SL and SL.Global and SL.Global.Online then
@@ -3554,7 +3595,7 @@ local function handle_joined_mode_input(event)
 					end
 					if not ok and t then
 						t:playcommand("SetStatus", {
-							text=message or "Le téléchargement du pack a échoué.\nVeuillez réessayer ou installer le pack manuellement.",
+							text=message or online_lobby_text("PackDownloadFailedRetry", "Pack download failed.\nTry again or install the pack manually."),
 							showSpinner=false,
 							showPrompt=true
 						})
@@ -3570,7 +3611,7 @@ local function handle_joined_mode_input(event)
 				open_global_options_menu()
 			else
 				t:playcommand("SetStatus", {
-					text="Les options globales ne peuvent pas changer pendant la manche.",
+					text=online_lobby_text("GlobalOptionsLocked", "Global options cannot be changed during the round."),
 					showSpinner=false,
 					showPrompt=true
 				})
@@ -3772,7 +3813,7 @@ local function handle_browse_mode_input(event)
 					})
 				end
 				t:playcommand("SetStatus", {
-					text="Recherche des salons...",
+					text=online_lobby_text("SearchingLobbies", "Searching for lobbies..."),
 					showSpinner=true,
 					showPrompt=false
 				})
@@ -3794,7 +3835,7 @@ local function handle_browse_mode_input(event)
 				t:GetChild("LobbyContent"):visible(false)
 				t:GetChild("OnlinePlayersContent"):visible(false)
 				t:playcommand("SetStatus", {
-					text="Rafraichissement de la liste des salons...",
+					text=online_lobby_text("RefreshingLobbies", "Refreshing lobby list..."),
 					showSpinner=true,
 					showPrompt=false
 				})
@@ -3814,7 +3855,7 @@ local function handle_browse_mode_input(event)
 			if not (onlineHandler and onlineHandler.connected and onlineHandler.socket ~= nil) then
 				lobby_flow_trace("input_browse_create_blocked reason=not_connected")
 				t:playcommand("SetStatus", {
-					text="Connexion au service en ligne en cours. Reessayez dans un instant.",
+					text=online_lobby_text("ServiceConnectingRetry", "Connecting to the online service. Try again in a moment."),
 					showSpinner=false,
 					showPrompt=true
 				})
@@ -3824,7 +3865,7 @@ local function handle_browse_mode_input(event)
 			t:GetChild("LobbyContent"):visible(false)
 			t:GetChild("OnlinePlayersContent"):visible(false)
 			t:playcommand("SetStatus", {
-				text="Creation du salon...",
+				text=online_lobby_text("CreatingLobby", "Creating lobby..."),
 				showSpinner=true,
 				showPrompt=false
 			})
@@ -3887,7 +3928,7 @@ local function handle_first_press_input(event)
 		lobby_flow_trace("input_first_press_cancel_pending_join button=" .. tostring(event.GameButton)
 			.. " pendingJoinActionId=" .. tostring(pending_join_action_id))
 		play_online_sound_once("Common", "Cancel")
-		cancel_pending_join("Connexion annulee. Rafraichissement des salons...")
+		cancel_pending_join(online_lobby_text("JoinCancelledRefreshing", "Connection cancelled. Refreshing lobbies..."))
 		return false
 	end
 
@@ -4063,7 +4104,7 @@ local af = Def.ActorFrame{
 		local screen = SCREENMAN:GetTopScreen()
 		install_lobby_input_callback(screen)
 		self:playcommand("SetStatus", {
-			text="Initialisation de la connexion en ligne...",
+			text=online_lobby_text("InitializingOnlineConnection", "Initializing online connection..."),
 				showSpinner=true
 			})
 		self:queuecommand("RefreshCurrentRoomSnapshot")
@@ -4114,7 +4155,7 @@ local af = Def.ActorFrame{
 				.. " now=" .. tostring(GetTimeSinceStart())
 				.. " deadline=" .. tostring(pending_join_deadline))
 			if pending_join_action_id > 0 and GetTimeSinceStart() >= pending_join_deadline then
-					cancel_pending_join("La tentative de rejoindre le salon a expire. Rafraichissement...")
+					cancel_pending_join(online_lobby_text("JoinLobbyTimeout", "The attempt to join the lobby timed out. Refreshing..."))
 			else
 				lobby_flow_trace("join_timeout_check_ok actionId=" .. tostring(pending_join_action_id))
 			end
@@ -4127,7 +4168,7 @@ local af = Def.ActorFrame{
 					.. " now=" .. tostring(GetTimeSinceStart())
 					.. " deadline=" .. tostring(pending_create_deadline))
 				if pending_create_action_id > 0 and GetTimeSinceStart() >= pending_create_deadline then
-					cancel_pending_create("La creation du salon a expire. Verifiez la connexion puis reessayez.")
+					cancel_pending_create(online_lobby_text("CreateLobbyTimeout", "Lobby creation timed out. Check the connection and try again."))
 				else
 					lobby_flow_trace("create_timeout_check_ok actionId=" .. tostring(pending_create_action_id))
 				end
@@ -4245,11 +4286,17 @@ local af = Def.ActorFrame{
 		for i, user in ipairs(online_users) do
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
 			local roomLabel = user.room and ITGOnlineProtocol and ITGOnlineProtocol.online_player_room_label
-				and ITGOnlineProtocol.online_player_room_label(user.room)
+				and ITGOnlineProtocol.online_player_room_label(user.room, {
+					private=THEME:GetString("ScreenOnlineLobbies", "PrivateLobby"),
+					public=THEME:GetString("ScreenOnlineLobbies", "PublicLobby"),
+					generic=THEME:GetString("ScreenOnlineLobbies", "Lobby"),
+				})
 				or ""
 			local room = roomLabel ~= "" and (" " .. roomLabel) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
-			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
+			local unknownPlayer = online_lobby_text("UnknownPlayer", "Player")
+			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, unknownPlayer)
+				or tostring(user.display_name or user.displayName or user.name or unknownPlayer)
 			-- Keep the room suffix intact: it carries the room number required to
 			-- identify private rooms. The actor's maxwidth handles final scaling.
 			local line = selected .. i .. ". " .. clamp_text(display_name, 24) .. status .. room
@@ -4263,7 +4310,8 @@ local af = Def.ActorFrame{
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
 		if playersList then
-			playersList:settext(#lines > 0 and table.concat(lines, "\n") or "Aucun joueur connecte trouve.")
+			playersList:settext(#lines > 0 and table.concat(lines, "\n")
+				or online_lobby_text("NoOnlinePlayers", "No online players found."))
 			playersList:ClearAttributes()
 			if selected_start and selected_length and selected_length > 0 then
 				playersList:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
@@ -4320,11 +4368,11 @@ local af = Def.ActorFrame{
 		if not menu then return end
 		local title = menu:GetChild("PlayerActionTitle")
 		if title then
-			local display_name = "Joueur"
+			local display_name = online_lobby_text("UnknownPlayer", "Player")
 			if player_action_user then
 				display_name = ITGOnline and ITGOnline.UserDisplayName
-					and ITGOnline:UserDisplayName(player_action_user, player_action_user.profileName or "Joueur")
-					or tostring(player_action_user.display_name or player_action_user.displayName or player_action_user.name or player_action_user.profileName or "Joueur")
+					and ITGOnline:UserDisplayName(player_action_user, player_action_user.profileName or display_name)
+					or tostring(player_action_user.display_name or player_action_user.displayName or player_action_user.name or player_action_user.profileName or display_name)
 			end
 			title:settext(display_name)
 		end
@@ -4341,21 +4389,21 @@ local af = Def.ActorFrame{
 		local detail = prompt:GetChild("PromptDetail")
 		if detail then
 			local title = prompt:GetChild("PromptTitle")
-			local displayName = "ce joueur"
+			local displayName = online_lobby_text("ThisPlayer", "this player")
 			if transfer_manager_confirm_user then
 				displayName = trim_text(transfer_manager_confirm_user.profileName
 					or transfer_manager_confirm_user.display_name
 					or transfer_manager_confirm_user.displayName
 					or transfer_manager_confirm_user.name
 					or transfer_manager_confirm_user.playerId
-					or "ce joueur")
+					or online_lobby_text("ThisPlayer", "this player"))
 			end
 			if transfer_manager_confirm_action == "exclude_player" then
-				if title then title:settext("Exclure ce joueur ?") end
-				detail:settext("Voulez-vous vraiment exclure " .. displayName .. " du salon ?")
+				if title then title:settext(online_lobby_text("RemovePlayerConfirmTitle", "Remove this player?")) end
+				detail:settext(online_lobby_text("RemovePlayerConfirmBody", "Do you really want to remove %s from the lobby?", displayName))
 			else
-				if title then title:settext("Transferer le role manager ?") end
-				detail:settext("Voulez-vous vraiment transmettre le role de manager a " .. displayName .. " ?")
+				if title then title:settext(online_lobby_text("TransferManagerConfirmTitle", "Transfer manager role?")) end
+				detail:settext(online_lobby_text("TransferManagerConfirmBody", "Do you really want to transfer the manager role to %s?", displayName))
 			end
 		end
 		prompt:playcommand("Hover")
@@ -4365,10 +4413,10 @@ local af = Def.ActorFrame{
 		if not menu then return end
 		rebuild_global_options_choices()
 		local title = menu:GetChild("GlobalOptionsTitle")
-		if title then title:settext("Options globales") end
+		if title then title:settext(online_lobby_text("GlobalOptions", "Global options")) end
 		local detail = menu:GetChild("GlobalOptionsDetail")
 		if detail then
-			detail:settext("Applique au salon entier : score leaderboard et vitesse de musique.")
+			detail:settext(online_lobby_text("GlobalOptionsDescription", "Applies to the whole lobby: leaderboard score and music rate."))
 		end
 		local lines = {}
 		for i, choice in ipairs(global_options_choices) do
@@ -4392,14 +4440,20 @@ local af = Def.ActorFrame{
 		local title = prompt:GetChild("PrivateJoinTitle")
 		if title then
 			if private_join_prompt_kind == "invitation" then
-				title:settext(tostring(inviter.name or "Un joueur") .. " vous invite")
+				title:settext(online_lobby_text("PlayerInvitesYou", "%s invites you",
+					tostring(inviter.name or online_lobby_text("UnknownPlayer", "Player"))))
 			else
-				title:settext(tostring(requester.name or "Un joueur") .. " veut rejoindre")
+				title:settext(online_lobby_text("PlayerWantsToJoin", "%s wants to join",
+					tostring(requester.name or online_lobby_text("UnknownPlayer", "Player"))))
 			end
 		end
 		local detail = prompt:GetChild("PrivateJoinDetail")
 		if detail then
-			detail:settext(tostring(room.visibility == "private" and "Salon prive : " or "Salon : ") .. tostring(room.name or "Salon"))
+			local roomType = room.visibility == "private"
+				and online_lobby_text("PrivateLobby", "Private lobby")
+				or online_lobby_text("Lobby", "Lobby")
+			detail:settext(online_lobby_text("LobbyNameValue", "%s: %s", roomType,
+				tostring(room.name or online_lobby_text("Lobby", "Lobby"))))
 		end
 		local lines = {}
 		for i, option in ipairs(active_private_prompt_options()) do
@@ -4434,7 +4488,8 @@ local af = Def.ActorFrame{
 		end
 		local codeValue = joinedContent:GetChild("JoinedLobbyCodeValue")
 		if codeValue then
-			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code or "(en attente)")
+			codeValue:settext(joined_lobby_code ~= "" and joined_lobby_code
+				or online_lobby_text("Pending", "(pending)"))
 		end
 
 		local lines = {}
@@ -4452,7 +4507,8 @@ local af = Def.ActorFrame{
 			end
 		end
 		for i, player in ipairs(joined_lobby_players) do
-			local profile = trim_text(player.profileName or player.name or player.playerId or ("Joueur "..i))
+			local profile = trim_text(player.profileName or player.name or player.playerId
+				or online_lobby_text("PlayerNumber", "Player %d", i))
 			if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
 				profile = "[M] " .. profile
 			end
@@ -4476,7 +4532,8 @@ local af = Def.ActorFrame{
 				missing = " · " .. packSyncText
 			end
 			if not player.ready and playerScreenName:find("ScreenPlayerOptions", 1, true) == 1 then
-				missing = " · écran d'option" .. (player.readyPendingServer and " ..." or "")
+				missing = " · " .. online_lobby_text("OptionsScreen", "Options screen")
+					.. (player.readyPendingServer and " ..." or "")
 			elseif player.readyPendingServer and missing == "" then
 				missing = " ..."
 			end
@@ -4496,7 +4553,7 @@ local af = Def.ActorFrame{
 			local syncCompleted = status == "downloaded_ok" or status == "ready"
 			if missing == "" and joined_song_preview ~= nil and player.songAvailable == false
 				and not syncCompleted and player_is_manager(player) and not player_is_current_user(player) then
-				missing = " - selection en cours"
+				missing = " - " .. online_lobby_text("SelectionInProgress", "selecting")
 			end
 			local maxLineLen = 88
 			local selectedPrefix = joined_players_selected and i == joined_player_index and "> " or "  "
@@ -4528,7 +4585,8 @@ local af = Def.ActorFrame{
 			.. " manager=" .. tostring(joined_manager_user_id or "nil"))
 		local playersText = joinedContent:GetChild("JoinedLobbyPlayers")
 		if playersText then
-			playersText:settext(#lines > 0 and table.concat(lines, "\n") or "En attente des joueurs...")
+			playersText:settext(#lines > 0 and table.concat(lines, "\n")
+				or online_lobby_text("WaitingForPlayers", "Waiting for players..."))
 			playersText:ClearAttributes()
 			if selected_start and selected_length and selected_length > 0 then
 				playersText:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
@@ -4600,9 +4658,11 @@ local af = Def.ActorFrame{
 				local labelText = ""
 			if label then
 				if syncBusy then
-					labelText = "Telechargement..."
+					labelText = online_lobby_text("Downloading", "Downloading...")
 				else
-					labelText = (joined_can_download_pack or canDownloadBrowsePack) and "Telecharger pack" or "Recharger chansons"
+					labelText = (joined_can_download_pack or canDownloadBrowsePack)
+						and online_lobby_text("DownloadPack", "Download pack")
+						or online_lobby_text("ReloadSongs", "Reload songs")
 				end
 				label:settext(labelText)
 			end
@@ -4631,7 +4691,7 @@ local af = Def.ActorFrame{
 				.. " roomPhase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 			local label = globalOptionsButton:GetChild("GlobalOptionsLabel")
 			if label then
-				label:settext("Options globales")
+				label:settext(online_lobby_text("GlobalOptions", "Global options"))
 			end
 			local modeLabel = globalOptionsButton:GetChild("GlobalOptionsModeLabel")
 			if modeLabel then
@@ -4815,7 +4875,7 @@ local af = Def.ActorFrame{
 				-- Only try once per screen load to avoid infinite loops of trying to connect.
 				if not attempted and (not onlineHandler.socket or onlineHandler.errorMsg ~= nil) then
 					self:playcommand("SetStatus", {
-						text="Connexion au service en ligne...",
+						text=online_lobby_text("ConnectingService", "Connecting to online service..."),
 						showSpinner=true
 					})
 					lobby_flow_trace("CheckConnect_connect_broadcast attempted=" .. tostring(attempted)
@@ -4830,7 +4890,7 @@ local af = Def.ActorFrame{
 					lobby_flow_trace("CheckConnect_waiting wait_time=" .. tostring(wait_time)
 						.. " hasSocket=" .. tostring(onlineHandler.socket ~= nil))
 					self:playcommand("SetStatus", {
-						text="Connexion au service en ligne... ("..wait_time.."s)",
+						text=online_lobby_text("ConnectingServiceRetry", "Connecting to online service... (%ds)", wait_time),
 						showSpinner=true
 					})
 					self:sleep(1):queuecommand("CheckConnect")
@@ -4842,7 +4902,7 @@ local af = Def.ActorFrame{
 			else
 				lobby_flow_trace("CheckConnect_no_handler")
 				self:playcommand("SetStatus", {
-					text="Initialisation du gestionnaire en ligne...",
+					text=online_lobby_text("InitializingOnlineManager", "Initializing online manager..."),
 					showSpinner=true
 				})
 				self:sleep(0.25):queuecommand("CheckConnect")
@@ -4868,7 +4928,7 @@ local af = Def.ActorFrame{
 					has_error = false
 					reset_browse_focus()
 					self:playcommand("SetStatus", {
-						text="Connecte au service en ligne.",
+						text=online_lobby_text("ConnectedService", "Connected to online service."),
 						showSpinner=false,
 						showPrompt=false
 					})
@@ -4887,7 +4947,7 @@ local af = Def.ActorFrame{
 					elseif ITGOnline and ITGOnline.currentRoomId then
 						lobby_flow_trace("Display_fetch_current_room_by_id room=" .. tostring(ITGOnline.currentRoomId))
 						self:playcommand("SetStatus", {
-							text="Restauration du salon actuel...",
+							text=online_lobby_text("RestoringCurrentLobby", "Restoring current lobby..."),
 							showSpinner=true,
 							showPrompt=false
 						})
@@ -4913,7 +4973,7 @@ local af = Def.ActorFrame{
 					elseif ITGOnline and ITGOnline.FetchCurrentRoom then
 						lobby_flow_trace("Display_fetch_current_room")
 						self:playcommand("SetStatus", {
-							text="Restauration du salon actuel...",
+							text=online_lobby_text("RestoringCurrentLobby", "Restoring current lobby..."),
 							showSpinner=true,
 							showPrompt=false
 						})
@@ -4939,10 +4999,10 @@ local af = Def.ActorFrame{
 					connected = false
 					has_error = true
 					self:playcommand("SetStatus", {
-						text="Erreur de connexion au service en ligne :\n"..onlineHandler.errorMsg,
+						text=online_lobby_text("ConnectionErrorValue", "Online service connection error:\n%s", onlineHandler.errorMsg),
 						showSpinner=false,
 						showPrompt=true,
-						promptText="Appuyez sur &START; pour revenir au menu principal."
+						promptText=online_lobby_text("ReturnMainMenuPrompt", "Press &START; to return to the main menu.")
 					})
 					self:GetChild("LobbyContent"):visible(false)
 					self:GetChild("OnlinePlayersContent"):visible(false)
@@ -5180,7 +5240,7 @@ local af = Def.ActorFrame{
 			joined_manager_user_id = params and params.manager and params.manager.id or nil
 			if previousLobbyCode ~= "" and previousLobbyCode == joined_lobby_code and not previousIsManager and joined_is_manager then
 				self:playcommand("SetStatus", {
-					text="Vous etes maintenant le manager du salon.",
+					text=online_lobby_text("YouAreManager", "You are now the lobby manager."),
 					showSpinner=false,
 					showPrompt=false,
 					duration=5
@@ -5439,7 +5499,7 @@ local af = Def.ActorFrame{
 						reopened = open_pack_choice_menu(
 							pack_choice_last_song_info or joined_missing_song_info or joined_song_preview,
 							alternatives,
-							"Le pack choisi n'a pas fourni la chart attendue. Choisissez un autre pack."
+							online_lobby_text("ChosenPackMissingChart", "The selected pack did not provide the expected chart. Choose another pack.")
 						)
 					end
 				end
@@ -5447,7 +5507,7 @@ local af = Def.ActorFrame{
 					lobby_flow_trace("OnlineMissingSong_pack_choice_exhausted")
 					pack_choice_all_candidates_exhausted = true
 					self:playcommand("SetStatus", {
-						text="Aucun des packs testés ne contient la chart attendue.\nInstallation manuelle requise pour cette chanson.",
+						text=online_lobby_text("NoCandidateContainsChart", "None of the tested packs contains the expected chart.\nManual installation is required for this song."),
 						showSpinner=false,
 						showPrompt=true
 					})
@@ -5539,7 +5599,7 @@ local af = Def.ActorFrame{
 		self:GetChild("LobbyContent"):visible(false)
 		self:GetChild("OnlinePlayersContent"):visible(false)
 		self:playcommand("SetStatus", {
-			text="Connexion au salon...",
+			text=online_lobby_text("JoiningLobby", "Joining lobby..."),
 			showSpinner=true,
 			showPrompt=false
 		})
@@ -5851,7 +5911,7 @@ end,
 		params = type(params) == "table" and params or {}
 		local message = tostring(params.message or "")
 		if message == "" then
-			message = "Session ouverte ailleurs. Reconnecte ce joueur avec un compte different."
+			message = online_lobby_text("SessionOpenedElsewhere", "This session was opened elsewhere. Reconnect this player with a different account.")
 		end
 		lobby_flow_trace("session_invalidated_received reason=" .. tostring(params.reason or "nil")
 			.. " message=" .. tostring(message)
@@ -5918,7 +5978,8 @@ end,
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			request_lobby_ui_repaint(self, "online_response_join_failed")
 			local errorCode = tostring(params.errorCode or params.error_code or "")
-			local message = tostring(params.message or "Impossible de rejoindre le salon.")
+			local message = tostring(params.message
+				or online_lobby_text("JoinLobbyFailed", "Could not join the lobby."))
 			local retryAfterSeconds = math.max(0, math.ceil(tonumber(params.retryAfterSeconds or params.retry_after_seconds) or 30))
 			local localizationKey = nil
 			if errorCode == "room_join_request_declined" then
@@ -5979,7 +6040,7 @@ end,
 				.. " mode=" .. tostring(mode))
 			if show then
 				self:playcommand("SetStatus", {
-					text="Attente de renvoi vers l'ecran doptions.",
+					text=online_lobby_text("WaitingOptionsRedirect", "Waiting to be redirected to the options screen."),
 					showSpinner=true,
 					showPrompt=false,
 					force=true,
@@ -6043,7 +6104,7 @@ end,
 			},
 
 			LoadFont("Common Bold")..{
-					Text="Salons disponibles",
+					Text=online_lobby_text("AvailableLobbies", "Available lobbies"),
 				InitCommand=function(self)
 					self:horizalign(left):x(-(lobby_layout.browsePanelWidth/2)+8):y(-170):zoom(0.42)
 				end,
@@ -6068,7 +6129,7 @@ end,
 
 		LoadFont("Common Normal")..{
 			Name="EmptyStateText",
-				Text="Aucun salon trouve.",
+				Text=online_lobby_text("NoLobbies", "No lobbies found."),
 			InitCommand=function(self)
 				self:horizalign(center):xy(lobby_layout.browseLobbyX, -118):zoom(0.72):diffuse(Color.White):visible(false)
 			end
@@ -6100,7 +6161,7 @@ end,
 
 			LoadFont("Common Bold")..{
 				Name="OnlinePlayersButtonText",
-					Text="Joueurs en ligne",
+					Text=online_lobby_text("OnlinePlayers", "Online players"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6153,7 +6214,7 @@ end,
 			},
 
 			LoadFont("Common Bold")..{
-					Text="Rafraichir",
+					Text=online_lobby_text("Refresh", "Refresh"),
 				InitCommand=function(self)
 					self:zoom(0.42)
 				end,
@@ -6206,7 +6267,7 @@ end,
 			},
 
 			LoadFont("Common Bold")..{
-					Text="Creer un salon",
+					Text=online_lobby_text("CreateLobby", "Create lobby"),
 				InitCommand=function(self)
 					self:zoom(0.38)
 				end,
@@ -6259,7 +6320,7 @@ end,
 			},
 
 			LoadFont("Common Bold")..{
-					Text="Retour",
+					Text=online_lobby_text("Back", "Back"),
 				InitCommand=function(self)
 					self:zoom(0.42)
 				end,
@@ -6327,7 +6388,7 @@ end,
 			end
 		},
 		LoadFont("Common Bold")..{
-				Text="Joueurs en ligne",
+				Text=online_lobby_text("OnlinePlayers", "Online players"),
 			InitCommand=function(self)
 				self:horizalign(left):x(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+8):y(-170):zoom(0.42)
 			end
@@ -6341,7 +6402,7 @@ end,
 		},
 		LoadFont("Common Normal")..{
 			Name="OnlinePlayersList",
-				Text="Aucun joueur connecte trouve.",
+				Text=online_lobby_text("NoOnlinePlayers", "No online players found."),
 			InitCommand=function(self)
 				self:horizalign(left):vertalign(top):xy(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+10, -132):zoom(0.48):maxwidth(420)
 			end
@@ -6370,7 +6431,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Salons disponibles",
+					Text=online_lobby_text("AvailableLobbies", "Available lobbies"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6417,7 +6478,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Rafraichir",
+					Text=online_lobby_text("Refresh", "Refresh"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6460,7 +6521,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Creer un salon",
+					Text=online_lobby_text("CreateLobby", "Create lobby"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6503,7 +6564,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Retour",
+					Text=online_lobby_text("Back", "Back"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6561,21 +6622,21 @@ end,
 			end
 		},
 		LoadFont("Common Bold")..{
-				Text="Salon rejoint",
+				Text=online_lobby_text("JoinedLobby", "Joined lobby"),
 			InitCommand=function(self)
 				self:horizalign(left):x(-290):y(-170):zoom(0.40)
 			end
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyCodeLabel",
-				Text="Code du salon :",
+				Text=online_lobby_text("LobbyCode", "Lobby code:"),
 			InitCommand=function(self)
 				self:horizalign(right):x(-10):y(-170):zoom(0.72)
 			end
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedLobbyCodeValue",
-				Text="(en attente)",
+				Text=online_lobby_text("Pending", "(pending)"),
 			InitCommand=function(self)
 				self:horizalign(right):x(50):y(-170):zoom(0.42)
 			end
@@ -6635,7 +6696,7 @@ end,
 		},
 		LoadFont("Common Normal")..{
 			Name="JoinedLobbyPlayers",
-				Text="En attente des joueurs...",
+				Text=online_lobby_text("WaitingForPlayers", "Waiting for players..."),
 			InitCommand=function(self)
 				self:horizalign(left):x(-290):y(-112):zoom(0.84):maxwidth(405)
 			end
@@ -6654,7 +6715,7 @@ end,
 		},
 		LoadFont("Common Bold")..{
 			Name="JoinedSongBannerLabel",
-			Text="BANNIERE",
+			Text=online_lobby_text("Banner", "BANNER"),
 			InitCommand=function(self)
 				self:xy(116, -105):zoom(0.18):diffuse(Color.White):visible(false)
 			end
@@ -6712,7 +6773,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Quitter le salon",
+					Text=online_lobby_text("LeaveLobby", "Leave lobby"),
 				InitCommand=function(self)
 					self:zoom(0.38)
 				end,
@@ -6742,7 +6803,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-					Text="Choisir musique",
+					Text=online_lobby_text("ChooseMusic", "Choose music"),
 				InitCommand=function(self)
 					self:zoom(0.38)
 				end,
@@ -6778,7 +6839,7 @@ end,
 				},
 				LoadFont("Common Bold")..{
 					Name="ReloadSongsLabel",
-						Text="Telecharger pack",
+						Text=online_lobby_text("DownloadPack", "Download pack"),
 						InitCommand=function(self)
 							self:zoom(0.36)
 						end,
@@ -6814,7 +6875,7 @@ end,
 				},
 				LoadFont("Common Bold")..{
 					Name="GlobalOptionsLabel",
-					Text="Options globales",
+					Text=online_lobby_text("GlobalOptions", "Global options"),
 					InitCommand=function(self)
 						self:y(-5):zoom(WideScale(0.25, 0.27)):vertspacing(-34):maxwidth(640)
 					end,
@@ -6855,7 +6916,7 @@ end,
 						end
 					},
 					LoadFont("Common Bold")..{
-						Text="Annuler choix",
+						Text=online_lobby_text("CancelSelection", "Cancel selection"),
 						InitCommand=function(self)
 							self:zoom(0.36)
 						end,
@@ -6886,7 +6947,7 @@ end,
 					end
 				},
 				LoadFont("Common Bold")..{
-						Text="START",
+						Text=online_lobby_text("Start", "START"),
 					InitCommand=function(self)
 						self:zoom(0.40)
 					end,
@@ -6908,16 +6969,18 @@ end,
 			local confirmLabel = self:GetChild("ConfirmButton") and self:GetChild("ConfirmButton"):GetChild("ConfirmLabel")
 			if title then
 				if leave_confirm_mode == "exit_online" then
-					title:settext("Etes-vous sur de vouloir quitter ?")
+					title:settext(online_lobby_text("ExitOnlineConfirm", "Are you sure you want to leave online mode?"))
 				else
-					title:settext("Se deconnecter du salon ?")
+					title:settext(online_lobby_text("DisconnectLobbyConfirm", "Leave the lobby?"))
 				end
 			end
 			if cancelLabel then
-				cancelLabel:settext(leave_confirm_mode == "exit_online" and "Non" or "Annuler")
+				cancelLabel:settext(leave_confirm_mode == "exit_online"
+					and online_lobby_text("No", "No") or online_lobby_text("Cancel", "Cancel"))
 			end
 			if confirmLabel then
-				confirmLabel:settext(leave_confirm_mode == "exit_online" and "Oui" or "Deconnecter")
+				confirmLabel:settext(leave_confirm_mode == "exit_online"
+					and online_lobby_text("Yes", "Yes") or online_lobby_text("Disconnect", "Disconnect"))
 			end
 		end,
 		HoverCommand=function(self)
@@ -6937,7 +7000,7 @@ end,
 		},
 		LoadFont("Common Normal")..{
 			Name="PromptTitle",
-				Text="Se deconnecter du salon ?",
+				Text=online_lobby_text("DisconnectLobbyConfirm", "Leave the lobby?"),
 			InitCommand=function(self)
 				self:y(-42):zoom(1)
 			end
@@ -6963,7 +7026,7 @@ end,
 			},
 			LoadFont("Common Bold")..{
 				Name="CancelLabel",
-					Text="Annuler",
+					Text=online_lobby_text("Cancel", "Cancel"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -6993,7 +7056,7 @@ end,
 			},
 			LoadFont("Common Bold")..{
 				Name="ConfirmLabel",
-					Text="Deconnecter",
+					Text=online_lobby_text("Disconnect", "Disconnect"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -7030,13 +7093,13 @@ end,
 			end
 		},
 		LoadFont("Common Bold")..{
-			Text="Telecharger ce pack ?",
+			Text=online_lobby_text("DownloadThisPack", "Download this pack?"),
 			InitCommand=function(self)
 				self:y(-82):zoom(0.72):diffuse(Color.White)
 			end
 		},
 		LoadFont("Common Normal")..{
-			Text="Le manager parcourt ce pack, mais n'a pas encore choisi de chanson.\nTelecharger maintenant peut prendre du temps et de l'espace disque.",
+			Text=online_lobby_text("BrowsePackDownloadWarning", "The manager is browsing this pack but has not selected a song yet.\nDownloading now may take time and disk space."),
 			InitCommand=function(self)
 				self:y(-28):zoom(0.48):maxwidth(980):diffuse(0.88,0.88,0.88,1)
 			end
@@ -7061,7 +7124,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Annuler",
+				Text=online_lobby_text("Cancel", "Cancel"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -7090,7 +7153,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Telecharger",
+				Text=online_lobby_text("Download", "Download"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -7128,7 +7191,7 @@ end,
 		},
 		LoadFont("Common Bold")..{
 			Name="PromptTitle",
-			Text="Transferer le role manager ?",
+			Text=online_lobby_text("TransferManagerConfirmTitle", "Transfer manager role?"),
 			InitCommand=function(self)
 				self:y(-72):zoom(0.70):diffuse(Color.White)
 			end
@@ -7160,7 +7223,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Non",
+				Text=online_lobby_text("No", "No"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -7189,7 +7252,7 @@ end,
 				end
 			},
 			LoadFont("Common Bold")..{
-				Text="Oui",
+				Text=online_lobby_text("Yes", "Yes"),
 				InitCommand=function(self)
 					self:zoom(0.5)
 				end,
@@ -7226,7 +7289,7 @@ end,
 		},
 		LoadFont("Common Bold")..{
 			Name="GlobalOptionsTitle",
-			Text="Options globales",
+			Text=online_lobby_text("GlobalOptions", "Global options"),
 			InitCommand=function(self)
 				self:xy(0, -130):zoom(0.7):diffuse(Color.White)
 			end
@@ -7246,7 +7309,7 @@ end,
 			end
 		},
 		LoadFont("Common Normal")..{
-			Text="Gauche/Droite : choisir   Valider : appliquer   Retour : fermer",
+			Text=online_lobby_text("GlobalOptionsHelp", "Left/Right: choose   Start: apply   Back: close"),
 			InitCommand=function(self)
 				self:xy(0, 135):zoom(0.38):maxwidth(1180):diffuse(0.7,0.7,0.7,1)
 			end
@@ -7257,7 +7320,7 @@ end,
 
 		LoadFont("Common Normal")..{
 			Name="ITGOnlineBuildMarker",
-			Text="ITG Online client",
+			Text=online_lobby_text("ClientTitle", "ITG Online client"),
 			InitCommand=function(self)
 				self:xy(_screen.w - 12, _screen.h - 18):horizalign(right):zoom(0.32):diffuse(0.75,0.75,0.75,0.85)
 			end
@@ -7299,7 +7362,7 @@ end,
 			},
 			LoadFont("Common Normal")..{
 				Name="Label",
-				Text="HTTP ONLY",
+				Text=online_lobby_text("HttpOnly", "HTTP ONLY"),
 				InitCommand=function(self)
 					self:horizalign(right):zoom(0.36):maxwidth(240):diffuse(0.55,0.55,0.55,0.90)
 				end

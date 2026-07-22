@@ -666,7 +666,7 @@ af[#af + 1] = Def.Quad{
 
 af[#af + 1] = LoadFont("Common Bold")..{
 	Name="Title",
-	Text="Leaderboard",
+	Text=THEME:GetString("ScreenOnlineLobbies", "Leaderboard"),
 	InitCommand=function(self)
 		self:y(-16):horizalign(center):zoom(title_zoom):maxwidth((panel_width * 0.88) / title_zoom):shadowlength(1):diffuse(color("#ffffff")):diffusealpha(0.92)
 	end,

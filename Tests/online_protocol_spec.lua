@@ -188,14 +188,68 @@ equal(protocol.online_player_room_label({
 	name = "Public lobby",
 	visibility = "public",
 }), "Public lobby n°206", "public room player label")
+equal(protocol.online_player_room_label({
+	id = "000205",
+	visibility = "private",
+}, {
+	private = "Salon privé",
+	public = "Salon public",
+	generic = "Salon",
+}), "Salon privé n°205", "localized private room player label")
+equal(protocol.online_player_room_label({
+	id = "206",
+	visibility = "public",
+}, {}), "Public lobby n°206", "partial localization falls back safely")
 equal(protocol.online_player_room_label(nil), "", "missing room player label")
+
+local onlineLocalizationKeys = {}
+for _, relativePath in ipairs({
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua",
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/LobbyInfo.lua",
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/PackChoiceMenu.lua",
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/PlayerActionMenu.lua",
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/PrivateJoinPrompt.lua",
+	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/OnlineLiveLeaderboard.lua",
+	"Themes/Simply Love/Scripts/SL-OnlineHelpers.lua",
+	"Themes/Simply Love/Scripts/SL-OnlinePackSync.lua",
+	"Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua",
+}) do
+	local path = sourceRoot .. "/" .. relativePath
+	local file = assert(io.open(path, "rb"), "missing online localization source: " .. path)
+	local content = file:read("*a")
+	file:close()
+	for helper in content:gmatch("online_lobby_text%s*%(%s*\"([%w_]+)\"") do
+		onlineLocalizationKeys[helper] = true
+	end
+	for helper in content:gmatch("pack_text%s*%(%s*\"([%w_]+)\"") do
+		onlineLocalizationKeys[helper] = true
+	end
+	for helper in content:gmatch("online_client_text%s*%(%s*\"([%w_]+)\"") do
+		onlineLocalizationKeys[helper] = true
+	end
+	for helper in content:gmatch("THEME:GetString%s*%(%s*\"ScreenOnlineLobbies\"%s*,%s*\"([%w_]+)\"") do
+		onlineLocalizationKeys[helper] = true
+	end
+end
 
 for _, language in ipairs({ "de", "en", "es", "fr", "it", "ja", "pl", "pt-br", "ru" }) do
 	local path = sourceRoot .. "/Themes/Simply Love/Languages/" .. language .. ".ini"
 	local file = assert(io.open(path, "rb"), "missing language file: " .. path)
 	local content = file:read("*a")
 	file:close()
+	local onlineSection = assert(content:match("%[ScreenOnlineLobbies%]%s*(.-)%s*%[ScreenITGOnlineUnlinkProfile%]"),
+		language .. " is missing ScreenOnlineLobbies")
+	local loginSection = assert(content:match("%[ScreenITGOnlineLogin%]%s*(.-)%s*%[ScreenOnlineLobbies%]"),
+		language .. " is missing ScreenITGOnlineLogin")
+	assert(loginSection:find("ShortCode=", 1, true), language .. " is missing ShortCode")
+	for key in pairs(onlineLocalizationKeys) do
+		assert(onlineSection:find("\n" .. key .. "=", 1, true) or onlineSection:find("^" .. key .. "="),
+			language .. " is missing online localization key " .. key)
+	end
 	for _, key in ipairs({
+		"PublicLobby",
+		"PrivateLobby",
+		"Lobby",
 		"JoinRequestDeclined",
 		"JoinRequestRetryCooldown",
 		"JoinRequestExpired",
@@ -206,6 +260,21 @@ for _, language in ipairs({ "de", "en", "es", "fr", "it", "ja", "pl", "pt-br", "
 	assert(content:match("JoinRequestDeclined=[^\r\n]*%%d"), language .. " decline message must expose retry seconds")
 	assert(content:match("JoinRequestRetryCooldown=[^\r\n]*%%d"), language .. " cooldown message must expose retry seconds")
 end
+
+local onlineHelpersPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-OnlineHelpers.lua"
+local onlineHelpersFile = assert(io.open(onlineHelpersPath, "rb"), "missing online helpers: " .. onlineHelpersPath)
+local onlineHelpersContent = onlineHelpersFile:read("*a")
+onlineHelpersFile:close()
+local joinLobbyHandler = assert(
+	onlineHelpersContent:match("JoinLobbyMessageCommand=function%b()%s*(.-)%s*CreateLobbyMessageCommand=function"),
+	"missing JoinLobbyMessageCommand"
+)
+assert(joinLobbyHandler:find("errorCode=(decoded and (decoded.error_code or decoded.errorCode))", 1, true),
+	"join failures must forward the structured error code")
+assert(joinLobbyHandler:find("retryAfterSeconds=(decoded and (decoded.retry_after_seconds or decoded.retryAfterSeconds))", 1, true),
+	"join failures must forward the authoritative retry delay")
+assert(joinLobbyHandler:find("roomId=params.code", 1, true),
+	"join failures must retain the target room identity")
 
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
