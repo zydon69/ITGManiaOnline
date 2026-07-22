@@ -15196,9 +15196,20 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	end
 	local suppressedUntil = tonumber(self.songAvailabilitySuppressedUntil[availabilityKey]) or 0
 	if suppressedUntil > GetTimeSinceStart() then
+		local retryAfter = suppressedUntil - GetTimeSinceStart()
 		online_flow_trace("song_availability_skipped reason=suppressed key=" .. tostring(availabilityKey)
-			.. " remaining=" .. tostring(suppressedUntil - GetTimeSinceStart()))
-		safe_callback(callback, true, nil, { duplicate = true, suppressed = true })
+			.. " remaining=" .. tostring(retryAfter))
+		-- Suppression follows a failed server request.  It is a retry delay, not
+		-- an acknowledgement: reporting success here lets callers publish READY
+		-- even though the server never confirmed the selected chart.
+		safe_callback(callback, false, nil, {
+			statusCode = 0,
+			errorCode = "song_availability_retry_suppressed",
+			errorMessage = "song_availability_retry_suppressed",
+			deferred = true,
+			deferredReason = "song_availability_retry_suppressed",
+			retryAfter = retryAfter,
+		})
 		return
 	end
 	local availabilityGeneration = tonumber(self.songAvailabilityGeneration) or 0

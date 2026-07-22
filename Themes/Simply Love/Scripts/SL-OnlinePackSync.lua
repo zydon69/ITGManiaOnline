@@ -60,6 +60,7 @@ PackSync.managerBrowsingPreviewDuplicateSuppressSeconds = tonumber(PackSync.mana
 PackSync.pendingBrowseCompletionRetryAt = tonumber(PackSync.pendingBrowseCompletionRetryAt) or 0
 PackSync.pendingBrowseCompletionRetryCount = tonumber(PackSync.pendingBrowseCompletionRetryCount) or 0
 PackSync.pendingSelectedAvailabilitySongInfo = PackSync.pendingSelectedAvailabilitySongInfo or nil
+PackSync.pendingSelectedAvailabilityMessage = PackSync.pendingSelectedAvailabilityMessage or nil
 PackSync.pendingSelectedAvailabilityRetryAt = tonumber(PackSync.pendingSelectedAvailabilityRetryAt) or 0
 PackSync.pendingSelectedAvailabilityRetryCount = tonumber(PackSync.pendingSelectedAvailabilityRetryCount) or 0
 PackSync.selectedAvailabilityInFlight = PackSync.selectedAvailabilityInFlight or false
@@ -400,7 +401,27 @@ local function availability_confirmation_state(ok, decoded, response)
 		or responseTable.error_code
 		or responseTable.errorMessage
 		or "nil"
-	return ok == true, deferred == true, reason
+	local retryAfter = tonumber(decodedTable.retryAfter or decodedTable.retry_after
+		or responseTable.retryAfter or responseTable.retry_after)
+	return ok == true, deferred == true, reason, retryAfter
+end
+
+local function local_member_pack_status(room)
+	if type(room) ~= "table" then return "" end
+	local localUserId = ITGOnline and ITGOnline.LocalUserId
+		and tostring(ITGOnline:LocalUserId() or "") or ""
+	if localUserId == "" then return "" end
+	local members = room.players or room.members or room.room_members
+	if type(members) ~= "table" then return "" end
+	for _, member in pairs(members) do
+		local user = type(member) == "table" and (member.user or member.player or {}) or {}
+		local memberUserId = tostring((type(member) == "table" and
+			(member.user_id or member.userId or member.player_id or member.playerId)) or user.id or "")
+		if type(member) == "table" and memberUserId == localUserId then
+			return tostring(member.pack_sync_status or member.status or "")
+		end
+	end
+	return ""
 end
 
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
@@ -1637,7 +1658,8 @@ function PackSync:WatchdogTick()
 		then
 			self:FinalizeDownloadedSelectedSongAvailability(
 				self.pendingSelectedAvailabilitySongInfo,
-				"watchdog_retry")
+				"watchdog_retry",
+				self.pendingSelectedAvailabilityMessage)
 		end
 	end
 
@@ -1743,19 +1765,23 @@ function PackSync:ClearSelectedAvailabilityRetry(reason)
 			.. " attempts=" .. tostring(self.pendingSelectedAvailabilityRetryCount or 0))
 	end
 	self.pendingSelectedAvailabilitySongInfo = nil
+	self.pendingSelectedAvailabilityMessage = nil
 	self.pendingSelectedAvailabilityRetryAt = 0
 	self.pendingSelectedAvailabilityRetryCount = 0
 	self.selectedAvailabilityInFlight = false
 end
 
-function PackSync:ScheduleSelectedAvailabilityRetry(songInfo, reason)
+function PackSync:ScheduleSelectedAvailabilityRetry(songInfo, reason, readyMessage, retryAfter)
 	if not self:SongInfoMatchesCurrentSelection(songInfo) then
 		self:ClearSelectedAvailabilityRetry("selection_changed")
 		return false
 	end
 	self.pendingSelectedAvailabilitySongInfo = songInfo
+	self.pendingSelectedAvailabilityMessage = readyMessage
 	self.pendingSelectedAvailabilityRetryCount = (tonumber(self.pendingSelectedAvailabilityRetryCount) or 0) + 1
-	local delay = math.min(10, 1.5 * self.pendingSelectedAvailabilityRetryCount)
+	local delay = math.min(10, math.max(
+		1.5 * self.pendingSelectedAvailabilityRetryCount,
+		tonumber(retryAfter) or 0))
 	self.pendingSelectedAvailabilityRetryAt = GetTimeSinceStart() + delay
 	trace("Selected availability retry scheduled reason=" .. tostring(reason or "unknown")
 		.. " attempt=" .. tostring(self.pendingSelectedAvailabilityRetryCount)
@@ -1764,7 +1790,7 @@ function PackSync:ScheduleSelectedAvailabilityRetry(songInfo, reason)
 	return true
 end
 
-function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source)
+function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source, readyMessage)
 	if self.selectedAvailabilityInFlight then
 		trace("Selected availability finalization skipped reason=in_flight source=" .. tostring(source or "unknown"))
 		return false
@@ -1774,7 +1800,7 @@ function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source)
 		return false
 	end
 	if not (ITGOnline and ITGOnline.ConfirmSelectedSongAvailability) then
-		self:UpdateStatus(self.status.Ready, nil, nil, function(statusOk)
+		self:UpdateStatus(self.status.Ready, readyMessage, nil, function(statusOk)
 			if statusOk then
 				self:MarkLobbyReadyForSelectedSong("downloaded_ok_no_client_confirm")
 			end
@@ -1789,23 +1815,36 @@ function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source)
 		.. " selected_at=" .. tostring(selected_at(songInfo)))
 	ITGOnline:ConfirmSelectedSongAvailability("downloaded_ok", function(ok, decoded, response)
 		self.selectedAvailabilityInFlight = false
-		local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
+		local confirmed, deferred, availabilityReason, retryAfter = availability_confirmation_state(ok, decoded, response)
 		trace("Selected availability finalization response confirmed=" .. tostring(confirmed)
 			.. " deferred=" .. tostring(deferred)
 			.. " reason=" .. tostring(availabilityReason)
 			.. " source=" .. tostring(source or "unknown"))
 		if not confirmed then
-			self:ScheduleSelectedAvailabilityRetry(songInfo, availabilityReason)
+			self:ScheduleSelectedAvailabilityRetry(songInfo, availabilityReason, readyMessage, retryAfter)
 			return
 		end
 
-		self:UpdateStatus(self.status.Ready, nil, nil, function(statusOk, statusDecoded, statusResponse)
+		local acknowledgedStatus = local_member_pack_status(
+			decoded and decoded.room or ITGOnline and ITGOnline.currentRoom)
+		if acknowledgedStatus == self.status.Ready then
+			-- Song availability atomically promotes ordinary local matches to
+			-- READY on the server.  Do not post the same transition again: the
+			-- server correctly reports it as a semantic duplicate, which would
+			-- otherwise be mistaken for another failed acknowledgement.
+			self:ApplyLocalStatus(self.status.Ready, readyMessage)
+			self:ClearSelectedAvailabilityRetry("selected_song_ready_from_availability")
+			self:MarkLobbyReadyForSelectedSong(tostring(source or "unknown") .. "_availability")
+			return
+		end
+
+		self:UpdateStatus(self.status.Ready, readyMessage, nil, function(statusOk, statusDecoded, statusResponse)
 			trace("Selected ready status response ok=" .. tostring(statusOk == true)
 				.. " status=" .. tostring(statusResponse and statusResponse.statusCode or "nil")
 				.. " error=" .. tostring(statusDecoded and statusDecoded.error_code
 					or statusResponse and statusResponse.errorMessage or "nil"))
 			if not statusOk then
-				self:ScheduleSelectedAvailabilityRetry(songInfo, "ready_status_not_acknowledged")
+				self:ScheduleSelectedAvailabilityRetry(songInfo, "ready_status_not_acknowledged", readyMessage)
 				return
 			end
 			self:ClearSelectedAvailabilityRetry("selected_song_ready")
@@ -2448,22 +2487,13 @@ function PackSync:ApplySelectedChart(songInfo)
 		if MESSAGEMAN then
 			MESSAGEMAN:Broadcast("OnlineSongAvailable", { songInfo = songInfo })
 		end
-		if ITGOnline and ITGOnline.ConfirmSelectedSongAvailability then
-			ITGOnline:ConfirmSelectedSongAvailability("local_chart_match_found", function(ok, decoded, response)
-				local confirmed, deferred, availabilityReason = availability_confirmation_state(ok, decoded, response)
-				trace("ApplySelectedChart availability confirmed ok=" .. tostring(confirmed)
-					.. " deferred=" .. tostring(deferred)
-					.. " reason=" .. tostring(availabilityReason)
-					.. " source=local_chart_match_found")
-				if confirmed then
-					self:UpdateStatus(self.status.Ready, result.matchMessage)
-					self:MarkLobbyReadyForSelectedSong("local_chart_match_found")
-				end
-			end)
-		else
-			self:UpdateStatus(self.status.Ready, result.matchMessage)
-			self:MarkLobbyReadyForSelectedSong("local_chart_match_found_no_client_confirm")
-		end
+		-- Local and freshly downloaded charts use the same acknowledged retry
+		-- path.  A transient HTTP failure must never strand the member in the
+		-- intermediate LOCAL_CHART_MATCH_FOUND state.
+		self:FinalizeDownloadedSelectedSongAvailability(
+			songInfo,
+			"local_chart_match_found",
+			result.matchMessage)
 		return true
 	end
 
