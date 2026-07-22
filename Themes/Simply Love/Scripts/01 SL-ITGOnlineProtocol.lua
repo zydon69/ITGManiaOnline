@@ -67,6 +67,10 @@ local decimalIdFields = {
 	inviterId = true,
 	requester_id = true,
 	requesterId = true,
+	requester_user_id = true,
+	requesterUserId = true,
+	join_request_id = true,
+	joinRequestId = true,
 	target_user_id = true,
 	targetUserId = true,
 }
@@ -398,6 +402,30 @@ function ITGOnlineProtocol.normalize_sync_payload(payload)
 	end
 	if normalized.meta ~= nil and type(normalized.meta) ~= "table" then return nil, "invalid_sync_meta" end
 	return normalized
+end
+
+function ITGOnlineProtocol.pending_join_event_matches(state, payload)
+	if type(state) ~= "table" then return false, "invalid_state" end
+	if type(payload) ~= "table" then return false, "invalid_payload" end
+	if canonical_decimal_id(state.current_room_id) ~= nil then
+		return false, "already_in_room"
+	end
+
+	local pendingRequestId = canonical_decimal_id(state.pending_join_request_id)
+	if pendingRequestId == nil then return false, "no_pending_request" end
+	local eventRequestId = canonical_decimal_id(payload.join_request_id or payload.joinRequestId)
+	if eventRequestId == nil then return false, "missing_event_request_id" end
+	if eventRequestId ~= pendingRequestId then return false, "request_mismatch" end
+	if tostring(payload.recipient_role or "") ~= "requester" then
+		return false, "invalid_recipient_role"
+	end
+
+	local pendingRoomId = canonical_decimal_id(state.pending_join_room_id)
+	local eventRoomId = canonical_decimal_id(payload.room_id or payload.roomId)
+	if pendingRoomId == nil or eventRoomId == nil then return false, "missing_room_id" end
+	if eventRoomId ~= pendingRoomId then return false, "room_mismatch" end
+
+	return true, "request_match"
 end
 
 function ITGOnlineProtocol.new_event_reducer(roomId)

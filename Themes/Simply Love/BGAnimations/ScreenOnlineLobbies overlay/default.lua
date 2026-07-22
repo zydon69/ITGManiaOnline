@@ -89,6 +89,7 @@ local function finish_private_prompt(actor)
 	local nextPrompt = table.remove(private_prompt_queue, 1)
 	if nextPrompt then display_private_prompt(actor, nextPrompt.params, nextPrompt.kind) end
 end
+
 local room_invitation_options = {
 	{label="Accepter l'invitation", accept=true},
 	{label="Refuser l'invitation", accept=false},
@@ -5606,6 +5607,39 @@ local af = Def.ActorFrame{
 		.. " currentRoomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 	enqueue_private_prompt(self, params, "join_request")
 end,
+	OnlinePrivateJoinRequestCancelledMessageCommand=function(self, params)
+		if not is_active_lobby_overlay() then
+			lobby_flow_trace("OnlinePrivateJoinRequestCancelled_ignored reason=inactive_overlay")
+			return
+		end
+		local joinRequestId = params and (params.join_request_id or params.joinRequestId) or nil
+		local requestId = tostring(joinRequestId or "")
+		local promptKey = "join_request:" .. requestId
+		local filtered = {}
+		local removed = false
+		if requestId ~= "" then
+			for _, queued in ipairs(private_prompt_queue) do
+				if queued.key == promptKey then
+					private_prompt_keys[queued.key] = nil
+					removed = true
+				else
+					filtered[#filtered + 1] = queued
+				end
+			end
+			private_prompt_queue = filtered
+			local activeRequest = private_join_prompt_kind == "join_request"
+				and private_join_request
+				and private_join_request.join_request
+			if activeRequest and tostring(activeRequest.id or "") == requestId then
+				finish_private_prompt(self)
+				removed = true
+			end
+			private_prompt_keys[promptKey] = nil
+		end
+		lobby_flow_trace("OnlinePrivateJoinRequestCancelled_apply joinRequestId=" .. tostring(joinRequestId or "nil")
+			.. " removed=" .. tostring(removed == true)
+			.. " reason=" .. tostring(params and params.reason or "nil"))
+	end,
 	OnlineRoomInvitationMessageCommand=function(self, params)
 		if not is_active_lobby_overlay() then
 			lobby_flow_trace("OnlineRoomInvitation_ignored reason=inactive_overlay")
@@ -5871,6 +5905,13 @@ end,
 			lobby_flow_trace("OnlineResponseStatus_apply event=joinLobby success=true action=begin_join_timeout")
 			begin_join_timeout(self, 60)
 		elseif params and params.event == "joinLobby" and params.success == false then
+			if ITGOnline and ITGOnline.currentRoomId ~= nil then
+				lobby_flow_trace("OnlineResponseStatus_ignored event=joinLobby success=false reason=current_room_active"
+					.. " currentRoomId=" .. tostring(ITGOnline.currentRoomId)
+					.. " roomId=" .. tostring(params.roomId or "nil")
+					.. " joinRequestId=" .. tostring(params.joinRequestId or "nil"))
+				return
+			end
 			lobby_flow_trace("OnlineResponseStatus_apply event=joinLobby success=false action=restore_browse")
 			clear_pending_join()
 			mode = "browse"

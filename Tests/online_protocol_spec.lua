@@ -137,6 +137,47 @@ local joinRequestEvent = assert(protocol.normalize_event({
 equal(joinRequestEvent.payload.room.phase, "lobby", "join request room phase")
 equal(joinRequestEvent.payload.requester.name, "Requesting Player", "join request requester name")
 
+local pendingJoinState = {
+	current_room_id = nil,
+	pending_join_room_id = "9",
+	pending_join_request_id = "8",
+}
+local terminalMatches, terminalReason = protocol.pending_join_event_matches(pendingJoinState, {
+	room_id = "9",
+	join_request_id = "8",
+	recipient_role = "requester",
+})
+equal(terminalMatches, true, "matching pending join terminal event")
+equal(terminalReason, "request_match", "matching pending join terminal reason")
+
+terminalMatches, terminalReason = protocol.pending_join_event_matches({
+	current_room_id = "9",
+	pending_join_room_id = "9",
+	pending_join_request_id = "8",
+}, {
+	room_id = "9",
+	join_request_id = "8",
+	recipient_role = "requester",
+})
+equal(terminalMatches, false, "joined member must ignore terminal join event")
+equal(terminalReason, "already_in_room", "joined member terminal rejection reason")
+
+terminalMatches, terminalReason = protocol.pending_join_event_matches(pendingJoinState, {
+	room_id = "9",
+	join_request_id = "7",
+	recipient_role = "requester",
+})
+equal(terminalMatches, false, "unrelated join request must be ignored")
+equal(terminalReason, "request_mismatch", "unrelated join request rejection reason")
+
+terminalMatches, terminalReason = protocol.pending_join_event_matches(pendingJoinState, {
+	room_id = "9",
+	join_request_id = "8",
+	recipient_role = "manager",
+})
+equal(terminalMatches, false, "manager notification must not mutate requester state")
+equal(terminalReason, "invalid_recipient_role", "manager notification rejection reason")
+
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
 	event = "room.ready_updated",

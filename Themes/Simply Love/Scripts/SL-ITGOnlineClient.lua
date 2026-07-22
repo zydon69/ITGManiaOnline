@@ -15818,6 +15818,10 @@ function ITGOnline:RealtimeNonRoomEventPolicy(name)
 				action = "clear_pending_join_and_notify",
 				reason = "pending_join_terminal_state",
 			},
+			["room.join_request.cancelled"] = {
+				action = "clear_requester_pending_join_or_notify_manager",
+				reason = "pending_join_cancelled",
+			},
 			["room.join_request.accepted"] = {
 				action = "fetch_room_then_broadcast",
 				reason = "pending_join_accepted_needs_room_snapshot",
@@ -15837,6 +15841,17 @@ function ITGOnline:RealtimeNonRoomEventPolicy(name)
 		end
 		return policy
 	end
+
+function ITGOnline:PendingJoinEventMatches(payload)
+	if not ITGOnlineProtocol or not ITGOnlineProtocol.pending_join_event_matches then
+		return false, "protocol_helper_unavailable"
+	end
+	return ITGOnlineProtocol.pending_join_event_matches({
+		current_room_id = self.currentRoomId,
+		pending_join_room_id = self.pendingJoinRoomId,
+		pending_join_request_id = self.pendingJoinRequestId,
+	}, payload)
+end
 
 function ITGOnline:HandleRealtimeEvent(event)
 		if type(event) ~= "table" then
@@ -15900,6 +15915,7 @@ function ITGOnline:HandleRealtimeEvent(event)
 			or name == "room.invitation.created"
 			or name == "room.join_request.declined"
 			or name == "room.join_request.expired"
+			or name == "room.join_request.cancelled"
 			or name == "room.join_request.accepted" then
 			self:RealtimeNonRoomEventPolicy(name)
 		end
@@ -16121,35 +16137,96 @@ function ITGOnline:HandleRealtimeEvent(event)
 				.. " requesterId=" .. tostring(payload.requester.id or "nil"))
 			safe_broadcast("OnlinePrivateJoinRequest", payload)
 		elseif name == "room.join_request.declined" then
-			online_flow_trace("realtime_event_apply name=room.join_request.declined"
+			local applies, matchReason = self:PendingJoinEventMatches(payload)
+			online_flow_trace("realtime_event_join_terminal name=room.join_request.declined"
+				.. " applies=" .. tostring(applies == true)
+				.. " matchReason=" .. tostring(matchReason)
 				.. " roomId=" .. tostring(payload.room_id or "nil")
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 				.. " reason=" .. tostring(payload.reason or "nil"))
-			if payload.room_id ~= nil and online_room_ids_match(payload.room_id, self.pendingJoinRoomId) then
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
-			end
+			if not applies then return end
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
 			safe_broadcast("OnlineResponseStatus", {
 				event = "joinLobby",
 				success = false,
+				joinRequestId = payload.join_request_id,
+				roomId = payload.room_id,
 				message = payload.reason and payload.reason ~= "" and ("Join request declined: " .. tostring(payload.reason)) or "Join request declined."
 			})
 		elseif name == "room.join_request.expired" then
-			online_flow_trace("realtime_event_apply name=room.join_request.expired"
-				.. " roomId=" .. tostring(payload.room_id or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " reason=" .. tostring(payload.reason or "nil"))
-			if payload.room_id ~= nil and online_room_ids_match(payload.room_id, self.pendingJoinRoomId) then
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
+			if tostring(payload.recipient_role or "") == "manager" then
+				online_flow_trace("realtime_event_apply name=room.join_request.expired action=notify_manager"
+					.. " roomId=" .. tostring(payload.room_id or "nil")
+					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+				safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
+				return
 			end
+			local applies, matchReason = self:PendingJoinEventMatches(payload)
+			online_flow_trace("realtime_event_join_terminal name=room.join_request.expired"
+				.. " applies=" .. tostring(applies == true)
+				.. " matchReason=" .. tostring(matchReason)
+				.. " roomId=" .. tostring(payload.room_id or "nil")
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+				.. " reason=" .. tostring(payload.reason or "nil"))
+			if not applies then return end
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
 			safe_broadcast("OnlineResponseStatus", {
 				event = "joinLobby",
 				success = false,
+				joinRequestId = payload.join_request_id,
+				roomId = payload.room_id,
 				message = payload.reason == "cancelled_by_user" and "Join request cancelled." or "Join request expired."
 			})
+		elseif name == "room.join_request.cancelled" then
+			if tostring(payload.recipient_role or "") == "manager" then
+				online_flow_trace("realtime_event_apply name=room.join_request.cancelled action=notify_manager"
+					.. " roomId=" .. tostring(payload.room_id or "nil")
+					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+					.. " requesterUserId=" .. tostring(payload.requester_user_id or "nil"))
+				safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
+				return
+			end
+			local applies, matchReason = self:PendingJoinEventMatches(payload)
+			online_flow_trace("realtime_event_join_terminal name=room.join_request.cancelled"
+				.. " applies=" .. tostring(applies == true)
+				.. " matchReason=" .. tostring(matchReason)
+				.. " roomId=" .. tostring(payload.room_id or "nil")
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+			if not applies then return end
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+			safe_broadcast("OnlineResponseStatus", {
+				event = "joinLobby",
+				success = false,
+				joinRequestId = payload.join_request_id,
+				roomId = payload.room_id,
+				message = "Join request cancelled."
+			})
 		elseif name == "room.join_request.accepted" and payload.room_id then
-			if not room_event_is_relevant(payload.room_id) then return end
+			if online_room_ids_match(payload.room_id, self.currentRoomId) then
+				online_flow_trace("realtime_join_request_accepted_ignored reason=room_membership_already_applied"
+					.. " roomId=" .. tostring(payload.room_id)
+					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+				return
+			end
+			local applies, matchReason = self:PendingJoinEventMatches(payload)
+			if not applies then
+				online_flow_trace("realtime_join_request_accepted_ignored reason=" .. tostring(matchReason)
+					.. " roomId=" .. tostring(payload.room_id)
+					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+				return
+			end
 			online_flow_trace("realtime_event_apply name=room.join_request.accepted action=fetch_room"
 				.. " roomId=" .. tostring(payload.room_id)
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
