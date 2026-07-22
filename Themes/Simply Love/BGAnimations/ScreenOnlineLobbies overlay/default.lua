@@ -2524,13 +2524,6 @@ local function transition_to_online_song_reload()
 	return true
 end
 
-local function room_visibility_label(room)
-	if not room then return "" end
-	if room.visibility == "private" then return "[PRV]" end
-	if room.visibility == "public" then return "[PUB]" end
-	return "[ROOM]"
-end
-
 local function room_accepts_new_members(room)
 	if not room then return false end
 	if room.acceptsNewMembers ~= nil then return room.acceptsNewMembers == true end
@@ -4251,7 +4244,10 @@ local af = Def.ActorFrame{
 		local text_length = 0
 		for i, user in ipairs(online_users) do
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
-			local room = user.room and user.room.name and (" " .. room_visibility_label(user.room) .. " " .. tostring(user.room.name)) or ""
+			local roomLabel = user.room and ITGOnlineProtocol and ITGOnlineProtocol.online_player_room_label
+				and ITGOnlineProtocol.online_player_room_label(user.room)
+				or ""
+			local room = roomLabel ~= "" and (" " .. roomLabel) or ""
 			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
 			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, "Joueur") or tostring(user.display_name or user.displayName or user.name or "Joueur")
 			local line = clamp_text(selected .. i .. ". " .. display_name .. status .. room, 44)
@@ -5891,9 +5887,10 @@ end,
 					lobby_flow_trace("OnlineResponseStatus_ignored reason=inactive_overlay event=" .. tostring(params and params.event or "nil"))
 					return
 				end
-				lobby_flow_trace("OnlineResponseStatus_suppressed event=" .. tostring(params and params.event or "nil")
+				lobby_flow_trace("OnlineResponseStatus_received event=" .. tostring(params and params.event or "nil")
 					.. " success=" .. tostring(params and params.success == true)
 					.. " critical=" .. tostring(params and params.critical == true)
+					.. " errorCode=" .. tostring(params and (params.errorCode or params.error_code) or "nil")
 					.. " message=" .. tostring(params and params.message or "nil"))
 				if params and params.event == "createLobby" and params.success == false then
 				lobby_flow_trace("OnlineResponseStatus_apply event=createLobby success=false action=restore_browse")
@@ -5917,6 +5914,29 @@ end,
 			mode = "browse"
 			self:GetChild("JoinedLobbyContent"):visible(false)
 			request_lobby_ui_repaint(self, "online_response_join_failed")
+			local errorCode = tostring(params.errorCode or params.error_code or "")
+			local message = tostring(params.message or "Impossible de rejoindre le salon.")
+			if errorCode == "room_join_request_declined" then
+				message = "Demande d'accès au salon refusée par le manager."
+				if params.reason and tostring(params.reason) ~= "" then
+					message = message .. " " .. tostring(params.reason)
+				end
+			elseif errorCode == "room_join_request_expired" then
+				message = "La demande d'accès au salon a expiré."
+			elseif errorCode == "room_join_request_cancelled" then
+				message = "La demande d'accès au salon a été annulée."
+			end
+			lobby_flow_trace("OnlineResponseStatus_displayed event=joinLobby success=false"
+				.. " errorCode=" .. tostring(errorCode ~= "" and errorCode or "unspecified")
+				.. " roomId=" .. tostring(params.roomId or "nil")
+				.. " joinRequestId=" .. tostring(params.joinRequestId or "nil")
+				.. " duration=8")
+			self:playcommand("SetStatus", {
+				text=message,
+				showSpinner=false,
+				showPrompt=true,
+				duration=8,
+			})
 			elseif params and params.event == "leaveLobby" and params.success == false then
 				lobby_flow_trace("OnlineResponseStatus_apply event=leaveLobby success=false action=restore_joined"
 					.. " errorCode=" .. tostring(params.errorCode or params.error_code or "nil"))

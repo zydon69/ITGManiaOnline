@@ -16155,7 +16155,9 @@ function ITGOnline:HandleRealtimeEvent(event)
 				success = false,
 				joinRequestId = payload.join_request_id,
 				roomId = payload.room_id,
-				message = payload.reason and payload.reason ~= "" and ("Join request declined: " .. tostring(payload.reason)) or "Join request declined."
+				errorCode = "room_join_request_declined",
+				reason = payload.reason,
+				message = "Demande d'accès au salon refusée par le manager."
 			})
 		elseif name == "room.join_request.expired" then
 			if tostring(payload.recipient_role or "") == "manager" then
@@ -16183,7 +16185,10 @@ function ITGOnline:HandleRealtimeEvent(event)
 				success = false,
 				joinRequestId = payload.join_request_id,
 				roomId = payload.room_id,
-				message = payload.reason == "cancelled_by_user" and "Join request cancelled." or "Join request expired."
+				errorCode = payload.reason == "cancelled_by_user" and "room_join_request_cancelled" or "room_join_request_expired",
+				message = payload.reason == "cancelled_by_user"
+					and "La demande d'accès au salon a été annulée."
+					or "La demande d'accès au salon a expiré."
 			})
 		elseif name == "room.join_request.cancelled" then
 			if tostring(payload.recipient_role or "") == "manager" then
@@ -16211,7 +16216,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 				success = false,
 				joinRequestId = payload.join_request_id,
 				roomId = payload.room_id,
-				message = "Join request cancelled."
+				errorCode = "room_join_request_cancelled",
+				message = "La demande d'accès au salon a été annulée."
 			})
 		elseif name == "room.join_request.accepted" and payload.room_id then
 			if online_room_ids_match(payload.room_id, self.currentRoomId) then

@@ -178,6 +178,18 @@ terminalMatches, terminalReason = protocol.pending_join_event_matches(pendingJoi
 equal(terminalMatches, false, "manager notification must not mutate requester state")
 equal(terminalReason, "invalid_recipient_role", "manager notification rejection reason")
 
+equal(protocol.online_player_room_label({
+	id = "000205",
+	name = "Private lobby",
+	visibility = "private",
+}), "Private lobby n°205", "private room player label")
+equal(protocol.online_player_room_label({
+	id = "206",
+	name = "Public lobby",
+	visibility = "public",
+}), "[PUB] Public lobby", "public room player label")
+equal(protocol.online_player_room_label(nil), "", "missing room player label")
+
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
 	event = "room.ready_updated",
