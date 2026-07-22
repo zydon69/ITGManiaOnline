@@ -4211,7 +4211,9 @@ CreateOnlineHandler = function()
 							safe_broadcast("OnlineResponseStatus", {
 								event="joinLobby",
 								success=false,
-									message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de la demande de connexion."
+								errorCode=decoded and decoded.error_code or nil,
+								retryAfterSeconds=decoded and decoded.retry_after_seconds or nil,
+								message=(decoded and decoded.message) or (response and response.errorMessage) or "Echec de la demande de connexion."
 							})
 						end
 					end)

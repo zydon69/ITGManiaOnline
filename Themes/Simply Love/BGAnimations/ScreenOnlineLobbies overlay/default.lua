@@ -5916,20 +5916,33 @@ end,
 			request_lobby_ui_repaint(self, "online_response_join_failed")
 			local errorCode = tostring(params.errorCode or params.error_code or "")
 			local message = tostring(params.message or "Impossible de rejoindre le salon.")
+			local retryAfterSeconds = math.max(0, math.ceil(tonumber(params.retryAfterSeconds or params.retry_after_seconds) or 30))
+			local localizationKey = nil
 			if errorCode == "room_join_request_declined" then
-				message = "Demande d'accès au salon refusée par le manager."
-				if params.reason and tostring(params.reason) ~= "" then
-					message = message .. " " .. tostring(params.reason)
-				end
+				localizationKey = "JoinRequestDeclined"
+			elseif errorCode == "room_join_request_retry_cooldown" then
+				localizationKey = "JoinRequestRetryCooldown"
 			elseif errorCode == "room_join_request_expired" then
-				message = "La demande d'accès au salon a expiré."
+				localizationKey = "JoinRequestExpired"
 			elseif errorCode == "room_join_request_cancelled" then
-				message = "La demande d'accès au salon a été annulée."
+				localizationKey = "JoinRequestCancelled"
+			end
+			if localizationKey and THEME:HasString("ScreenOnlineLobbies", localizationKey) then
+				message = THEME:GetString("ScreenOnlineLobbies", localizationKey)
+				if localizationKey == "JoinRequestDeclined" or localizationKey == "JoinRequestRetryCooldown" then
+					local formatted, localizedMessage = pcall(string.format, message, retryAfterSeconds)
+					if formatted then message = localizedMessage end
+				end
+			end
+			if errorCode == "room_join_request_declined" and params.reason and tostring(params.reason) ~= "" then
+				message = message .. " " .. tostring(params.reason)
 			end
 			lobby_flow_trace("OnlineResponseStatus_displayed event=joinLobby success=false"
 				.. " errorCode=" .. tostring(errorCode ~= "" and errorCode or "unspecified")
 				.. " roomId=" .. tostring(params.roomId or "nil")
 				.. " joinRequestId=" .. tostring(params.joinRequestId or "nil")
+				.. " retryAfterSeconds=" .. tostring(retryAfterSeconds)
+				.. " localizationKey=" .. tostring(localizationKey or "none")
 				.. " duration=8")
 			self:playcommand("SetStatus", {
 				text=message,

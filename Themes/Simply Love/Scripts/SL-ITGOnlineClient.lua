@@ -16157,7 +16157,8 @@ function ITGOnline:HandleRealtimeEvent(event)
 				roomId = payload.room_id,
 				errorCode = "room_join_request_declined",
 				reason = payload.reason,
-				message = "Demande d'accès au salon refusée par le manager."
+				retryAfterSeconds = tonumber(payload.retry_after_seconds) or 30,
+				message = "The room manager declined your request. You can try again in 30 seconds."
 			})
 		elseif name == "room.join_request.expired" then
 			if tostring(payload.recipient_role or "") == "manager" then

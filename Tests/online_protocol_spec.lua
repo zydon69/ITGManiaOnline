@@ -190,6 +190,23 @@ equal(protocol.online_player_room_label({
 }), "[PUB] Public lobby", "public room player label")
 equal(protocol.online_player_room_label(nil), "", "missing room player label")
 
+for _, language in ipairs({ "de", "en", "es", "fr", "it", "ja", "pl", "pt-br", "ru" }) do
+	local path = sourceRoot .. "/Themes/Simply Love/Languages/" .. language .. ".ini"
+	local file = assert(io.open(path, "rb"), "missing language file: " .. path)
+	local content = file:read("*a")
+	file:close()
+	for _, key in ipairs({
+		"JoinRequestDeclined",
+		"JoinRequestRetryCooldown",
+		"JoinRequestExpired",
+		"JoinRequestCancelled",
+	}) do
+		assert(content:find(key .. "=", 1, true), language .. " is missing " .. key)
+	end
+	assert(content:match("JoinRequestDeclined=[^\r\n]*%%d"), language .. " decline message must expose retry seconds")
+	assert(content:match("JoinRequestRetryCooldown=[^\r\n]*%%d"), language .. " cooldown message must expose retry seconds")
+end
+
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",
 	event = "room.ready_updated",
