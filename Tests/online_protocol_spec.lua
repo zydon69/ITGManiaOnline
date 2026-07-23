@@ -34,6 +34,58 @@ equal(protocol.valid_round_key("bad-room|selection:uuid"), false, "invalid selec
 equal(protocol.valid_round_key("183|selection:uuid|extra"), false, "selection key with trailing field")
 equal(protocol.valid_round_key("183||||"), false, "incomplete legacy round key")
 
+local expectedSongPayload = {
+	song_hash = string.rep("a", 64),
+	chart_hash = string.rep("b", 64),
+	audio_file_hash = string.rep("a", 64),
+	chart_file_hash = string.rep("c", 64),
+	required_files = {
+		{ path = "music/song.ogg", sha256 = string.rep("a", 64) },
+		{ path = "chart/song.sm", sha256 = string.rep("c", 64) },
+	},
+}
+local exactPayload = {
+	song_hash = string.rep("a", 64),
+	chart_hash = string.rep("b", 64),
+	audio_file_hash = string.rep("a", 64),
+	chart_file_hash = string.rep("c", 64),
+	required_files = {
+		{ path = "music/song.ogg", sha256 = string.rep("a", 64) },
+		{ path = "chart/song.sm", sha256 = string.rep("c", 64) },
+	},
+}
+local payloadMatches, payloadReason, fileVariances =
+	protocol.selected_song_payload_matches(exactPayload, expectedSongPayload)
+equal(payloadMatches, true, "exact selected-song payload")
+equal(payloadReason, "matched", "exact selected-song payload reason")
+equal(#fileVariances, 0, "exact selected-song payload variances")
+
+local repackedPayload = {
+	song_hash = string.rep("a", 64),
+	chart_hash = string.rep("b", 64),
+	audio_file_hash = string.rep("a", 64),
+	chart_file_hash = string.rep("d", 64),
+	required_files = {
+		{ path = "music/song.ogg", sha256 = string.rep("a", 64) },
+		{ path = "chart/song.sm", sha256 = string.rep("d", 64) },
+	},
+}
+payloadMatches, payloadReason, fileVariances =
+	protocol.selected_song_payload_matches(repackedPayload, expectedSongPayload)
+equal(payloadMatches, true, "semantically identical repacked chart")
+equal(payloadReason, "matched_with_file_variance", "repacked chart reason")
+equal(fileVariances[1], "chart_file_hash", "repacked chart file variance")
+equal(fileVariances[2], "required_file:chart/song.sm", "repacked manifest variance")
+
+local differentChartPayload = {
+	song_hash = string.rep("a", 64),
+	chart_hash = string.rep("e", 64),
+}
+payloadMatches, payloadReason =
+	protocol.selected_song_payload_matches(differentChartPayload, expectedSongPayload)
+equal(payloadMatches, false, "different semantic chart")
+equal(payloadReason, "chart_hash_mismatch", "different semantic chart reason")
+
 local logged = protocol.safe_log_text("room\r\nforged", 32)
 assert(not logged:find("\r") and not logged:find("\n"), "log controls must be removed")
 
@@ -284,6 +336,20 @@ assert(onlineClientContent:find('self:HandleDeletedRoom(lobbyRoomId, "lobby_upda
 	"lobby.updated room deletions must clear an active room")
 assert(onlineClientContent:find('self:HandleDeletedRoom(roomId, "room_deleted_event")', 1, true),
 	"direct room.deleted events must share the same cleanup path")
+assert(onlineClientContent:find("readyStates = room.ready_states or {}", 1, true),
+	"lobby payloads must preserve authoritative ready-state rows")
+local liveScoreFlush = assert(
+	onlineClientContent:match("function ITGOnline:FlushLiveScore%b()%s*(.-)%s*function ITGOnline:HandleRoomNotPlayingScoreReject"),
+	"missing live-score flush handler"
+)
+local liveScoreResponseTrace = assert(
+	liveScoreFlush:match('online_flow_trace%("live_score_flush_response(.-)local errorCode'),
+	"missing live-score response trace"
+)
+assert(not liveScoreResponseTrace:find("hasRoom=", 1, true),
+	"live-score acknowledgements must not be diagnosed as missing room snapshots")
+assert(liveScoreResponseTrace:find("phaseSource=", 1, true),
+	"live-score acknowledgements must identify the phase source")
 local deletedRoomHandler = assert(
 	onlineClientContent:match("function ITGOnline:HandleDeletedRoom%b()%s*(.-)%s*function ITGOnline:HandleRealtimeEvent"),
 	"missing deleted-room cleanup handler"
@@ -292,6 +358,45 @@ assert(deletedRoomHandler:find('safe_broadcast("OnlineLobbyLeft"', 1, true),
 	"deleted active rooms must leave the joined-lobby UI")
 assert(deletedRoomHandler:find('self:ClearCurrentRoomState', 1, true),
 	"deleted active rooms must clear cached room state")
+
+local packSyncPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-OnlinePackSync.lua"
+local packSyncFile = assert(io.open(packSyncPath, "rb"), "missing online pack-sync source: " .. packSyncPath)
+local packSyncContent = packSyncFile:read("*a")
+packSyncFile:close()
+local browsingDownloadHandler = assert(
+	packSyncContent:match("function PackSync:DownloadBrowsingPack%b()%s*(.-)%s*local function browse_pack_reload_validated"),
+	"missing browsing-pack download handler"
+)
+assert(browsingDownloadHandler:find("callback(true, {", 1, true)
+	and browsingDownloadHandler:find('kind = "pack_candidates"', 1, true),
+	"catalog candidate discovery is a successful result")
+assert(packSyncContent:find('if catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates"', 1, true),
+	"selected-pack downloads must consume successful candidate discovery")
+assert(not packSyncContent:find("callback(false, catalogMessage)", 1, true),
+	"pack-choice results must never be reported as failures")
+
+local lobbyOverlayPath = sourceRoot .. "/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
+local lobbyOverlayFile = assert(io.open(lobbyOverlayPath, "rb"), "missing online lobby overlay: " .. lobbyOverlayPath)
+local lobbyOverlayContent = lobbyOverlayFile:read("*a")
+lobbyOverlayFile:close()
+assert(lobbyOverlayContent:find("autoStartSingleCandidate = true", 1, true)
+	and packSyncContent:find("options.autoStartSingleCandidate == true and #candidates == 1", 1, true),
+	"browsing downloads must auto-start when the catalog has exactly one candidate")
+assert(lobbyOverlayContent:find('online_lobby_text("LeaveLobby", "Leave lobby")', 1, true),
+	"the lobby exit confirmation must describe leaving the lobby rather than disconnecting")
+assert(lobbyOverlayContent:find("self:zoom(0.5):maxwidth(280)", 1, true),
+	"localized lobby exit labels must be constrained to their buttons")
+
+local frenchLanguagePath = sourceRoot .. "/Themes/Simply Love/Languages/fr.ini"
+local frenchLanguageFile = assert(io.open(frenchLanguagePath, "rb"), "missing French language file: " .. frenchLanguagePath)
+local frenchLanguageContent = frenchLanguageFile:read("*a")
+frenchLanguageFile:close()
+assert(frenchLanguageContent:find("CreatingLobby=Création du salon...", 1, true),
+	"the lobby creation status must be translated into French")
+assert(frenchLanguageContent:find("CreatingPrivateLobbyInvite=Création du salon privé et envoi de l’invitation...", 1, true),
+	"the private invitation creation status must be translated into French")
+assert(frenchLanguageContent:find("LeavingLobby=Sortie du salon...", 1, true),
+	"the lobby leave status must be translated into French")
 
 local invalidAckEvent, invalidAckReason = protocol.normalize_event({
 	id = "18",

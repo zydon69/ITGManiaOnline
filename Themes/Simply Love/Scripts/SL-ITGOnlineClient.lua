@@ -9083,51 +9083,41 @@ function ITGOnline:ApplyMatchedSongSelection(match, source)
 end
 
 function ITGOnline:SelectedSongPayloadMatchesExpected(payload, selectedSong)
-	if not payload then return false, "local_payload_unavailable" end
+	if ITGOnlineProtocol and ITGOnlineProtocol.selected_song_payload_matches then
+		return ITGOnlineProtocol.selected_song_payload_matches(payload, selectedSong)
+	end
+	if not payload then return false, "local_payload_unavailable", {} end
 	selectedSong = selectedSong or {}
-	local expectedSongHash = selectedSong.song_hash or selectedSong.songHash
-	local expectedChartHash = selectedSong.chart_hash or selectedSong.chartHash
-	local expectedAudioFileHash = selectedSong.audio_file_hash or selectedSong.audioFileHash
-	local expectedChartFileHash = selectedSong.chart_file_hash or selectedSong.chartFileHash
-	if expectedSongHash and expectedSongHash ~= "" and payload.song_hash ~= expectedSongHash then
-		return false, "song_hash_mismatch"
+	local expectedSongHash = normalized_hash(selectedSong.song_hash or selectedSong.songHash)
+	local expectedChartHash = normalized_hash(selectedSong.chart_hash or selectedSong.chartHash)
+	if expectedSongHash ~= "" and normalized_hash(payload.song_hash) ~= expectedSongHash then
+		return false, "song_hash_mismatch", {}
 	end
-	if expectedChartHash and expectedChartHash ~= "" and payload.chart_hash ~= expectedChartHash then
-		return false, "chart_hash_mismatch"
+	if expectedChartHash ~= "" and normalized_hash(payload.chart_hash) ~= expectedChartHash then
+		return false, "chart_hash_mismatch", {}
 	end
-	if expectedAudioFileHash and expectedAudioFileHash ~= "" and payload.audio_file_hash ~= expectedAudioFileHash then
-		return false, "audio_file_hash_mismatch"
-	end
-	if expectedChartFileHash and expectedChartFileHash ~= "" and payload.chart_file_hash ~= expectedChartFileHash then
-		return false, "chart_file_hash_mismatch"
-	end
-	if type(selectedSong.required_files) == "table" then
-		local expectedFiles = {}
-		local actualFiles = {}
-		for _, file in ipairs(selectedSong.required_files) do
-			if type(file) == "table" and type(file.path) == "string" and type(file.sha256) == "string" then
-				expectedFiles[file.path] = tostring(file.sha256):lower()
-			end
-		end
-		for _, file in ipairs(payload.required_files or {}) do
-			if type(file) == "table" and type(file.path) == "string" then
-				actualFiles[file.path] = tostring(file.sha256 or ""):lower()
-			end
-		end
-		for path, hash in pairs(expectedFiles) do
-			if actualFiles[path] ~= hash then return false, "required_file_manifest_mismatch" end
-		end
-	end
-	return true, "matched"
+	return true, "matched", {}
 end
 
 function ITGOnline:ResolveSelectedSongAvailabilityPayload(selectedSong, source)
 	selectedSong = selectedSong or {}
 	local directPayload = self:BuildSongPayload()
-	local directOk, directReason = self:SelectedSongPayloadMatchesExpected(directPayload, selectedSong)
+	local directOk, directReason, fileVariances = self:SelectedSongPayloadMatchesExpected(directPayload, selectedSong)
 	if directOk then
+		if type(fileVariances) == "table" and #fileVariances > 0 then
+			local selectedAt = tostring(selectedSong.selected_at or selectedSong.selectedAt or "")
+			online_flow_trace_throttled(
+				"song_availability_file_variance:" .. selectedAt .. ":" .. table.concat(fileVariances, ","),
+				30,
+				"song_availability_file_variance_accepted source=" .. tostring(source or "unknown")
+					.. " selectedAt=" .. tostring(selectedAt ~= "" and selectedAt or "nil")
+					.. " variances=" .. table.concat(fileVariances, ",")
+					.. " reason=semantic_song_and_chart_hashes_match"
+			)
+		end
 		online_flow_trace("song_availability_local_resolved source=" .. tostring(source or "unknown")
 			.. " method=current_selection"
+			.. " matchReason=" .. tostring(directReason or "matched")
 			.. " songHash=" .. tostring(directPayload.song_hash or "nil")
 			.. " chartHash=" .. tostring(directPayload.chart_hash or "nil"))
 		return directPayload, "current_selection"
@@ -10967,11 +10957,18 @@ function ITGOnline:FlushLiveScore()
 		.. " combo=" .. tostring(snapshot.Combo or snapshot.combo or "nil"))
 	self:SendScore(false, false, snapshot, function(ok, decoded, response)
 		self.liveScoreInFlight = false
+		local responsePhase = decoded and (
+			decoded.room_phase
+			or decoded.room and decoded.room.phase
+		) or self.currentRoom and self.currentRoom.phase
+		local phaseSource = decoded and decoded.room_phase and "response_room_phase"
+			or decoded and decoded.room and decoded.room.phase and "response_room"
+			or "local_room_snapshot"
 		online_flow_trace("live_score_flush_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " inFlight=" .. tostring(response and response.inFlight == true)
-			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
-			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
+			.. " phase=" .. tostring(responsePhase or "nil")
+			.. " phaseSource=" .. tostring(phaseSource)
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil"))
 		local errorCode = response_error_code(response, decoded)
 		local statusCode = tonumber(response and response.statusCode)
@@ -17163,6 +17160,7 @@ function ITGOnline:LobbyStatePayload(room)
 			isManager = self.user and room.manager and online_protocol_ids_match(room.manager.id, self.user.id) or false,
 			globalOptions = globalOptions,
 			players = players,
+			readyStates = room.ready_states or {},
 		songInfo = songInfo,
 	}
 	online_flow_trace("lobby_state_payload_built room=" .. tostring(payload.roomId or "nil")

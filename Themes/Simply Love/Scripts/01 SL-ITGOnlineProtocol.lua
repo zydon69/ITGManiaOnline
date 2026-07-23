@@ -114,6 +114,80 @@ local function valid_round_key(value)
 		)
 end
 
+local function normalized_sha256(value)
+	local hash = tostring(value or ""):lower()
+	if #hash ~= 64 or not hash:match("^[a-f0-9]+$") then return "" end
+	return hash
+end
+
+local function payload_hash(payload, snakeName, camelName)
+	if type(payload) ~= "table" then return "" end
+	return normalized_sha256(payload[snakeName] or payload[camelName])
+end
+
+-- Online play is defined by the normalized audio and chart contents. Raw
+-- simfiles downloaded from another pack may legitimately differ in metadata or
+-- formatting while producing the same normalized chart. Keep those byte-level
+-- differences diagnosable, but do not turn them into a second full library
+-- scan after the semantic hashes have already matched.
+function ITGOnlineProtocol.selected_song_payload_matches(payload, selectedSong)
+	if type(payload) ~= "table" then return false, "local_payload_unavailable", {} end
+	selectedSong = type(selectedSong) == "table" and selectedSong or {}
+
+	local expectedSongHash = payload_hash(selectedSong, "song_hash", "songHash")
+	local expectedChartHash = payload_hash(selectedSong, "chart_hash", "chartHash")
+	local actualSongHash = payload_hash(payload, "song_hash", "songHash")
+	local actualChartHash = payload_hash(payload, "chart_hash", "chartHash")
+	if expectedSongHash ~= "" and actualSongHash ~= expectedSongHash then
+		return false, "song_hash_mismatch", {}
+	end
+	if expectedChartHash ~= "" and actualChartHash ~= expectedChartHash then
+		return false, "chart_hash_mismatch", {}
+	end
+
+	local variances = {}
+	local function record_file_variance(name, expected, actual)
+		expected = normalized_sha256(expected)
+		actual = normalized_sha256(actual)
+		if expected ~= "" and actual ~= expected then
+			variances[#variances + 1] = name
+		end
+	end
+
+	record_file_variance(
+		"audio_file_hash",
+		selectedSong.audio_file_hash or selectedSong.audioFileHash,
+		payload.audio_file_hash or payload.audioFileHash
+	)
+	record_file_variance(
+		"chart_file_hash",
+		selectedSong.chart_file_hash or selectedSong.chartFileHash,
+		payload.chart_file_hash or payload.chartFileHash
+	)
+
+	if type(selectedSong.required_files) == "table" then
+		local actualFiles = {}
+		for _, file in ipairs(type(payload.required_files) == "table" and payload.required_files or {}) do
+			if type(file) == "table" and type(file.path) == "string" then
+				actualFiles[file.path] = normalized_sha256(file.sha256)
+			end
+		end
+		for _, file in ipairs(selectedSong.required_files) do
+			if type(file) == "table" and type(file.path) == "string" then
+				local expectedHash = normalized_sha256(file.sha256)
+				if expectedHash ~= "" and actualFiles[file.path] ~= expectedHash then
+					variances[#variances + 1] = "required_file:" .. file.path
+				end
+			end
+		end
+	end
+
+	if #variances > 0 then
+		return true, "matched_with_file_variance", variances
+	end
+	return true, "matched", variances
+end
+
 local function sanitize(value, depth, seen, path)
 	local valueType = type(value)
 	if valueType == "string" then

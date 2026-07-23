@@ -3833,7 +3833,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		.. " selected_at=" .. tostring(selected_at(songInfo)))
 	self:DownloadBrowsingPack(songInfo, function(catalogOk, catalogMessage)
 		if not self:IsDownloadGenerationCurrent(downloadGeneration) then return end
-		if not catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates" then
+		if catalogOk and type(catalogMessage) == "table" and catalogMessage.kind == "pack_candidates" then
 			catalogMessage.downloadKey = downloadKey
 			local candidates = catalogMessage.candidates or {}
 			if #candidates == 1 then
@@ -3862,7 +3862,7 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 						end
 						return
 					end
-					if callback then callback(false, catalogMessage) end
+					if callback then callback(true, catalogMessage) end
 				end)
 			return
 		end
@@ -3870,8 +3870,9 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 	end)
 end
 
-function PackSync:DownloadBrowsingPack(songInfo, callback)
+function PackSync:DownloadBrowsingPack(songInfo, callback, options)
 	songInfo = with_current_room_selection(songInfo, "download_browsing")
+	options = type(options) == "table" and options or {}
 	if not songInfo then
 		trace("DownloadBrowsingPack blocked reason=no_song_info")
 		if callback then callback(false, pack_text("NoPackToDownload", "No pack to download.")) end
@@ -3910,8 +3911,18 @@ function PackSync:DownloadBrowsingPack(songInfo, callback)
 			end
 			return
 		end
+		if options.autoStartSingleCandidate == true and #candidates == 1 then
+			trace("DownloadBrowsingPack single catalog candidate; starting transfer"
+				.. " title=" .. tostring(selected_title(songInfo))
+				.. " pack=" .. tostring(candidates[1].name or candidates[1].title or "")
+				.. " candidateId=" .. tostring(candidates[1].id or "nil"))
+			self:DownloadPackByCandidate(songInfo, candidates[1], callback, {
+				browseOnly = options.browseOnly ~= false,
+			})
+			return
+		end
 		if callback then
-			callback(false, {
+			callback(true, {
 				kind = "pack_candidates",
 				candidates = candidates,
 				message = pack_text("ChoosePreviewPack", "Choose the pack matching this preview."),

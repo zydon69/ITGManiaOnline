@@ -3062,7 +3062,7 @@ local function start_browse_pack_download(songInfo)
 			.. " kind=" .. tostring(type(message) == "table" and message.kind or "nil")
 			.. " candidates=" .. tostring(type(message) == "table" and message.candidates and #message.candidates or 0))
 		refresh_joined_room_snapshot("browse_pack_download_callback", t)
-		if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+		if ok and type(message) == "table" and message.kind == "pack_candidates" then
 			open_pack_choice_menu(
 				songInfo,
 				message.candidates,
@@ -3082,7 +3082,10 @@ local function start_browse_pack_download(songInfo)
 				showPrompt=true
 			})
 		end
-	end)
+	end, {
+		autoStartSingleCandidate = true,
+		browseOnly = true,
+	})
 end
 
 local function handle_leave_confirm_input(event)
@@ -3586,7 +3589,7 @@ local function handle_joined_mode_input(event)
 					end
 					lobby_flow_trace("input_joined_download_selected_pack_callback ok=" .. tostring(ok == true)
 						.. " messageType=" .. tostring(type(message)))
-					if not ok and type(message) == "table" and message.kind == "pack_candidates" then
+					if ok and type(message) == "table" and message.kind == "pack_candidates" then
 						open_pack_choice_menu(
 							joined_missing_song_info or joined_song_preview,
 							message.candidates,
@@ -6987,7 +6990,7 @@ end,
 			end
 			if confirmLabel then
 				confirmLabel:settext(leave_confirm_mode == "exit_online"
-					and online_lobby_text("Yes", "Yes") or online_lobby_text("Disconnect", "Disconnect"))
+					and online_lobby_text("Yes", "Yes") or online_lobby_text("LeaveLobby", "Leave lobby"))
 			end
 		end,
 		HoverCommand=function(self)
@@ -7035,7 +7038,7 @@ end,
 				Name="CancelLabel",
 					Text=online_lobby_text("Cancel", "Cancel"),
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.5):maxwidth(280)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(leave_confirm_index == 0 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
@@ -7063,9 +7066,9 @@ end,
 			},
 			LoadFont("Common Bold")..{
 				Name="ConfirmLabel",
-					Text=online_lobby_text("Disconnect", "Disconnect"),
+					Text=online_lobby_text("LeaveLobby", "Leave lobby"),
 				InitCommand=function(self)
-					self:zoom(0.5)
+					self:zoom(0.5):maxwidth(280)
 				end,
 				HoverCommand=function(self)
 					self:diffuse(leave_confirm_index == 1 and GetHexColor(SL.Global.ActiveColorIndex) or Color.White)
