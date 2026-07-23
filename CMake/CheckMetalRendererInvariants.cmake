@@ -18,6 +18,13 @@ function(require_contains haystack needle label)
   endif()
 endfunction()
 
+function(require_absent haystack needle label)
+  string(FIND "${haystack}" "${needle}" found_at)
+  if(NOT found_at EQUAL -1)
+    message(FATAL_ERROR "Forbidden Metal invariant: ${label}")
+  endif()
+endfunction()
+
 read_source("src/RageDisplay_Metal.mm" metal_display)
 read_source("src/RageDisplay_Metal.h" metal_display_header)
 read_source(
@@ -26,6 +33,9 @@ read_source(
 read_source(
   "src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
   metal_presenter)
+read_source(
+  "src/arch/LowLevelWindow/MacOSMetalPresenter.h"
+  metal_presenter_header)
 read_source(
   "Themes/Simply Love/Graphics/OptionRow Frame.lua"
   option_row_frame)
@@ -164,6 +174,42 @@ require_contains(
   "${metal_presenter}"
   "CheckedVertexBufferLength"
   "Metal vertex staging rejects overflowing buffer lengths")
+require_contains(
+  "${metal_presenter_header}"
+  "sizeof(MacOSMetalTransformUniforms) == 144"
+  "the CPU transform uniform layout is compile-time checked")
+require_contains(
+  "${metal_presenter_header}"
+  "offsetof(MacOSMetalTransformUniforms, padding) == 132"
+  "the CPU transform uniform offsets are compile-time checked")
+require_contains(
+  "${metal_shader}"
+  "float padding[3]"
+  "the MSL transform padding matches the CPU scalar-array layout")
+require_absent(
+  "${metal_shader}"
+  "float3 padding"
+  "the MSL transform layout must not use aligned float3 padding")
+require_contains(
+  "${metal_display}"
+  "out-of-range local vertex index"
+  "compiled geometry validates indices against each source mesh")
+require_contains(
+  "${metal_display}"
+  "surface != m_LockedSurface"
+  "texture unlock requires the exact surface that was locked")
+require_contains(
+  "${metal_presenter}"
+  "RecordMetalCommandBufferCompletion"
+  "asynchronous Metal command failures are recorded")
+require_contains(
+  "${metal_presenter}"
+  "MacOSMetalPresentResult::Skipped"
+  "dropped presentation frames are distinct from hard failures")
+require_absent(
+  "${metal_display}"
+  "m_MaterialDiffuse.a < 0.999f"
+  "Metal must not override model culling and depth writes by material alpha")
 require_contains(
   "${metal_presenter}"
   "convertRectToBacking:[layerView bounds]"

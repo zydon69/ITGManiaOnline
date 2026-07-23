@@ -10,6 +10,9 @@ local function online_lobby_text(key, fallback, ...)
 	return value
 end
 
+-- Screen state
+-- -----------------------------------------------------------------------
+
 local active_index = 3
 local list_selected = false
 local options = {
@@ -198,6 +201,9 @@ local function stable_scalar(value)
 	if value == nil then return "" end
 	return tostring(value)
 end
+
+-- Stable lobby view models
+-- -----------------------------------------------------------------------
 
 local function realtime_health_snapshot()
 	if ITGOnline and ITGOnline.RealtimeHealthSnapshot then
@@ -597,6 +603,9 @@ local function reset_browse_focus()
 	list_selected = false
 	lobby_view = "lobbies"
 end
+
+-- Joined-room lifecycle
+-- -----------------------------------------------------------------------
 
 local function reset_joined_lobby_state()
 	clear_pack_choice_recovery()
@@ -1216,6 +1225,9 @@ function lobby_count(value)
 	return type(value) == "table" and #value or 0
 end
 
+-- Lobby and player presentation
+-- -----------------------------------------------------------------------
+
 local function lobby_local_user_id()
 	if ITGOnline and ITGOnline.LocalUserId then
 		local ok, id = pcall(function() return ITGOnline:LocalUserId() end)
@@ -1345,11 +1357,6 @@ function global_score_label(mode)
 	if mode == "hardex" then return "HardEX" end
 	if mode == "ex" then return "EX" end
 	return "ITG"
-end
-
-function global_options_summary()
-	local options = normalize_global_options(joined_global_options)
-	return global_score_label(options.scoreMode) .. " / " .. string.format("%.2fx", options.musicRate)
 end
 
 function global_options_mode_label()
@@ -2090,17 +2097,8 @@ function joined_all_players_ready()
 	return true
 end
 
-local function joined_not_ready_player_names()
-	local names = {}
-	for _, player in ipairs(joined_lobby_players or {}) do
-		local isManagerPlayer = joined_manager_user_id ~= nil and tostring(player.playerId or "") == tostring(joined_manager_user_id)
-		local skipSoloManager = joined_is_manager and isManagerPlayer and #joined_lobby_players == 1
-		if not player.ready and not skipSoloManager then
-			names[#names + 1] = trim_text(player.profileName or player.name or player.playerId or "Unknown")
-		end
-	end
-	return names
-end
+-- Selected-song availability
+-- -----------------------------------------------------------------------
 
 local function sync_local_missing_song_from_joined_players()
 	if not joined_lobby_players or not ITGOnline or not ITGOnline.user then
@@ -2932,6 +2930,9 @@ local function update_pack_choice_menu()
 		update_joined_download_kick_warning(t)
 	end
 
+-- Pack choice and download prompts
+-- -----------------------------------------------------------------------
+
 local function open_pack_choice_menu(songInfo, candidates, message, browseOnly)
 	if type(candidates) ~= "table" or #candidates == 0 then
 		lobby_flow_trace("pack_choice_menu_open skipped reason=no_candidates"
@@ -3087,6 +3088,9 @@ local function start_browse_pack_download(songInfo)
 		browseOnly = true,
 	})
 end
+
+-- Input routing
+-- -----------------------------------------------------------------------
 
 local function handle_leave_confirm_input(event)
 	if event.GameButton == "MenuRight" or event.GameButton == "MenuLeft" then
@@ -4092,6 +4096,9 @@ local function install_lobby_input_callback(screen)
 	local handlers = registered_lobby_input_handlers()
 	handlers[#handlers + 1] = { screen = screen, handler = InputHandler }
 end
+
+-- Actor tree
+-- -----------------------------------------------------------------------
 
 local af = Def.ActorFrame{
 	OnCommand=function(self)

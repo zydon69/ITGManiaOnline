@@ -160,11 +160,27 @@ def launch_renderer(
         and "MemoryCardManager error.ogg" not in line
         and " error=0" not in line
     ]
-    renderer_seen = (
-        f"Current renderer: {renderer}" in combined
-        or (renderer == "opengl" and "Current renderer: OpenGL" in combined)
-    )
     metal_initialized = "RageDisplay_Metal initialized" in combined
+    renderer_seen = (
+        metal_initialized
+        if renderer == "metal"
+        else "OGL Renderer:" in combined and not metal_initialized
+    )
+
+    expected_shutdown_codes = (0, -signal.SIGTERM)
+    automated_ok = (
+        process.returncode in expected_shutdown_codes
+        and renderer_seen
+        and (renderer != "metal" or metal_initialized)
+        and not bad_lines
+        and (
+            not screenshot
+            or (
+                capture_result is not None
+                and bool(capture_result.get("ok"))
+            )
+        )
+    )
 
     return {
         "renderer": renderer,
@@ -177,6 +193,7 @@ def launch_renderer(
         "metal_initialized": metal_initialized,
         "bad_line_count": len(bad_lines),
         "bad_lines": bad_lines[:40],
+        "automated_ok": automated_ok,
     }
 
 
@@ -234,6 +251,7 @@ def write_summary(output_dir: Path, results: Dict[str, object]) -> None:
                 f"- Renderer marker seen: `{result['renderer_seen']}`",
                 f"- Metal initialized: `{result['metal_initialized']}`",
                 f"- Bad log lines: `{result['bad_line_count']}`",
+                f"- Automated smoke gate: `{result['automated_ok']}`",
                 f"- Screenshot: `{result['screenshot']}`",
                 "",
             ]
@@ -315,7 +333,17 @@ def main() -> int:
 
     write_summary(output_dir, results)
     print(output_dir)
-    return 0
+    runs_ok = all(
+        bool(result.get("automated_ok"))
+        for result in results["runs"].values()
+    )
+    image_compare = results["image_compare"]
+    images_ok = (
+        args.no_screenshot
+        or not bool(image_compare.get("available"))
+        or bool(image_compare.get("ok"))
+    )
+    return 0 if runs_ok and images_ok else 1
 
 
 if __name__ == "__main__":

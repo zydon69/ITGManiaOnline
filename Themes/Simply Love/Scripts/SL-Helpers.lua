@@ -53,8 +53,7 @@ local function clamp_number(value, minimum, maximum, fallback)
 	return value
 end
 
-local function format_mini_option(option, mods)
-	local mini = mods and mods.Mini
+local function format_mini_option(option, mini)
 	if type(mini) == "string" then
 		local value = mini:match("^%s*([%+%-]?%d+%.?%d*)%%?%s*$")
 		if value then return value .. "% Mini" end
@@ -1692,6 +1691,12 @@ GetPlayerOptionsString = function(player, modsLevel)
 	-- grab the song options from this PlayerState
 	local PlayerOptions = safe_player_options_array(player, modsLevel)
 	local mods, pn = safe_player_mods(player)
+	local playerOptionsObject = safe_player_options(player, modsLevel)
+	local mini = finite_number_or(
+		safe_method("PlayerOptions.Mini", playerOptionsObject, "Mini"),
+		nil
+	)
+	local miniPercent = mini ~= nil and mini * 100 or mods.Mini
 
 	local rendered = {}
 
@@ -1708,9 +1713,10 @@ GetPlayerOptionsString = function(player, modsLevel)
 		-- these don't need to show up in the mods list
 		if option ~= "FailAtEnd" and option ~= "FailImmediateContinue" and option ~= "FailImmediate" and 
 			not string.find(option, "Lights") then
-			-- 100% Mini will be in the PlayerOptions as just "Mini" so use the value from the SL table instead
+			-- PlayerOptions renders 100% Mini as "Mini", so restore the
+			-- percentage from the same engine options level being displayed.
 			if option:match("Mini") then
-				option = format_mini_option(option, mods)
+				option = format_mini_option(option, miniPercent)
 			end
 
 			if option:match("Cover") then

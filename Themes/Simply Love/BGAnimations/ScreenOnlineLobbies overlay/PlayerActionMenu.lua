@@ -13,13 +13,13 @@ return Def.ActorFrame{
 	},
 	LoadFont("Common Bold")..{
 		Name="PlayerActionTitle",
-			Text=THEME:GetString("ScreenOnlineLobbies", "UnknownPlayer"),
+		Text=THEME:GetString("ScreenOnlineLobbies", "UnknownPlayer"),
 		InitCommand=function(self)
 			self:y(-138):zoom(0.8)
 		end
 	},
 	LoadFont("Common Normal")..{
-			Text=THEME:GetString("ScreenOnlineLobbies", "PlayerActionHelp"),
+		Text=THEME:GetString("ScreenOnlineLobbies", "PlayerActionHelp"),
 		InitCommand=function(self)
 			self:y(-108):zoom(0.5)
 		end

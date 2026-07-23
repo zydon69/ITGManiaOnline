@@ -70,6 +70,9 @@ float ByteColorToFloat(uint8_t value) {
 }
 
 uint8_t FloatColorToByte(float value) {
+  if (!std::isfinite(value)) {
+    value = 0.0f;
+  }
   return static_cast<uint8_t>(
       std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
 }
@@ -118,11 +121,41 @@ const char* MacOSNativePresentationReasonNameForMetal(int reason) {
 }
 
 RageColor ClampColor(const RageColor& color) {
+  const auto clampFinite = [](float value) {
+    return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
+  };
   return RageColor(
-      std::clamp(color.r, 0.0f, 1.0f),
-      std::clamp(color.g, 0.0f, 1.0f),
-      std::clamp(color.b, 0.0f, 1.0f),
-      std::clamp(color.a, 0.0f, 1.0f));
+      clampFinite(color.r), clampFinite(color.g),
+      clampFinite(color.b), clampFinite(color.a));
+}
+
+bool ReserveAdditionalVertices(
+    std::vector<MacOSMetalSolidVertex>* vertices, size_t additional,
+    const char* context) {
+  if (vertices == nullptr ||
+      additional > std::numeric_limits<size_t>::max() - vertices->size()) {
+    LOG->Warn(
+        "RageDisplay_Metal: refusing overflowing vertex staging context=%s "
+        "existing=%zu additional=%zu.",
+        context != nullptr ? context : "unknown",
+        vertices != nullptr ? vertices->size() : 0, additional);
+    return false;
+  }
+  try {
+    vertices->reserve(vertices->size() + additional);
+    return true;
+  } catch (const std::bad_alloc&) {
+    LOG->Warn(
+        "RageDisplay_Metal: vertex staging allocation failed context=%s "
+        "existing=%zu additional=%zu.",
+        context != nullptr ? context : "unknown", vertices->size(), additional);
+  } catch (const std::length_error&) {
+    LOG->Warn(
+        "RageDisplay_Metal: vertex staging length rejected context=%s "
+        "existing=%zu additional=%zu.",
+        context != nullptr ? context : "unknown", vertices->size(), additional);
+  }
+  return false;
 }
 
 RageVector3 NormalizeOrDefault(
@@ -226,20 +259,27 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
 
       for (size_t j = 0; j < mesh.Triangles.size(); ++j) {
         for (int k = 0; k < 3; ++k) {
-          const int vertexIndex =
-              meshInfo.iVertexStart + mesh.Triangles[j].nVertexIndices[k];
+          const int localVertexIndex = mesh.Triangles[j].nVertexIndices[k];
+          if (localVertexIndex < 0 ||
+              static_cast<size_t>(localVertexIndex) >= mesh.Vertices.size()) {
+            LOG->Warn(
+                "RageCompiledGeometryMetal: refusing mesh=%zu triangle=%zu "
+                "with out-of-range local vertex index=%d vertex_count=%zu.",
+                i, j, localVertexIndex, mesh.Vertices.size());
+            m_bIndexOverflow = true;
+            return;
+          }
+          const int vertexIndex = meshInfo.iVertexStart + localVertexIndex;
           if (vertexIndex < 0 ||
               vertexIndex >
                   static_cast<int>(std::numeric_limits<uint16_t>::max())) {
-            if (!m_bIndexOverflow) {
-              LOG->Warn(
-                  "RageCompiledGeometryMetal: mesh has vertex index %d beyond "
-                  "the uint16 compiled geometry limit; skipping this compiled "
-                  "geometry to avoid corrupt rendering.",
-                  vertexIndex);
-            }
+            LOG->Warn(
+                "RageCompiledGeometryMetal: mesh has vertex index %d beyond "
+                "the uint16 compiled geometry limit; refusing this compiled "
+                "geometry to avoid corrupt rendering.",
+                vertexIndex);
             m_bIndexOverflow = true;
-            continue;
+            return;
           }
           m_vTriangles[meshInfo.iTriangleStart + j].nVertexIndices[k] =
               static_cast<uint16_t>(vertexIndex);
@@ -251,8 +291,7 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
   void Draw(int /* iMeshIndex */) const override {}
 
   void EmitTo(
-      RageDisplay_Metal* display, int iMeshIndex,
-      const RageVColor& color) const;
+      RageDisplay_Metal* display, int iMeshIndex) const;
 
  private:
   std::vector<RageModelVertex> m_vVertices;
@@ -262,18 +301,28 @@ class RageCompiledGeometryMetal : public RageCompiledGeometry {
 
 class RageTextureLockMetal : public RageTextureLock {
  public:
-  void Lock(uintptr_t textureHandle, RageSurface* surface) override {
-    if (m_TextureHandle != 0 || surface == nullptr ||
+  ~RageTextureLockMetal() override {
+    if (m_LockedSurface != nullptr) {
+      LOG->Warn(
+          "RageTextureLockMetal: destroying an active texture lock "
+          "handle=%lu surface=%p.",
+          static_cast<unsigned long>(m_TextureHandle), m_LockedSurface);
+      Reset();
+    }
+  }
+
+  bool Lock(uintptr_t textureHandle, RageSurface* surface) override {
+    if (textureHandle == 0 || m_LockedSurface != nullptr || surface == nullptr ||
         surface->pixels != nullptr || surface->h <= 0 || surface->pitch <= 0) {
       LOG->Warn(
           "RageTextureLockMetal: refusing invalid lock handle=%lu "
           "already_locked=%d surface=%p pixels=%p height=%d pitch=%d.",
           static_cast<unsigned long>(textureHandle),
-          m_TextureHandle != 0 ? 1 : 0, surface,
+          m_LockedSurface != nullptr ? 1 : 0, surface,
           surface != nullptr ? surface->pixels : nullptr,
           surface != nullptr ? surface->h : 0,
           surface != nullptr ? surface->pitch : 0);
-      return;
+      return false;
     }
 
     const size_t height = static_cast<size_t>(surface->h);
@@ -283,7 +332,7 @@ class RageTextureLockMetal : public RageTextureLock {
           "RageTextureLockMetal: refusing overflowing lock allocation "
           "handle=%lu height=%zu pitch=%zu.",
           static_cast<unsigned long>(textureHandle), height, pitch);
-      return;
+      return false;
     }
     try {
       m_Buffer.assign(height * pitch, 0);
@@ -291,19 +340,29 @@ class RageTextureLockMetal : public RageTextureLock {
       LOG->Warn(
           "RageTextureLockMetal: allocation failed handle=%lu bytes=%zu.",
           static_cast<unsigned long>(textureHandle), height * pitch);
-      return;
+      return false;
+    } catch (const std::length_error&) {
+      LOG->Warn(
+          "RageTextureLockMetal: allocation length rejected handle=%lu "
+          "bytes=%zu.",
+          static_cast<unsigned long>(textureHandle), height * pitch);
+      return false;
     }
     m_TextureHandle = textureHandle;
+    m_LockedSurface = surface;
     surface->pixels = m_Buffer.empty() ? nullptr : m_Buffer.data();
     surface->pixels_owned = false;
+    return surface->pixels != nullptr;
   }
 
   void Unlock(RageSurface* surface, bool changed = true) override {
-    if (surface == nullptr || m_TextureHandle == 0) {
+    if (surface == nullptr || m_TextureHandle == 0 ||
+        surface != m_LockedSurface) {
       LOG->Warn(
           "RageTextureLockMetal: ignoring invalid unlock surface=%p "
-          "locked_handle=%lu.",
-          surface, static_cast<unsigned long>(m_TextureHandle));
+          "locked_surface=%p locked_handle=%lu.",
+          surface, m_LockedSurface,
+          static_cast<unsigned long>(m_TextureHandle));
       return;
     }
     if (changed && surface->pixels != nullptr && DISPLAY != nullptr) {
@@ -316,13 +375,23 @@ class RageTextureLockMetal : public RageTextureLock {
           static_cast<unsigned long>(m_TextureHandle));
     }
 
-    surface->pixels = nullptr;
+    Reset();
+  }
+
+ private:
+  void Reset() {
+    if (m_LockedSurface != nullptr &&
+        m_LockedSurface->pixels ==
+            (m_Buffer.empty() ? nullptr : m_Buffer.data())) {
+      m_LockedSurface->pixels = nullptr;
+    }
+    m_LockedSurface = nullptr;
     m_TextureHandle = 0;
     m_Buffer.clear();
   }
 
- private:
   uintptr_t m_TextureHandle = 0;
+  RageSurface* m_LockedSurface = nullptr;
   std::vector<uint8_t> m_Buffer;
 };
 
@@ -444,7 +513,7 @@ void AppendTriangle(
 }
 
 RageColor RageDisplay_Metal::ComputeModelColor(
-    const RageVector3& normal, const RageMatrix& modelView) const {
+    const RageVector3& normal) const {
   if (!m_bLighting) {
     RageColor color = m_MaterialDiffuse;
     color.r += m_MaterialEmissive.r + m_MaterialAmbient.r;
@@ -503,7 +572,7 @@ RageColor RageDisplay_Metal::ComputeModelColor(
 }
 
 RageColor RageDisplay_Metal::ComputeCelModelColor(
-    const RageVector3& normal, const RageMatrix& modelView) const {
+    const RageVector3& normal) const {
   const RageVector3 normalizedNormal =
       NormalizeOrDefault(normal, RageVector3(0.0f, 0.0f, 1.0f));
   RageVector3 lightDirection(0.0f, 0.0f, 1.0f);
@@ -541,8 +610,7 @@ RageColor RageDisplay_Metal::ComputeCelModelColor(
 }
 
 void RageCompiledGeometryMetal::EmitTo(
-    RageDisplay_Metal* display, int iMeshIndex,
-    const RageVColor& fallbackColor) const {
+    RageDisplay_Metal* display, int iMeshIndex) const {
   if (display == nullptr || iMeshIndex < 0 ||
       static_cast<size_t>(iMeshIndex) >= m_vMeshInfo.size()) {
     return;
@@ -570,6 +638,20 @@ void RageCompiledGeometryMetal::EmitTo(
     return;
   }
 
+  for (size_t i = 0; i < triangleCount; ++i) {
+    const msTriangle& triangle = m_vTriangles[triangleStart + i];
+    for (int k = 0; k < 3; ++k) {
+      if (triangle.nVertexIndices[k] >= m_vVertices.size()) {
+        LOG->Warn(
+            "RageCompiledGeometryMetal: refusing mesh=%d with invalid "
+            "staged triangle=%zu vertex_slot=%d vertex_index=%u.",
+            iMeshIndex, i, k,
+            static_cast<unsigned int>(triangle.nVertexIndices[k]));
+        return;
+      }
+    }
+  }
+
   const size_t outputVertexCount = triangleCount * 3;
   RageDisplay_Metal::DrawBatch* directBatch = nullptr;
   MacOSMetalSolidVertex* directVertices = nullptr;
@@ -581,28 +663,9 @@ void RageCompiledGeometryMetal::EmitTo(
         display->m_iActiveDrawBatchCount > 0 &&
         display->m_DrawBatches[display->m_iActiveDrawBatchCount - 1]
             .vertexBuffer != nullptr);
-    if (outputVertexCount >
-        std::numeric_limits<size_t>::max() - fallbackBatch->vertices.size()) {
-      LOG->Warn(
-          "RageCompiledGeometryMetal: refusing overflowing vertex staging "
-          "mesh=%d vertices=%zu.",
-          iMeshIndex, outputVertexCount);
-      return;
-    }
-    try {
-      fallbackBatch->vertices.reserve(
-          fallbackBatch->vertices.size() + outputVertexCount);
-    } catch (const std::bad_alloc&) {
-      LOG->Warn(
-          "RageCompiledGeometryMetal: vertex staging allocation failed "
-          "mesh=%d vertices=%zu.",
-          iMeshIndex, outputVertexCount);
-      return;
-    } catch (const std::length_error&) {
-      LOG->Warn(
-          "RageCompiledGeometryMetal: vertex staging length rejected "
-          "mesh=%d vertices=%zu.",
-          iMeshIndex, outputVertexCount);
+    if (!ReserveAdditionalVertices(
+            &fallbackBatch->vertices, outputVertexCount,
+            "compiled_geometry")) {
       return;
     }
   }
@@ -615,20 +678,17 @@ void RageCompiledGeometryMetal::EmitTo(
         m_vTriangles[meshInfo.iTriangleStart + static_cast<size_t>(i)];
     for (int k = 0; k < 3; ++k) {
       const uint16_t vertexIndex = tri.nVertexIndices[k];
-      if (vertexIndex >= m_vVertices.size()) {
-        continue;
-      }
       const RageModelVertex& modelVertex = m_vVertices[vertexIndex];
       const RageVector3 transformedNormal =
           TransformNormalInverseTranspose(modelVertex.n, modelView);
       RageVector3 position = modelVertex.p;
       RageColor litColor =
-          display->ComputeModelColor(transformedNormal, modelView);
+          display->ComputeModelColor(transformedNormal);
       if (display->m_iCelShadedStage == 1) {
         position += modelVertex.n * 0.125f;
         litColor = RageColor(0.25f, 0.125f, 0.125f, 1.0f);
       } else if (display->m_iCelShadedStage == 2) {
-        litColor = display->ComputeCelModelColor(transformedNormal, modelView);
+        litColor = display->ComputeCelModelColor(transformedNormal);
       }
       const RageDisplay_Metal::DrawBatch& batch =
           useDirectVertices ? *directBatch : *fallbackBatch;
@@ -649,14 +709,6 @@ void RageCompiledGeometryMetal::EmitTo(
         fallbackBatch->vertices.push_back(vertex);
       }
     }
-  }
-  if (useDirectVertices && out < outputVertexCount) {
-    RageDisplay_Metal::VertexWriterState& writer =
-        display->m_iCurrentRenderTargetHandle > 0
-            ? display->m_RenderTargetVertexWriter
-            : display->m_MainVertexWriter;
-    directBatch->vertexCount -= outputVertexCount - out;
-    writer.usedVertices -= outputVertexCount - out;
   }
 }
 
@@ -1312,7 +1364,7 @@ void RageDisplay_Metal::SetZWrite(bool write) {
 }
 
 void RageDisplay_Metal::SetZBias(float bias) {
-  m_fZBias = std::clamp(bias, 0.0f, 1.0f);
+  m_fZBias = std::isfinite(bias) ? std::clamp(bias, 0.0f, 1.0f) : 0.0f;
 }
 
 void RageDisplay_Metal::SetZTestMode(ZTestMode mode) {
@@ -1595,15 +1647,12 @@ void RageDisplay_Metal::BuildMetalBatches(
       }
     }
     void* texture2 = nullptr;
-    int texture2Width = 1;
     bool hasTexture2 = false;
     if (batch.textureHandles[TextureUnit_2] > 0 &&
         batch.textureHandles[TextureUnit_2] < m_Textures.size()) {
       if (m_iCurrentRenderTargetHandle == 0 ||
           batch.textureHandles[TextureUnit_2] != m_iCurrentRenderTargetHandle) {
         texture2 = m_Textures[batch.textureHandles[TextureUnit_2]].texture;
-        texture2Width =
-            std::max(1, m_Textures[batch.textureHandles[TextureUnit_2]].width);
         hasTexture2 = texture2 != nullptr;
       }
     }
@@ -1617,7 +1666,6 @@ void RageDisplay_Metal::BuildMetalBatches(
     metalBatch.texture = texture;
     metalBatch.textureWidth = textureWidth;
     metalBatch.texture2 = texture2;
-    metalBatch.texture2Width = texture2Width;
     metalBatch.textureMode2 = batch.textureModes[TextureUnit_2];
     metalBatch.hasTexture2 = hasTexture2;
     metalBatch.blendMode = batch.blendMode;
@@ -1828,7 +1876,8 @@ void RageDisplay_Metal::FlushBatches() {
    * offscreen present path during initialization, so missing pipeline state is an
    * initialization failure instead of a runtime direct-drawable fallback.
    */
-  const bool presented = m_Presenter->PresentSolidBatchesOffscreenFirst(
+  const MacOSMetalPresentResult presentResult =
+      m_Presenter->PresentSolidBatchesOffscreenFirst(
       m_MetalDrawBatches.data(), m_MetalDrawBatches.size(), clearDepth, 0.0,
       0.0, 0.0, 1.0, targetHz,
       useDirectVertexFrame ? &activeWriter.frame : nullptr);
@@ -1847,12 +1896,15 @@ void RageDisplay_Metal::FlushBatches() {
   ClearActiveBatches();
   m_MetalDrawBatches.clear();
   m_bClearDepthNextFrame = false;
-  if (!presented) {
+  if (presentResult != MacOSMetalPresentResult::Presented) {
     ++m_iSkippedPresentFrames;
     if (m_iSkippedPresentFrames <= 3 ||
         m_iSkippedPresentFrames % 600 == 0) {
       LOG->Warn(
-          "RageDisplay_Metal: present skipped; frames=%llu.",
+          "RageDisplay_Metal: present %s; frames=%llu.",
+          presentResult == MacOSMetalPresentResult::Skipped
+              ? "skipped"
+              : "failed",
           static_cast<unsigned long long>(m_iSkippedPresentFrames));
     }
   }
@@ -2013,8 +2065,10 @@ void RageDisplay_Metal::DrawQuadsInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + outputVertexCount);
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "quads")) {
+    return;
+  }
   for (int i = 0; i + 3 < iNumVerts; i += 4) {
     AppendTriangle(&batch.vertices, v[i + 0], v[i + 1], v[i + 2]);
     AppendTriangle(&batch.vertices, v[i + 2], v[i + 3], v[i + 0]);
@@ -2052,8 +2106,10 @@ void RageDisplay_Metal::DrawQuadStripInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "quad_strip")) {
+    return;
+  }
   for (int i = 0; i + 3 < iNumVerts; i += 2) {
     AppendTriangle(&batch.vertices, v[i + 0], v[i + 1], v[i + 2]);
     AppendTriangle(&batch.vertices, v[i + 2], v[i + 1], v[i + 3]);
@@ -2083,8 +2139,10 @@ void RageDisplay_Metal::DrawFanInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "fan")) {
+    return;
+  }
   for (int i = 1; i + 1 < iNumVerts; ++i) {
     AppendTriangle(&batch.vertices, v[0], v[i], v[i + 1]);
   }
@@ -2119,8 +2177,10 @@ void RageDisplay_Metal::DrawStripInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumVerts - 2) * 3);
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "strip")) {
+    return;
+  }
   for (int i = 0; i + 2 < iNumVerts; ++i) {
     if ((i % 2) == 0) {
       AppendTriangle(&batch.vertices, v[i], v[i + 1], v[i + 2]);
@@ -2153,19 +2213,13 @@ void RageDisplay_Metal::DrawTrianglesInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + static_cast<size_t>(iNumVerts));
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "triangles")) {
+    return;
+  }
   for (int i = 0; i + 2 < iNumVerts; i += 3) {
     AppendTriangle(&batch.vertices, v[i + 0], v[i + 1], v[i + 2]);
   }
-}
-
-void RageDisplay_Metal::DrawCompiledTriangles(
-    const std::vector<RageSpriteVertex>& vertices) {
-  if (vertices.empty()) {
-    return;
-  }
-  DrawTrianglesInternal(vertices.data(), static_cast<int>(vertices.size()));
 }
 
 void RageDisplay_Metal::DrawCompiledGeometryInternal(
@@ -2183,16 +2237,7 @@ void RageDisplay_Metal::DrawCompiledGeometryInternal(
     return;
   }
 
-  const bool translucentModel = m_MaterialDiffuse.a < 0.999f;
-  const CullMode previousCullMode = m_CullMode;
-  const bool previousZWrite = m_bZWrite;
-  if (translucentModel) {
-    m_CullMode = CULL_NONE;
-    m_bZWrite = false;
-  }
-  metalGeometry->EmitTo(this, iMeshIndex, ToVertexColor(m_MaterialDiffuse));
-  m_CullMode = previousCullMode;
-  m_bZWrite = previousZWrite;
+  metalGeometry->EmitTo(this, iMeshIndex);
 }
 
 RageSurface* RageDisplay_Metal::CreateScreenshot() {
@@ -2346,8 +2391,10 @@ void RageDisplay_Metal::DrawSymmetricQuadStripInternal(
   DrawBatch& batch = ActiveBatch(
       m_iActiveDrawBatchCount > 0 &&
       m_DrawBatches[m_iActiveDrawBatchCount - 1].vertexBuffer != nullptr);
-  batch.vertices.reserve(
-      batch.vertices.size() + outputVertexCount);
+  if (!ReserveAdditionalVertices(
+          &batch.vertices, outputVertexCount, "symmetric_quad_strip")) {
+    return;
+  }
   for (int i = 0; i < iNumPieces; ++i) {
     const int base = i * 3;
     AppendTriangle(&batch.vertices, v[base + 1], v[base + 3], v[base + 0]);

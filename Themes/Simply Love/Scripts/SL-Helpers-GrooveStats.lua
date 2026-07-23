@@ -228,6 +228,30 @@ local function groove_profile_file_exists(path)
 	return ok and exists == true
 end
 
+local function groove_profile_contents_are_current(contents, apiKey, username, isPadPlayer)
+	if type(contents) ~= "table" or type(contents["GrooveStats"]) ~= "table" then
+		return false
+	end
+
+	for key in pairs(contents) do
+		if key ~= "GrooveStats" then return false end
+	end
+
+	local section = contents["GrooveStats"]
+	for key in pairs(section) do
+		if key ~= "ApiKey" and key ~= "Username" and key ~= "IsPadPlayer" then
+			return false
+		end
+	end
+
+	return section["ApiKey"] == apiKey
+		and section["Username"] == username
+		and section["IsPadPlayer"] ~= nil
+		and (section["IsPadPlayer"] == true
+			or section["IsPadPlayer"] == 1
+			or section["IsPadPlayer"] == "1") == isPadPlayer
+end
+
 ParseGrooveStatsIni = function(player)
 	if not player then return end
 
@@ -285,13 +309,22 @@ ParseGrooveStatsIni = function(player)
 			end
 		end
 
-		-- Always write the file back to disk to ensure it's up to date with
-		-- any new fields that may have been added.
+		local apiKey = type(SL[pn].ApiKey) == "string" and SL[pn].ApiKey or ""
+		local username = type(SL[pn].GrooveStatsUsername) == "string"
+			and SL[pn].GrooveStatsUsername:gsub("[\r\n]", "") or ""
+		local isPadPlayer = SL[pn].IsPadPlayer == true
+
+		-- Preserve the existing migration behavior, but do not rewrite an
+		-- already canonical profile during every menu transition.
+		if groove_profile_contents_are_current(contents, apiKey, username, isPadPlayer) then
+			return true
+		end
+
 		return groove_profile_ini_write(path, {
 			["GrooveStats"]={
-				["ApiKey"]=SL[pn].ApiKey,
-				["Username"]=SL[pn].GrooveStatsUsername,
-				["IsPadPlayer"]=SL[pn].IsPadPlayer and "1" or "0",
+				["ApiKey"]=apiKey,
+				["Username"]=username,
+				["IsPadPlayer"]=isPadPlayer and "1" or "0",
 			}
 		})
 	end

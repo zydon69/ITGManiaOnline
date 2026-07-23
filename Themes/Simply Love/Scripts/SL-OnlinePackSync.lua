@@ -581,6 +581,9 @@ function PackSync:SyncSequenceFromRoomPayload(room, currentSelectedAt, reason)
 	return false
 end
 
+-- Selection identity and filesystem safety
+-- -----------------------------------------------------------------------
+
 local function trim(value)
 	return tostring(value or ""):gsub("^%s+", ""):gsub("%s+$", "")
 end
@@ -1242,6 +1245,9 @@ function PackSync:SelectedAtForStatusPost(status, songInfo)
 	return songSelectedAt
 end
 
+-- Server status synchronization
+-- -----------------------------------------------------------------------
+
 function PackSync:UpdateStatus(status, message, progress, callback, options)
 	status = tostring(status or self.status.Unknown)
 	message = status_message(message)
@@ -1867,6 +1873,9 @@ function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source, r
 	return true
 end
 
+-- Local lifecycle and chart index
+-- -----------------------------------------------------------------------
+
 function PackSync:ResetLocalState(reason)
 	local normalizedReason = tostring(reason or "unknown")
 	local resetSignature = table.concat({
@@ -2203,6 +2212,9 @@ function PackSync:ManagerBrowsingPreview(songInfo)
 	self.lastManagerBrowsingPreviewPostAt = now
 	self:UpdateStatus(status, normalizedMessage)
 end
+
+-- Local chart matching and selection
+-- -----------------------------------------------------------------------
 
 function PackSync:FindLocalMatch(songInfo)
 	trace("FindLocalMatch begin title=" .. tostring(selected_title(songInfo))
@@ -2684,6 +2696,9 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 	end)
 	return true
 end
+
+-- External catalogue lookup and transactional installation
+-- -----------------------------------------------------------------------
 
 local function stepmaniaonline_origin()
 	-- API endpoints now resolve reliably on the apex domain.
@@ -3944,6 +3959,9 @@ local function browse_pack_reload_validated(songInfo, quarantinePath)
 
 	return false
 end
+
+-- Post-reload validation
+-- -----------------------------------------------------------------------
 
 function PackSync:ValidatePendingPostReload()
 	local songInfo = self.pendingPostReloadSongInfo

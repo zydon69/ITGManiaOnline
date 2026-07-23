@@ -30,6 +30,7 @@ require_contains("${song}" "if (!BeginsWith(sRelPath, sAllowedRoot))" "song asse
 require_contains("${song}" "this->lastSecond = std::max(0.0f, localLast);" "song duration cannot become negative")
 require_contains("${song}" "if (!IsPlayableStepsTypeIndex(st))" "autogen ignores invalid StepsType")
 require_contains("${song}" "this->DeleteSteps(apToRemove[i], false);" "profile cleanup batches autogen regeneration")
+require_contains("${song}" "if (!hasProfileSteps)" "songs without matching profile steps skip autogen regeneration")
 
 read_source("src/Steps.cpp" steps)
 read_source("src/NoteDataUtil.cpp" note_data_util)

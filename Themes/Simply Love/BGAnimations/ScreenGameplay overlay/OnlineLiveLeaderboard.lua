@@ -1,5 +1,4 @@
 local max_rows = 8
-local play_state_for_user
 local panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("leaderboard") or 300
 local panel_padding = panel_width * 0.07
 local marker_x = (-panel_width / 2) + panel_padding
@@ -149,7 +148,7 @@ local function selected_max_score()
 	return 0
 end
 
-play_state_for_user = function(user_id)
+local function play_state_for_user(user_id)
 	local room = ITGOnline and ITGOnline.currentRoom or nil
 	local sessions = room and room.play_state and room.play_state.sessions or {}
 	local wanted = tostring(user_id or "")
@@ -604,15 +603,15 @@ local af = Def.ActorFrame{
 			.. " local_x=" .. tostring(self:GetX())
 			.. " local_y=" .. tostring(self:GetY())
 			.. " marker_x=" .. tostring(marker_x)
-				.. " label_x=" .. tostring(label_x)
-				.. " score_x=" .. tostring(score_x)
-				.. " status_x=" .. tostring(status_x)
-				.. " title_zoom=" .. tostring(title_zoom)
-				.. " row_zoom=" .. tostring(row_zoom)
-				.. " score_zoom=" .. tostring(score_zoom)
-				.. " screen_w=" .. tostring(_screen.w)
-				.. " screen_h=" .. tostring(_screen.h)
-				.. " aspect=" .. tostring(GetScreenAspectRatio()))
+			.. " label_x=" .. tostring(label_x)
+			.. " score_x=" .. tostring(score_x)
+			.. " status_x=" .. tostring(status_x)
+			.. " title_zoom=" .. tostring(title_zoom)
+			.. " row_zoom=" .. tostring(row_zoom)
+			.. " score_zoom=" .. tostring(score_zoom)
+			.. " screen_w=" .. tostring(_screen.w)
+			.. " screen_h=" .. tostring(_screen.h)
+			.. " aspect=" .. tostring(GetScreenAspectRatio()))
 	end,
 	OnCommand=function(self)
 		self:queuecommand("RefreshFromRoom")

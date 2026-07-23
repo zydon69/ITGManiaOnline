@@ -213,7 +213,7 @@ struct RageTextureLock {
 
   /* Given a surface with a format and no pixel data, lock the texture into the
    * surface. The data is write-only. */
-  virtual void Lock(uintptr_t iTexHandle, RageSurface* pSurface) = 0;
+  virtual bool Lock(uintptr_t iTexHandle, RageSurface* pSurface) = 0;
 
   /* Unlock and update the texture. If bChanged is false, the texture update
    * may be omitted. */

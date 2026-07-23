@@ -1066,6 +1066,44 @@ static bool IsExpectedInactiveWebSocketTerminalMessage(
          type == ix::WebSocketMessageType::Error;
 }
 
+void ClearQueuedTasks(std::queue<std::function<void()>>& tasks) {
+  std::queue<std::function<void()>> emptyQueue;
+  tasks.swap(emptyQueue);
+}
+
+void ClearQueuedTasks(
+    std::mutex& mutex, std::queue<std::function<void()>>& tasks) {
+  std::lock_guard<std::mutex> lock(mutex);
+  ClearQueuedTasks(tasks);
+}
+
+void RunQueuedWorker(
+    std::atomic<bool>& shutdown,
+    std::mutex& mutex,
+    std::condition_variable& condition,
+    std::queue<std::function<void()>>& tasks) {
+  while (true) {
+    std::function<void()> task;
+
+    {
+      std::unique_lock<std::mutex> lock(mutex);
+      condition.wait(lock, [&shutdown, &tasks] {
+        return shutdown.load() || !tasks.empty();
+      });
+
+      if (shutdown.load()) {
+        ClearQueuedTasks(tasks);
+        return;
+      }
+
+      task = std::move(tasks.front());
+      tasks.pop();
+    }
+
+    task();
+  }
+}
+
 NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
   NetworkTrace("ITG Online NetworkTrace: network_manager_ctor_begin");
   ix::initNetSystem();
@@ -1225,105 +1263,30 @@ void NetworkManager::CloseAllWebSocketsInternal(bool calledFromLua) {
 }
 
 void NetworkManager::RunHttpWorker() {
-  while (true) {
-    std::function<void()> task;
-
-    {
-      std::unique_lock<std::mutex> lock(this->httpWorkerMutex);
-      this->httpWorkerCv.wait(lock, [this] {
-        return this->shutdownWorkers.load() || !this->httpWorkerQueue.empty();
-      });
-
-      if (this->shutdownWorkers.load() && this->httpWorkerQueue.empty()) {
-        return;
-      }
-
-      if (this->shutdownWorkers.load()) {
-        std::queue<std::function<void()>> emptyQueue;
-        this->httpWorkerQueue.swap(emptyQueue);
-        return;
-      }
-
-      task = std::move(this->httpWorkerQueue.front());
-      this->httpWorkerQueue.pop();
-    }
-
-    task();
-  }
+  RunQueuedWorker(
+      this->shutdownWorkers, this->httpWorkerMutex, this->httpWorkerCv,
+      this->httpWorkerQueue);
 }
 
 void NetworkManager::RunDownloadWorker() {
-  while (true) {
-    std::function<void()> task;
-    {
-      std::unique_lock<std::mutex> lock(this->downloadWorkerMutex);
-      this->downloadWorkerCv.wait(lock, [this] {
-        return this->shutdownWorkers.load() ||
-               !this->downloadWorkerQueue.empty();
-      });
-      if (this->shutdownWorkers.load() && this->downloadWorkerQueue.empty()) {
-        return;
-      }
-      if (this->shutdownWorkers.load()) {
-        std::queue<std::function<void()>> emptyQueue;
-        this->downloadWorkerQueue.swap(emptyQueue);
-        return;
-      }
-      task = std::move(this->downloadWorkerQueue.front());
-      this->downloadWorkerQueue.pop();
-    }
-    task();
-  }
+  RunQueuedWorker(
+      this->shutdownWorkers, this->downloadWorkerMutex, this->downloadWorkerCv,
+      this->downloadWorkerQueue);
 }
 
 void NetworkManager::RunWebSocketWorker() {
-  while (true) {
-    std::function<void()> task;
-
-    {
-      std::unique_lock<std::mutex> lock(this->webSocketWorkerMutex);
-      this->webSocketWorkerCv.wait(lock, [this] {
-        return this->shutdownWorkers.load() ||
-               !this->webSocketWorkerQueue.empty();
-      });
-
-      if (this->shutdownWorkers.load() && this->webSocketWorkerQueue.empty()) {
-        return;
-      }
-
-      if (this->shutdownWorkers.load()) {
-        std::queue<std::function<void()>> emptyQueue;
-        this->webSocketWorkerQueue.swap(emptyQueue);
-        return;
-      }
-
-      task = std::move(this->webSocketWorkerQueue.front());
-      this->webSocketWorkerQueue.pop();
-    }
-
-    task();
-  }
+  RunQueuedWorker(
+      this->shutdownWorkers, this->webSocketWorkerMutex,
+      this->webSocketWorkerCv, this->webSocketWorkerQueue);
 }
 
 void NetworkManager::StopWorkers() {
   this->shutdownWorkers = true;
   this->CancelActiveHttpRequests();
 
-  {
-    std::lock_guard<std::mutex> lock(this->httpWorkerMutex);
-    std::queue<std::function<void()>> emptyQueue;
-    this->httpWorkerQueue.swap(emptyQueue);
-  }
-  {
-    std::lock_guard<std::mutex> lock(this->downloadWorkerMutex);
-    std::queue<std::function<void()>> emptyQueue;
-    this->downloadWorkerQueue.swap(emptyQueue);
-  }
-  {
-    std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
-    std::queue<std::function<void()>> emptyQueue;
-    this->webSocketWorkerQueue.swap(emptyQueue);
-  }
+  ClearQueuedTasks(this->httpWorkerMutex, this->httpWorkerQueue);
+  ClearQueuedTasks(this->downloadWorkerMutex, this->downloadWorkerQueue);
+  ClearQueuedTasks(this->webSocketWorkerMutex, this->webSocketWorkerQueue);
 
   this->httpWorkerCv.notify_one();
   this->downloadWorkerCv.notify_one();

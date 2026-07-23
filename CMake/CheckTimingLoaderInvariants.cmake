@@ -39,6 +39,10 @@ require_contains(
   "ProcessBPMsAndStops reads then consumes the first future normal BPM")
 require_contains(
   "${notes_loader_sm_cpp}"
+  "if (nextBpmBeat > 0.0f)"
+  "ProcessBPMsAndStops does not warn when a normal BPM starts exactly at beat 0")
+require_contains(
+  "${notes_loader_sm_cpp}"
   "does not establish a normal BPM before beat 0.  Defaulting to 60"
   "ProcessBPMsAndStops logs fallback when the first future BPM is not normal")
 require_contains(

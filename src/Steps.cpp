@@ -548,7 +548,8 @@ void Steps::CalculateRadarValues(
           "component=steps event=radar_calculated steps_type=%s player=%zu "
           "tracks=%d taps=%d values=%s",
           m_StepsTypeStr.c_str(), pn, vParts[pn].GetNumTracks(),
-          vParts[pn].GetNumTapNotes(), m_RadarValues[pn].ToString().c_str());
+          vParts[pn].GetNumTapNotes(0, MAX_NOTE_ROW, timing),
+          m_RadarValues[pn].ToString().c_str());
     }
   } else {
     NoteDataUtil::CalculateRadarValues(
@@ -682,7 +683,8 @@ void Steps::CalculateMeasureInfo(const NoteData& tempNoteData) {
           "component=steps event=measure_info steps_type=%s player=%zu "
           "tracks=%d taps=%d peak_nps=%.6f",
           m_StepsTypeStr.c_str(), pn, vParts[pn].GetNumTracks(),
-          vParts[pn].GetNumTapNotes(), measureInfoPerPlayer[pn].peakNps);
+          vParts[pn].GetNumTapNotes(0, MAX_NOTE_ROW, timing),
+          measureInfoPerPlayer[pn].peakNps);
     }
   } else {
     measureInfoPerPlayer.resize(1);

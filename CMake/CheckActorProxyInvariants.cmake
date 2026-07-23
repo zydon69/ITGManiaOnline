@@ -32,6 +32,9 @@ read_source("src/LuaBinding.h" lua_binding_h)
 read_source(
   "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/NoteSkinVariant.lua"
   noteskin_variant_previews)
+read_source(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
+  player_options_overlay)
 
 require_contains(
   "${actor_proxy_h}"
@@ -148,3 +151,11 @@ require_not_contains(
   "${noteskin_variant_previews}"
   "active_noteskins[noteskin]"
   "variant previews must not depend on the skin active at overlay load")
+require_contains(
+  "${player_options_overlay}"
+  "Name=\"NoteSkin\",\n\t\t\t\t\t\tValue=current_noteskin"
+  "the selected noteskin preview is targeted when options first open")
+require_contains(
+  "${player_options_overlay}"
+  "local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant\n\t\t\t\t\tor SL[pn].ActiveModifiers.NoteSkin or \"\""
+  "the initial variant preview falls back to the selected base noteskin")

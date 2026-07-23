@@ -279,7 +279,7 @@ label.max_width = ((pane_width/3)/label.zoom) - ((label.padding/label.zoom)*3)
 -- avg_timing_error label
 pane[#pane+1] = Def.BitmapText{
 	Font="Common Normal",
-	Text=ScreenString("MeanTimingError"),
+	Text=THEME:GetString("ScreenEvaluation", "MeanTimingError"),
 	InitCommand=function(self)
 		self:x(40):y(label.y)
 			:zoom(label.zoom):maxwidth(label.max_width)
@@ -293,7 +293,7 @@ pane[#pane+1] = Def.BitmapText{
 -- avg_timing_error label
 pane[#pane+1] = Def.BitmapText{
 	Font="Common Normal",
-	Text=ScreenString("MeanOffset"),
+	Text=THEME:GetString("ScreenEvaluation", "MeanOffset"),
 	InitCommand=function(self)
 		self:x(40 + (pane_width-80)/3):y(label.y)
 			:zoom(label.zoom):maxwidth(label.max_width)
@@ -307,7 +307,7 @@ pane[#pane+1] = Def.BitmapText{
 -- std_dev label
 pane[#pane+1] = Def.BitmapText{
 	Font="Common Normal",
-	Text=ScreenString("StdDev"),
+	Text=THEME:GetString("ScreenEvaluation", "StdDev"),
 	InitCommand=function(self)
 		self:x(40 + (pane_width-80)/3 * 2):y(label.y)
 			:zoom(label.zoom):maxwidth(label.max_width)
@@ -317,7 +317,7 @@ pane[#pane+1] = Def.BitmapText{
 -- max_error label
 pane[#pane+1] = Def.BitmapText{
 	Font="Common Normal",
-	Text=ScreenString("MaxError"),
+	Text=THEME:GetString("ScreenEvaluation", "MaxError"),
 	InitCommand=function(self)
 		self:x(pane_width-40):y(label.y)
 			:zoom(label.zoom):maxwidth(label.max_width)

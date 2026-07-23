@@ -414,14 +414,15 @@ Branch.AfterSelectProfile = function()
 			and PROFILEMAN and PROFILEMAN.IsPersistentProfile then
 			local okPersistent, result = SafeCall("PROFILEMAN.IsPersistentProfile", function()
 				return PROFILEMAN:IsPersistentProfile(player)
-			end)
-			persistentProfile = okPersistent and result == true
+				end)
+				persistentProfile = okPersistent and result == true
 		end
 
 		if persistentProfile then
-			if IsCallable(ParseArrowCloudIni) then
-				SafeCall("ParseArrowCloudIni", function()
-					ParseArrowCloudIni(player)
+			local loadArrowCloudProfile = EnsureArrowCloudIniLoaded or ParseArrowCloudIni
+			if IsCallable(loadArrowCloudProfile) then
+				SafeCall("EnsureArrowCloudIniLoaded", function()
+					loadArrowCloudProfile(player)
 				end)
 			end
 			if not playerState or not playerState.ArrowCloudApiKey or playerState.ArrowCloudApiKey == "" then

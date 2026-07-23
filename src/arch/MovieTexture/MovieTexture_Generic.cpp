@@ -145,11 +145,13 @@ MovieTexture_Generic::~MovieTexture_Generic() {
 /* Delete the surface and texture.  The decoding thread must be stopped, and
  * this is normally done after destroying the decoder. */
 void MovieTexture_Generic::DestroyTexture() {
-  delete surface_;
-  surface_ = nullptr;
-
+  // A texture lock may still reference the surface while unwinding a failed
+  // decode/update. Destroy it first so it can detach its mapped pixels safely.
   delete texture_lock_;
   texture_lock_ = nullptr;
+
+  delete surface_;
+  surface_ = nullptr;
 
   if (DISPLAY != nullptr && texture_handle_) {
     DISPLAY->DeleteTexture(texture_handle_);
@@ -469,7 +471,9 @@ void MovieTexture_Generic::UpdateFrame() {
     if (iHandle == 0) {
       return;
     }
-    texture_lock_->Lock(iHandle, surface_);
+    if (!texture_lock_->Lock(iHandle, surface_)) {
+      return;
+    }
   }
 
   int frame_ret = -1;

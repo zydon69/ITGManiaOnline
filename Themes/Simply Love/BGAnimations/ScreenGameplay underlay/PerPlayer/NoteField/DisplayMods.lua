@@ -15,7 +15,7 @@ if is_shared_sides and player ~= sourcePlayer then
   return
 end
 
-local optionslist = GetPlayerOptionsString(player)
+local optionslist = GetPlayerOptionsString(sourcePlayer, "ModsLevel_Current")
 local font_zoom = 0.8
 local wrap_width = math.max(150, math.min((GetNotefieldWidth and GetNotefieldWidth() or 256) * 0.9, 360))
 
@@ -53,7 +53,7 @@ af[#af+1] = LoadFont("Common Normal")..{
   end,
   PlayerOptionsChangedMessageCommand=function(self, params)
     if params.Player ~= player then return false end
-    optionslist = GetPlayerOptionsString(player, "ModsLevel_Song")
+    optionslist = GetPlayerOptionsString(sourcePlayer, "ModsLevel_Current")
     self:settext(optionslist)
     self:maxwidth(wrap_width / font_zoom)
   end

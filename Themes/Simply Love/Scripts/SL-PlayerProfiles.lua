@@ -280,6 +280,36 @@ local function normalize_arrowcloud_allow_autoplay(value)
 	return value == true or value == 1 or value == "1" or value == "true"
 end
 
+local function arrowcloud_allow_autoplay_is_current(value, expected)
+	if value == nil then return false end
+	if expected then
+		return value == true or value == 1 or value == "1" or value == "true"
+	end
+	return value == false or value == 0 or value == "0" or value == "false"
+end
+
+-- Keep the profile-scoped ArrowCloud values that were loaded from disk.  The
+-- profile loader explicitly refreshes this cache; later consumers in the same
+-- menu flow can reuse it without parsing the same file again.
+local arrowcloud_profile_cache = {}
+
+local function cache_arrowcloud_profile(pn, path, api_key, allow_autoplay)
+	arrowcloud_profile_cache[pn] = {
+		path = path,
+		apiKey = api_key,
+		allowAutoplay = allow_autoplay == true,
+	}
+end
+
+local function apply_cached_arrowcloud_profile(pn, path)
+	local cached = arrowcloud_profile_cache[pn]
+	if not cached or cached.path ~= path then return false end
+
+	SL[pn].ArrowCloudApiKey = cached.apiKey
+	SL[pn].ArrowCloudAllowAutoplay = cached.allowAutoplay
+	return true
+end
+
 local function apply_hard_ex_exclusivity(pn)
 	if pn and SL and SL[pn] and SL[pn].ActiveModifiers and SL[pn].ActiveModifiers.ShowHardEXScore then
 		SL[pn].ActiveModifiers.ShowExScore = false
@@ -399,7 +429,9 @@ LoadProfileCustom = function(profile, dir)
 			safe_call("ParseGrooveStatsIni", function() ParseGrooveStatsIni(player) end)
 		end
 		if type(ParseArrowCloudIni) == "function" then
-			safe_call("ParseArrowCloudIni", function() ParseArrowCloudIni(player) end)
+			-- A profile load is the cache invalidation boundary.  Always refresh
+			-- from disk here, then let the branch and login screen reuse it.
+			safe_call("ParseArrowCloudIni", function() ParseArrowCloudIni(player, true) end)
 		end
 		if type(ReadItlFile) == "function" then
 			safe_call("ReadItlFile", function() ReadItlFile(player) end)
@@ -555,14 +587,10 @@ end
 -- -----------------------------------------------------------------------
 -- ArrowCloud ApiKey handling.
 
-ParseArrowCloudIni = function(player)
+ParseArrowCloudIni = function(player, forceReload)
 	if not player then return end
 
-	local profile_slot = {
-		[PLAYER_1] = "ProfileSlot_Player1",
-		[PLAYER_2] = "ProfileSlot_Player2"
-	}
-	if not profile_slot[player] then return "" end
+	if not profile_slot_for_player(player) then return "" end
 
 	local dir = safe_profile_dir(player)
 	local pn = safe_enum_short(player, nil)
@@ -570,36 +598,60 @@ ParseArrowCloudIni = function(player)
 	if not (pn and SL and SL[pn]) then return false end
 
 	local path = dir .. "ArrowCloud.ini"
+	if forceReload ~= true and apply_cached_arrowcloud_profile(pn, path) then
+		return true
+	end
+
 	SL[pn].ArrowCloudApiKey = ""
 	SL[pn].ArrowCloudAllowAutoplay = false
 
 	if not safe_file_exists(path) then
-		return safe_ini_write(path, {
+		local created = safe_ini_write(path, {
 			["ArrowCloud"]={
 				["ApiKey"]="",
 				["AllowAutoplay"]="0"
 			}
 		})
-	else
-		local contents = safe_ini_read(path)
-		local section = type(contents["ArrowCloud"]) == "table" and contents["ArrowCloud"] or {}
-		SL[pn].ArrowCloudApiKey = sanitize_arrowcloud_token(section["ApiKey"])
-		SL[pn].ArrowCloudAllowAutoplay = normalize_arrowcloud_allow_autoplay(section["AllowAutoplay"])
-		section["ApiKey"] = SL[pn].ArrowCloudApiKey
-		section["AllowAutoplay"] = SL[pn].ArrowCloudAllowAutoplay and "1" or "0"
-		contents["ArrowCloud"] = section
-		return safe_ini_write(path, contents)
+		if created then
+			cache_arrowcloud_profile(pn, path, "", false)
+		end
+		return created
 	end
+
+	local contents = safe_ini_read(path)
+	local sectionExists = type(contents["ArrowCloud"]) == "table"
+	local section = sectionExists and contents["ArrowCloud"] or {}
+	local apiKey = sanitize_arrowcloud_token(section["ApiKey"])
+	local allowAutoplay = normalize_arrowcloud_allow_autoplay(section["AllowAutoplay"])
+	local serializedAllowAutoplay = allowAutoplay and "1" or "0"
+	local requiresWrite = not sectionExists
+		or section["ApiKey"] ~= apiKey
+		or not arrowcloud_allow_autoplay_is_current(section["AllowAutoplay"], allowAutoplay)
+
+	SL[pn].ArrowCloudApiKey = apiKey
+	SL[pn].ArrowCloudAllowAutoplay = allowAutoplay
+
+	if requiresWrite then
+		section["ApiKey"] = apiKey
+		section["AllowAutoplay"] = serializedAllowAutoplay
+		contents["ArrowCloud"] = section
+		if not safe_ini_write(path, contents) then
+			return false
+		end
+	end
+
+	cache_arrowcloud_profile(pn, path, apiKey, allowAutoplay)
+	return true
+end
+
+EnsureArrowCloudIniLoaded = function(player)
+	return ParseArrowCloudIni(player, false)
 end
 
 WriteArrowCloudIni = function(player)
 	if not player then return end
 
-	local profile_slot = {
-		[PLAYER_1] = "ProfileSlot_Player1",
-		[PLAYER_2] = "ProfileSlot_Player2"
-	}
-	if not profile_slot[player] then return "" end
+	if not profile_slot_for_player(player) then return "" end
 
 	local dir = safe_profile_dir(player)
 	local pn = safe_enum_short(player, nil)
@@ -607,13 +659,39 @@ WriteArrowCloudIni = function(player)
 	if not (pn and SL and SL[pn]) then return false end
 
 	local path = dir .. "ArrowCloud.ini"
+	local apiKey = sanitize_arrowcloud_token(SL[pn].ArrowCloudApiKey)
+	local allowAutoplay = normalize_arrowcloud_allow_autoplay(SL[pn].ArrowCloudAllowAutoplay)
+	local cached = arrowcloud_profile_cache[pn]
+	if cached
+	and cached.path == path
+	and cached.apiKey == apiKey
+	and cached.allowAutoplay == allowAutoplay
+	then
+		return true
+	end
+
 	local contents = {}
 	if safe_file_exists(path) then
 		contents = safe_ini_read(path)
 	end
-	contents["ArrowCloud"] = contents["ArrowCloud"] or {}
-	contents["ArrowCloud"]["ApiKey"] = sanitize_arrowcloud_token(SL[pn].ArrowCloudApiKey)
-	contents["ArrowCloud"]["AllowAutoplay"] = normalize_arrowcloud_allow_autoplay(SL[pn].ArrowCloudAllowAutoplay) and "1" or "0"
+	local sectionExists = type(contents["ArrowCloud"]) == "table"
+	local section = sectionExists and contents["ArrowCloud"] or {}
+	local serializedAllowAutoplay = allowAutoplay and "1" or "0"
+	local requiresWrite = not sectionExists
+		or section["ApiKey"] ~= apiKey
+		or not arrowcloud_allow_autoplay_is_current(section["AllowAutoplay"], allowAutoplay)
 
-	return safe_ini_write(path, contents)
+	if requiresWrite then
+		section["ApiKey"] = apiKey
+		section["AllowAutoplay"] = serializedAllowAutoplay
+		contents["ArrowCloud"] = section
+		if not safe_ini_write(path, contents) then
+			return false
+		end
+	end
+
+	SL[pn].ArrowCloudApiKey = apiKey
+	SL[pn].ArrowCloudAllowAutoplay = allowAutoplay
+	cache_arrowcloud_profile(pn, path, apiKey, allowAutoplay)
+	return true
 end

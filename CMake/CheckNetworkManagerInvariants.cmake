@@ -25,6 +25,11 @@ foreach(REQUIRED_SNIPPET
     "url=%s reason=inactive type=%s"
     "queuedTasks > kBacklogAdaptiveThreshold * 4"
     "queuedTasks >= kBacklogAdaptiveThreshold"
+    "void ClearQueuedTasks("
+    "void RunQueuedWorker("
+    "this->shutdownWorkers, this->httpWorkerMutex, this->httpWorkerCv"
+    "this->shutdownWorkers, this->downloadWorkerMutex, this->downloadWorkerCv"
+    "this->shutdownWorkers, this->webSocketWorkerMutex"
     "effectiveMaxDownloadBytes"
     "kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL"
     "std::atomic<int64_t> latestProgressCurrent"
@@ -63,7 +68,7 @@ if(NOT STALE_PIN_PREFERENCE_OFFSET EQUAL -1)
 endif()
 
 foreach(REQUIRED_SNIPPET
-    "this->downloadWorkerQueue.swap(emptyQueue);"
+    "ClearQueuedTasks(this->downloadWorkerMutex, this->downloadWorkerQueue);"
     "this->downloadWorkerQueue.size() >= kMaxDownloadWorkerQueue")
   string(FIND "${NETWORK_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)

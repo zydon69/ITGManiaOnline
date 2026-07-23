@@ -3307,7 +3307,7 @@ struct RageTextureLock_OGL : public RageTextureLock, public InvalidateObject {
   /* This is called when our OpenGL context is invalidated. */
   void Invalidate() { m_iTexHandle = 0; }
 
-  void Lock(uintptr_t iTexHandle, RageSurface* pSurface) {
+  bool Lock(uintptr_t iTexHandle, RageSurface* pSurface) {
     ASSERT(m_iTexHandle == 0);
     ASSERT(pSurface->pixels == nullptr);
 
@@ -3321,8 +3321,14 @@ struct RageTextureLock_OGL : public RageTextureLock, public InvalidateObject {
 
     void* pSurfaceMemory =
         glMapBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, GL_WRITE_ONLY);
+    if (pSurfaceMemory == nullptr) {
+      m_iTexHandle = 0;
+      glBindBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
+      return false;
+    }
     pSurface->pixels = (uint8_t*)pSurfaceMemory;
     pSurface->pixels_owned = false;
+    return true;
   }
 
   void Unlock(RageSurface* pSurface, bool bChanged) {

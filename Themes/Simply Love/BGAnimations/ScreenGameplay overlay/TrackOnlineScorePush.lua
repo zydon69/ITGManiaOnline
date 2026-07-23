@@ -48,7 +48,7 @@ local function live_score_playing()
 	return phase == "playing"
 end
 
-local function remember_current_score(forceBuild)
+local function remember_current_score()
 	if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
 		online_score_trace("remember_skipped reason=missing_context"
 			.. " hasClient=" .. tostring(ITGOnline ~= nil)
@@ -59,9 +59,6 @@ local function remember_current_score(forceBuild)
 	end
 
 	local snapshot = ITGOnline.lastDisplayedScoreSnapshot
-	if forceBuild == true and ITGOnline.BuildCurrentScoreSnapshot then
-		snapshot = ITGOnline:BuildCurrentScoreSnapshot()
-	end
 	if type(snapshot) ~= "table" then
 		online_score_trace("remember_skipped reason=no_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return
@@ -116,7 +113,7 @@ return Def.Actor{
 
 		-- Judgment messages own snapshot construction. The timer only transports
 		-- the last immutable snapshot, avoiding a full stats walk every 100 ms.
-		remember_current_score(false)
+		remember_current_score()
 		online_score_trace("flush_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 			.. " hasLastSnapshot=" .. tostring(ITGOnline and ITGOnline.lastDisplayedScoreSnapshot ~= nil))

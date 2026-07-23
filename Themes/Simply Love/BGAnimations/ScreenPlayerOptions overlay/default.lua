@@ -216,11 +216,22 @@ local t = Def.ActorFrame{
 			local pn = ToEnumShortString(player)
 
 			local SpeedModRowIndex = FindOptionRowIndex(ScreenOptions,"SpeedMod")
+			local NoteSkinRowIndex = FindOptionRowIndex(ScreenOptions,"NoteSkin")
 			local VariantRowIndex = FindOptionRowIndex(ScreenOptions,"NoteSkinVariant")
 			if SpeedModRowIndex then
 				-- The BitmapText actors for P1 and P2 speedmod are both named "Item", so we need to provide a 1 or 2 to index
 				SpeedModBMTs[pn] = ScreenOptions:GetOptionRow(SpeedModRowIndex):GetChild(""):GetChild("Item")[ PlayerNumber:Reverse()[player]+1 ]
 				self:playcommand("Set"..pn)
+			end
+			if NoteSkinRowIndex then
+				local current_noteskin = SL[pn].ActiveModifiers.NoteSkin
+				if current_noteskin and current_noteskin ~= "" then
+					MESSAGEMAN:Broadcast("RefreshActorProxy", {
+						Player=player,
+						Name="NoteSkin",
+						Value=current_noteskin
+					})
+				end
 			end
 			if VariantRowIndex then
 				-- The BitmapText actors for P1 and P2 variant are both named "Item", so we need to provide a 1 or 2 to index
@@ -280,7 +291,8 @@ local t = Def.ActorFrame{
 			local pn = ToEnumShortString(player)
 			local variant_bmt = VariantBMTs[pn]
 			if variant_bmt then
-				local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant or ""
+				local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant
+					or SL[pn].ActiveModifiers.NoteSkin or ""
 				local screen = SCREENMAN:GetTopScreen()
 
 				MESSAGEMAN:Broadcast("RefreshActorProxy", {Player=player, Name="NoteSkinVariant", Value=current_variant})

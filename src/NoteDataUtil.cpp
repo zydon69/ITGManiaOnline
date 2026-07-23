@@ -53,6 +53,28 @@ static bool IsValidNoteTypeForSnap(NoteType nt) {
   return nt >= NOTE_TYPE_4TH && nt < NUM_NoteType;
 }
 
+static int CountTapNotesWithoutTiming(const NoteData& noteData) {
+  int count = 0;
+  for (int track = 0; track < noteData.GetNumTracks(); ++track) {
+    for (NoteData::const_iterator note = noteData.begin(track);
+         note != noteData.end(track);
+         ++note) {
+      switch (note->second.type) {
+        case TapNoteType_Empty:
+        case TapNoteType_Mine:
+        case TapNoteType_Lift:
+        case TapNoteType_Fake:
+        case TapNoteType_AutoKeysound:
+          break;
+        default:
+          ++count;
+          break;
+      }
+    }
+  }
+  return count;
+}
+
 static TapNote AdditionOwnedBy(
     const TapNote& prototype, const TapNote& source) {
   TapNote result = prototype;
@@ -722,9 +744,11 @@ void NoteDataUtil::SplitCompositeNoteData(
     out.back().SetNumTracks(in.GetNumTracks());
   }
 
-  LogRoutineCoupleDiagnostics(
-      "component=note_data event=split_routine_begin tracks=%d taps=%d",
-      in.GetNumTracks(), in.GetNumTapNotes());
+  if (RoutineCoupleDiagnosticsEnabled()) {
+    LogRoutineCoupleDiagnostics(
+        "component=note_data event=split_routine_begin tracks=%d taps=%d",
+        in.GetNumTracks(), CountTapNotesWithoutTiming(in));
+  }
 
   for (int t = 0; t < in.GetNumTracks(); ++t) {
     for (NoteData::const_iterator iter = in.begin(t); iter != in.end(t);
@@ -745,11 +769,18 @@ void NoteDataUtil::SplitCompositeNoteData(
       out[index].SetTapNote(t, row, tn);
     }
   }
-  LogRoutineCoupleDiagnostics(
-      "component=note_data event=split_routine_complete parts=%zu p1_taps=%d "
-      "p2_taps=%d",
-      out.size(), out.size() > PLAYER_1 ? out[PLAYER_1].GetNumTapNotes() : 0,
-      out.size() > PLAYER_2 ? out[PLAYER_2].GetNumTapNotes() : 0);
+  if (RoutineCoupleDiagnosticsEnabled()) {
+    LogRoutineCoupleDiagnostics(
+        "component=note_data event=split_routine_complete parts=%zu p1_taps=%d "
+        "p2_taps=%d",
+        out.size(),
+        out.size() > PLAYER_1
+            ? CountTapNotesWithoutTiming(out[PLAYER_1])
+            : 0,
+        out.size() > PLAYER_2
+            ? CountTapNotesWithoutTiming(out[PLAYER_2])
+            : 0);
+  }
 }
 
 bool NoteDataUtil::SplitCompositeOrStackedNoteData(
@@ -815,11 +846,14 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
   out[PLAYER_2] = in;
   ShiftTracks(out[PLAYER_2], tracksPerPlayer);
   out[PLAYER_2].SetNumTracks(tracksPerPlayer);
-  LogRoutineCoupleDiagnostics(
-      "component=note_data event=split_couple_complete steps_type=%s "
-      "source_tracks=%d tracks_per_player=%d p1_taps=%d p2_taps=%d",
-      StepsTypeToString(stepsType).c_str(), in.GetNumTracks(), tracksPerPlayer,
-      out[PLAYER_1].GetNumTapNotes(), out[PLAYER_2].GetNumTapNotes());
+  if (RoutineCoupleDiagnosticsEnabled()) {
+    LogRoutineCoupleDiagnostics(
+        "component=note_data event=split_couple_complete steps_type=%s "
+        "source_tracks=%d tracks_per_player=%d p1_taps=%d p2_taps=%d",
+        StepsTypeToString(stepsType).c_str(), in.GetNumTracks(),
+        tracksPerPlayer, CountTapNotesWithoutTiming(out[PLAYER_1]),
+        CountTapNotesWithoutTiming(out[PLAYER_2]));
+  }
   return true;
 }
 
@@ -893,11 +927,13 @@ bool NoteDataUtil::CombineCompositeNoteData(
   }
   combined.RevalidateATIs(std::vector<int>(), false);
   out = combined;
-  LogRoutineCoupleDiagnostics(
-      "component=note_data event=combine_routine_complete parts=%zu "
-      "tracks=%d taps=%d composite=%d",
-      in.size(), out.GetNumTracks(), out.GetNumTapNotes(),
-      out.IsComposite() ? 1 : 0);
+  if (RoutineCoupleDiagnosticsEnabled()) {
+    LogRoutineCoupleDiagnostics(
+        "component=note_data event=combine_routine_complete parts=%zu "
+        "tracks=%d taps=%d composite=%d",
+        in.size(), out.GetNumTracks(), CountTapNotesWithoutTiming(out),
+        out.IsComposite() ? 1 : 0);
+  }
   return true;
 }
 

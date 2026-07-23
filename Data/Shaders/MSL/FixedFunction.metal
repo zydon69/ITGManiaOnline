@@ -13,7 +13,7 @@ struct TransformUniforms {
   float4x4 modelViewProjection;
   float4x4 textureMatrix;
   float zBias;
-  float3 padding;
+  float padding[3];
 };
 
 struct VertexOut {

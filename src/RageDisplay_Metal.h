@@ -166,10 +166,8 @@ class RageDisplay_Metal : public RageDisplay {
 
   RageMatrix CurrentModelViewProjection() const;
   RageMatrix CurrentTextureMatrix() const;
-  RageColor ComputeModelColor(
-      const RageVector3& normal, const RageMatrix& modelView) const;
-  RageColor ComputeCelModelColor(
-      const RageVector3& normal, const RageMatrix& modelView) const;
+  RageColor ComputeModelColor(const RageVector3& normal) const;
+  RageColor ComputeCelModelColor(const RageVector3& normal) const;
   DrawBatch& ActiveBatch(bool forceNew = false);
   bool ReserveDirectVertices(
       size_t vertexCount, DrawBatch** batchOut,
@@ -191,9 +189,6 @@ class RageDisplay_Metal : public RageDisplay {
   bool UploadTexturePixels(
       MetalTexture* texture, RageSurface* img, int xoffset, int yoffset,
       int width, int height);
-  void DrawCompiledTriangles(
-      const std::vector<RageSpriteVertex>& vertices);
-
   ActualVideoModeParams m_Params;
   std::unique_ptr<LowLevelWindow> m_Window;
   std::unique_ptr<MacOSMetalPresenter> m_Presenter;

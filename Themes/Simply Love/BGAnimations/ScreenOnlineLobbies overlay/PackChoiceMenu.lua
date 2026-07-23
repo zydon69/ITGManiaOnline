@@ -13,7 +13,7 @@ return Def.ActorFrame{
 	},
 	LoadFont("Common Bold")..{
 		Name="PackChoiceTitle",
-			Text=THEME:GetString("ScreenOnlineLobbies", "ChoosePackToDownload"),
+		Text=THEME:GetString("ScreenOnlineLobbies", "ChoosePackToDownload"),
 		InitCommand=function(self)
 			self:y(-146):zoom(0.78)
 		end

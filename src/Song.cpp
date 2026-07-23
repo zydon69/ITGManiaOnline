@@ -2377,7 +2377,21 @@ bool Song::Matches(std::string sGroup, std::string sSong) const {
 /* If apInUse is set, it contains a list of steps which are in use elsewhere,
  * and should not be deleted. */
 void Song::FreeAllLoadedFromProfile(
-    ProfileSlot slot, const std::set<Steps*>* setInUse) {
+  ProfileSlot slot, const std::set<Steps*>* setInUse) {
+  bool hasProfileSteps = false;
+  for (Steps* steps : m_vpSteps) {
+    if (steps->WasLoadedFromProfile() &&
+        (slot == ProfileSlot_Invalid ||
+         steps->GetLoadedFromProfileSlot() == slot) &&
+        (setInUse == nullptr || setInUse->find(steps) == setInUse->end())) {
+      hasProfileSteps = true;
+      break;
+    }
+  }
+  if (!hasProfileSteps) {
+    return;
+  }
+
   /* DeleteSteps will remove and recreate autogen notes, which may reorder
    * m_vpSteps, so be careful not to skip over entries. */
   RemoveAutoGenNotes();

@@ -111,8 +111,44 @@ require_source_text("Themes/Simply Love/metrics.ini"
 require_source_text(
   "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
   "THEME:GetString(\"ScreenEvaluation\", \"Early\")")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"MeanTimingError\")")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"MeanOffset\")")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"StdDev\")")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"MaxError\")")
 reject_source_text(
   "Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane5/default.lua"
-  "ScreenString(\"Early\")")
+  "ScreenString(")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/PerPlayer/Upper/RecordTexts.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"MachineRecord\")")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/PerPlayer/Upper/RecordTexts.lua"
+  "THEME:GetString(\"ScreenEvaluation\", \"PersonalRecord\")")
+reject_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenEvaluation common/PerPlayer/Upper/RecordTexts.lua"
+  "ScreenString(")
+require_source_text(
+  "Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/NoteField/DisplayMods.lua"
+  "GetPlayerOptionsString(sourcePlayer, \"ModsLevel_Current\")")
+require_source_text("Themes/Simply Love/Scripts/SL-Helpers.lua"
+  "safe_method(\"PlayerOptions.Mini\", playerOptionsObject, \"Mini\")")
+require_source_text("src/NoteDataUtil.cpp"
+  "static int CountTapNotesWithoutTiming(const NoteData& noteData)")
+require_source_text("src/NoteDataUtil.cpp"
+  "CountTapNotesWithoutTiming(out[PLAYER_1])")
+reject_source_text("src/NoteDataUtil.cpp"
+  "out[PLAYER_1].GetNumTapNotes()")
+require_source_text("src/Steps.cpp"
+  "vParts[pn].GetNumTapNotes(0, MAX_NOTE_ROW, timing)")
+reject_source_text("src/Steps.cpp"
+  "vParts[pn].GetNumTapNotes()")
 
 message(STATUS "Routine/Couple source invariants verified")

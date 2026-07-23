@@ -94,7 +94,7 @@ t[#t+1] = LoadFont("Common Bold")..{
 	InitCommand=function(self) self:xy(-110,-18):diffuse(PlayerColor(player)) end,
 	OnCommand=function(self)
 		if EarnedMachineRecord and HighScoreIndex.Machine+1 > 0 then
-			self:settext(ScreenString("MachineRecord"):format(HighScoreIndex.Machine+1))
+			self:settext(THEME:GetString("ScreenEvaluation", "MachineRecord"):format(HighScoreIndex.Machine+1))
 		end
 	end,
 }
@@ -104,7 +104,7 @@ t[#t+1] = LoadFont("Common Bold")..{
 	InitCommand=function(self) self:xy(-110,24):diffuse(PlayerColor(player)) end,
 	OnCommand=function(self)
 		if EarnedPersonalRecord and HighScoreIndex.Personal+1 > 0 then
-			self:settext(ScreenString("PersonalRecord"):format(HighScoreIndex.Personal+1))
+			self:settext(THEME:GetString("ScreenEvaluation", "PersonalRecord"):format(HighScoreIndex.Personal+1))
 		end
 	end,
 }

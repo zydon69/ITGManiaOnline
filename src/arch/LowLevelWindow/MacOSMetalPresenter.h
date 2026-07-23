@@ -32,10 +32,30 @@ struct MacOSMetalTransformUniforms {
   float padding[3] = {};
 };
 
+static_assert(
+    sizeof(MacOSMetalSolidVertex) == 56,
+    "MacOSMetalSolidVertex must match FixedFunction.metal::VertexIn");
+static_assert(
+    offsetof(MacOSMetalSolidVertex, u) == 16 &&
+        offsetof(MacOSMetalSolidVertex, u2) == 24 &&
+        offsetof(MacOSMetalSolidVertex, textureMatrixScaleX) == 32 &&
+        offsetof(MacOSMetalSolidVertex, r) == 40,
+    "MacOSMetalSolidVertex field offsets must match the packed MSL layout");
+static_assert(
+    sizeof(MacOSMetalTransformUniforms) == 144,
+    "MacOSMetalTransformUniforms must match FixedFunction.metal::TransformUniforms");
+static_assert(
+    offsetof(MacOSMetalTransformUniforms, textureMatrix) == 64 &&
+        offsetof(MacOSMetalTransformUniforms, zBias) == 128 &&
+        offsetof(MacOSMetalTransformUniforms, padding) == 132,
+    "MacOSMetalTransformUniforms field offsets must match the MSL layout");
+
 struct MacOSMetalPresenterRuntimeStats {
   unsigned long long submittedFrames = 0;
   unsigned long long completedFrames = 0;
   unsigned long long offscreenSubmittedFrames = 0;
+  unsigned long long offscreenCompletedFrames = 0;
+  unsigned long long commandBufferErrors = 0;
   unsigned long long prefetchedDrawables = 0;
   unsigned long long consumedDrawables = 0;
   unsigned long long slowDrawableAcquires = 0;
@@ -43,6 +63,12 @@ struct MacOSMetalPresenterRuntimeStats {
   unsigned long long skippedNoPrefetchedDrawableFrames = 0;
   unsigned long long offscreenSkippedNoDrawableFrames = 0;
   unsigned long long offscreenSkippedFrameLimiterFrames = 0;
+};
+
+enum class MacOSMetalPresentResult {
+  Presented,
+  Skipped,
+  Failed,
 };
 
 struct MacOSMetalDrawBatch {
@@ -53,7 +79,6 @@ struct MacOSMetalDrawBatch {
   void* texture = nullptr;
   int textureWidth = 1;
   void* texture2 = nullptr;
-  int texture2Width = 1;
   TextureMode textureMode2 = TextureMode_Modulate;
   bool hasTexture2 = false;
   BlendMode blendMode = BLEND_NORMAL;
@@ -105,14 +130,7 @@ class MacOSMetalPresenter {
   bool AttachLayerAsContentView(void* nsWindow);
   bool ReconfigureAttachedLayer(void* nsWindow, const char* reason);
   void DetachLayer();
-  bool PresentClearFrame(
-      double red, double green, double blue, double alpha, double targetHz);
-  bool PresentSolidBatches(
-      const MacOSMetalDrawBatch* batches, size_t batchCount,
-      bool clearDepth,
-      double clearRed, double clearGreen, double clearBlue, double clearAlpha,
-      double targetHz);
-  bool PresentSolidBatchesOffscreenFirst(
+  MacOSMetalPresentResult PresentSolidBatchesOffscreenFirst(
       const MacOSMetalDrawBatch* batches, size_t batchCount,
       bool clearDepth,
       double clearRed, double clearGreen, double clearBlue, double clearAlpha,

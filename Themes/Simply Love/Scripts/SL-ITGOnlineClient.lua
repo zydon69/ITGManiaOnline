@@ -1102,31 +1102,6 @@ local function room_member_status_summary(room)
 		.. " play={" .. sorted_count_summary(playCounts) .. "}"
 end
 
--- A room event can alter a single member's pack state without changing the
--- room phase, selection, or aggregate status counts.  Keep a deterministic
--- per-member fingerprint so those authoritative updates are never discarded
--- as duplicate snapshots.
-local function room_member_sync_snapshot_key(room)
-	local parts = {}
-	for member in ivalues(online_values(room and room.members or {})) do
-		local user = member.user or member
-		local userId = tostring(user.id or member.user_id or member.userId or "")
-		parts[#parts + 1] = table.concat({
-			userId,
-			tostring(member.role or ""),
-			tostring(member.pack_sync_status or member.packSyncStatus or ""),
-			tostring(member.pack_sync_sequence or member.packSyncSequence or ""),
-			tostring(member.pack_sync_download_progress or member.packSyncDownloadProgress or ""),
-			tostring(member.pack_sync_updated_at or member.packSyncUpdatedAt or ""),
-			tostring(member.song_available == true or member.songAvailable == true),
-			tostring(member.missing_song == true or member.missingSong == true),
-			tostring(member.missing_song_reason or member.missingSongReason or ""),
-		}, ":")
-	end
-	table.sort(parts)
-	return table.concat(parts, ",")
-end
-
 local function room_ready_summary(room)
 	local counts = {}
 	for ready in ivalues(online_values(room and room.ready_states or {})) do
@@ -1866,6 +1841,9 @@ local function current_password(config)
 	return ""
 end
 
+-- Connection configuration and persisted credentials
+-- -----------------------------------------------------------------------
+
 function ITGOnline:Config()
 	if self.config then
 		return self.config
@@ -1879,14 +1857,6 @@ function ITGOnline:Config()
 	self.config = read_config()
 	self.connectionConfig = copy_connection_config(self.config)
 	return self.config
-end
-
-function ITGOnline:IsTrustedConnectionConfig(config)
-	config = config or self.config or self:Config()
-	return is_trusted_online_api_url(config.apiBaseUrl)
-		and is_trusted_online_websocket_url(config.webSocketUrl)
-		and network_allows(config.apiBaseUrl)
-		and network_allows(config.webSocketUrl)
 end
 
 function ITGOnline:ConnectionConfig()
@@ -2803,176 +2773,157 @@ function ITGOnline:IsLobbyRefreshSuppressed()
 end
 
 function ITGOnline:LobbyRefreshSuppressionRemaining()
-		local untilTime = tonumber(self.lobbyRefreshSuppressedUntil) or 0
-		return math.max(0, untilTime - GetTimeSinceStart())
-	end
+	local untilTime = tonumber(self.lobbyRefreshSuppressedUntil) or 0
+	return math.max(0, untilTime - GetTimeSinceStart())
+end
 
 function ITGOnline:SuppressAutomaticLobbyRefresh(seconds, reason)
-		local duration = tonumber(seconds) or 5
-		self.lobbyRefreshDropUntil = math.max(
-			tonumber(self.lobbyRefreshDropUntil) or 0,
-			GetTimeSinceStart() + duration)
-		self.lobbyRefreshQueued = false
-		self.lobbyRefreshQueuedForceFresh = false
-		self.lobbyRefreshDeferredScheduled = false
-		online_flow_trace("lobby_refresh_auto_suppressed duration=" .. tostring(duration)
-			.. " reason=" .. tostring(reason or "unknown"))
-	end
+	local duration = tonumber(seconds) or 5
+	self.lobbyRefreshDropUntil = math.max(
+		tonumber(self.lobbyRefreshDropUntil) or 0,
+		GetTimeSinceStart() + duration)
+	self.lobbyRefreshQueued = false
+	self.lobbyRefreshQueuedForceFresh = false
+	self.lobbyRefreshDeferredScheduled = false
+	online_flow_trace("lobby_refresh_auto_suppressed duration=" .. tostring(duration)
+		.. " reason=" .. tostring(reason or "unknown"))
+end
 
 function ITGOnline:IsAutomaticLobbyRefreshSuppressed()
-		if self.currentRoomId ~= nil then
-			self.lobbyRefreshDropUntil = nil
-			return false
-		end
-		local untilTime = tonumber(self.lobbyRefreshDropUntil) or 0
-		if untilTime <= 0 then return false end
-		if GetTimeSinceStart() <= untilTime then
-			return true
-		end
+	if self.currentRoomId ~= nil then
 		self.lobbyRefreshDropUntil = nil
 		return false
 	end
+	local untilTime = tonumber(self.lobbyRefreshDropUntil) or 0
+	if untilTime <= 0 then return false end
+	if GetTimeSinceStart() <= untilTime then
+		return true
+	end
+	self.lobbyRefreshDropUntil = nil
+	return false
+end
 
 function ITGOnline:ClearLobbyRefreshSuppression(reason)
-		self.lobbyRefreshSuppressedUntil = nil
-		self.lobbyRefreshDropUntil = nil
-		self.lobbyRefreshDeferredScheduled = false
-		self.deferredLobbyRefreshReason = ""
-		self.lobbyRefreshQueued = false
-		self.lobbyRefreshQueuedForceFresh = false
-		online_flow_trace("lobby_refresh_suppression_cleared reason=" .. tostring(reason or "unknown")
-			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-			.. " screen=" .. tostring(self.currentScreenName or "nil"))
-	end
+	self.lobbyRefreshSuppressedUntil = nil
+	self.lobbyRefreshDropUntil = nil
+	self.lobbyRefreshDeferredScheduled = false
+	self.deferredLobbyRefreshReason = ""
+	self.lobbyRefreshQueued = false
+	self.lobbyRefreshQueuedForceFresh = false
+	online_flow_trace("lobby_refresh_suppression_cleared reason=" .. tostring(reason or "unknown")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+end
 
 function ITGOnline:InvalidateRoomUiLobbyRefresh(reason)
-		self.roomUiLobbyRefreshGeneration = (tonumber(self.roomUiLobbyRefreshGeneration) or 0) + 1
-		self.roomUiLobbyRefreshDeferredScheduled = false
-		if tostring(self.deferredLobbyRefreshReason or ""):sub(1, 16) == "room_ui_refresh:" then
-			self.deferredLobbyRefreshRoomUiGeneration = nil
-		end
-		online_flow_trace("room_ui_lobby_refresh_invalidated reason=" .. tostring(reason or "unknown")
-			.. " generation=" .. tostring(self.roomUiLobbyRefreshGeneration))
+	self.roomUiLobbyRefreshGeneration = (tonumber(self.roomUiLobbyRefreshGeneration) or 0) + 1
+	self.roomUiLobbyRefreshDeferredScheduled = false
+	if tostring(self.deferredLobbyRefreshReason or ""):sub(1, 16) == "room_ui_refresh:" then
+		self.deferredLobbyRefreshRoomUiGeneration = nil
 	end
+	online_flow_trace("room_ui_lobby_refresh_invalidated reason=" .. tostring(reason or "unknown")
+		.. " generation=" .. tostring(self.roomUiLobbyRefreshGeneration))
+end
 
 function ITGOnline:ScheduleDeferredLobbyRefresh(delay, reason)
-		local source = tostring(reason or "unknown")
-		local roomUiGeneration = nil
-		if source:sub(1, 16) == "room_ui_refresh:" then
-			roomUiGeneration = tonumber(self.roomUiLobbyRefreshGeneration) or 0
-		end
-		online_flow_trace("lobby_refresh_deferred_schedule_begin"
-			.. " source=" .. tostring(source)
-			.. " delay=" .. tostring(delay)
-			.. " roomUiGeneration=" .. tostring(roomUiGeneration or "nil")
-			.. " deferredAlready=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
-			.. " deferredReason=" .. tostring(self.deferredLobbyRefreshReason or "nil")
-			.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
-			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
-			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-			.. " screen=" .. tostring(self.currentScreenName or "nil"))
-		if self:IsAutomaticLobbyRefreshSuppressed() then
-			if self.lobbyRefreshDeferredScheduled
-				and tostring(self.deferredLobbyRefreshReason or ""):sub(1, 11) == "post_leave:" then
-				online_flow_trace(
-					"lobby_refresh_deferred_post_leave_ignored reason=duplicate_existing" ..
-					" source=" .. source ..
-					" existing=" .. tostring(self.deferredLobbyRefreshReason or "nil"))
-				return
-			end
+	local source = tostring(reason or "unknown")
+	local roomUiGeneration = nil
+	if source:sub(1, 16) == "room_ui_refresh:" then
+		roomUiGeneration = tonumber(self.roomUiLobbyRefreshGeneration) or 0
+	end
+	online_flow_trace("lobby_refresh_deferred_schedule_begin"
+		.. " source=" .. tostring(source)
+		.. " delay=" .. tostring(delay)
+		.. " roomUiGeneration=" .. tostring(roomUiGeneration or "nil")
+		.. " deferredAlready=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
+		.. " deferredReason=" .. tostring(self.deferredLobbyRefreshReason or "nil")
+		.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
+		.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	if self:IsAutomaticLobbyRefreshSuppressed() then
+		if self.lobbyRefreshDeferredScheduled
+			and tostring(self.deferredLobbyRefreshReason or ""):sub(1, 11) == "post_leave:" then
 			online_flow_trace(
-				"lobby_refresh_deferred_post_leave delay=" .. tostring(delay) ..
-				" source=" .. source)
-			self.lobbyRefreshDeferredScheduled = true
-			self.deferredLobbyRefreshReason = "post_leave:" .. source
-			online_flow_trace("lobby_refresh_deferred_broadcast"
-				.. " source=" .. source
-				.. " broadcastReason=" .. tostring(self.deferredLobbyRefreshReason)
-				.. " delay=" .. tostring(math.max(0.05, tonumber(delay) or 0.05))
-				.. " mode=post_leave")
-			safe_broadcast("ITGOnlineLobbyRefreshDeferred", {
-				delay = math.max(0.05, tonumber(delay) or 0.05),
-				reason = "post_leave:" .. source,
-				roomUiGeneration = roomUiGeneration,
-			})
+				"lobby_refresh_deferred_post_leave_ignored reason=duplicate_existing" ..
+				" source=" .. source ..
+				" existing=" .. tostring(self.deferredLobbyRefreshReason or "nil"))
 			return
 		end
-		self.deferredLobbyRefreshReason = source
-		self.deferredLobbyRefreshRoomUiGeneration = roomUiGeneration
+		online_flow_trace(
+			"lobby_refresh_deferred_post_leave delay=" .. tostring(delay) ..
+			" source=" .. source)
 		self.lobbyRefreshDeferredScheduled = true
+		self.deferredLobbyRefreshReason = "post_leave:" .. source
 		online_flow_trace("lobby_refresh_deferred_broadcast"
 			.. " source=" .. source
 			.. " broadcastReason=" .. tostring(self.deferredLobbyRefreshReason)
 			.. " delay=" .. tostring(math.max(0.05, tonumber(delay) or 0.05))
-			.. " mode=normal"
-			.. " roomUiGeneration=" .. tostring(roomUiGeneration or "nil"))
+			.. " mode=post_leave")
 		safe_broadcast("ITGOnlineLobbyRefreshDeferred", {
 			delay = math.max(0.05, tonumber(delay) or 0.05),
-			reason = source,
+			reason = "post_leave:" .. source,
 			roomUiGeneration = roomUiGeneration,
 		})
+		return
 	end
+	self.deferredLobbyRefreshReason = source
+	self.deferredLobbyRefreshRoomUiGeneration = roomUiGeneration
+	self.lobbyRefreshDeferredScheduled = true
+	online_flow_trace("lobby_refresh_deferred_broadcast"
+		.. " source=" .. source
+		.. " broadcastReason=" .. tostring(self.deferredLobbyRefreshReason)
+		.. " delay=" .. tostring(math.max(0.05, tonumber(delay) or 0.05))
+		.. " mode=normal"
+		.. " roomUiGeneration=" .. tostring(roomUiGeneration or "nil"))
+	safe_broadcast("ITGOnlineLobbyRefreshDeferred", {
+		delay = math.max(0.05, tonumber(delay) or 0.05),
+		reason = source,
+		roomUiGeneration = roomUiGeneration,
+	})
+end
 
 function ITGOnline:ScheduleCoalescedLobbyRefresh(reason, delay)
-		local refreshDelay = math.max(
-			0.05,
-			tonumber(delay) or tonumber(self.lobbyRefreshReplayDelaySeconds) or 0.20)
-		local roomSnapshotAge = GetTimeSinceStart() - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
-		if self.currentRoomId
-			and roomSnapshotAge >= 0
-			and roomSnapshotAge < 0.50 then
-			online_flow_trace("lobby_refresh_coalesced_skipped reason=recent_room_snapshot"
-				.. " requestReason=" .. tostring(reason or "unknown")
-				.. " age=" .. string.format("%.3f", roomSnapshotAge)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
-				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			return
-		end
-		if self.lobbyRefreshDeferredScheduled then
-			online_flow_trace("lobby_refresh_coalesced_existing reason=" .. tostring(reason or "unknown")
-				.. " delay=" .. tostring(refreshDelay)
-				.. " existingReason=" .. tostring(self.deferredLobbyRefreshReason or "nil")
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			return
-		end
-		online_flow_trace("lobby_refresh_coalesced_scheduled reason=" .. tostring(reason or "unknown")
-			.. " delay=" .. tostring(refreshDelay)
-			.. " lastAppliedAge=" .. tostring(GetTimeSinceStart() - (tonumber(self.lobbyRefreshLastAppliedAt) or 0))
+	local refreshDelay = math.max(
+		0.05,
+		tonumber(delay) or tonumber(self.lobbyRefreshReplayDelaySeconds) or 0.20)
+	local roomSnapshotAge = GetTimeSinceStart() - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+	if self.currentRoomId
+		and roomSnapshotAge >= 0
+		and roomSnapshotAge < 0.50 then
+		online_flow_trace("lobby_refresh_coalesced_skipped reason=recent_room_snapshot"
+			.. " requestReason=" .. tostring(reason or "unknown")
+			.. " age=" .. string.format("%.3f", roomSnapshotAge)
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-			.. " screen=" .. tostring(self.currentScreenName or "nil")
-			.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
-			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
-		self:ScheduleDeferredLobbyRefresh(refreshDelay, "coalesced:" .. tostring(reason or "unknown"))
+			.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		return
 	end
+	if self.lobbyRefreshDeferredScheduled then
+		online_flow_trace("lobby_refresh_coalesced_existing reason=" .. tostring(reason or "unknown")
+			.. " delay=" .. tostring(refreshDelay)
+			.. " existingReason=" .. tostring(self.deferredLobbyRefreshReason or "nil")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		return
+	end
+	online_flow_trace("lobby_refresh_coalesced_scheduled reason=" .. tostring(reason or "unknown")
+		.. " delay=" .. tostring(refreshDelay)
+		.. " lastAppliedAge=" .. tostring(GetTimeSinceStart() - (tonumber(self.lobbyRefreshLastAppliedAt) or 0))
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil")
+		.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
+		.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
+	self:ScheduleDeferredLobbyRefresh(refreshDelay, "coalesced:" .. tostring(reason or "unknown"))
+end
 
 function ITGOnline:RequestLobbyRefresh(reason, options)
-		options = type(options) == "table" and options or {}
-		local source = tostring(reason or options.reason or "unknown")
-		if options.immediate == true then
-			online_flow_trace("lobby_refresh_requested source=" .. source
-				.. " mode=immediate"
-				.. " forceFresh=" .. tostring(options.forceFresh == true)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
-				.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
-				.. " deferred=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
-				.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
-				.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
-				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			self:QueueLobbyRefresh({
-				reason = source,
-				forceFresh = options.forceFresh == true,
-				ignoreSuppression = options.ignoreSuppression == true,
-			})
-			return true
-		end
-
-		local delay = tonumber(options.delay)
+	options = type(options) == "table" and options or {}
+	local source = tostring(reason or options.reason or "unknown")
+	if options.immediate == true then
 		online_flow_trace("lobby_refresh_requested source=" .. source
-			.. " mode=coalesced"
-			.. " delay=" .. tostring(delay or self.lobbyRefreshReplayDelaySeconds or 0.20)
+			.. " mode=immediate"
+			.. " forceFresh=" .. tostring(options.forceFresh == true)
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
 			.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
@@ -2980,15 +2931,34 @@ function ITGOnline:RequestLobbyRefresh(reason, options)
 			.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
 			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
 			.. " screen=" .. tostring(self.currentScreenName or "nil"))
-		self:ScheduleCoalescedLobbyRefresh(source, delay)
+		self:QueueLobbyRefresh({
+			reason = source,
+			forceFresh = options.forceFresh == true,
+			ignoreSuppression = options.ignoreSuppression == true,
+		})
 		return true
 	end
 
+	local delay = tonumber(options.delay)
+	online_flow_trace("lobby_refresh_requested source=" .. source
+		.. " mode=coalesced"
+		.. " delay=" .. tostring(delay or self.lobbyRefreshReplayDelaySeconds or 0.20)
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
+		.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
+		.. " deferred=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
+		.. " automaticSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
+		.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true)
+		.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	self:ScheduleCoalescedLobbyRefresh(source, delay)
+	return true
+end
+
 function ITGOnline:HasLobbyRefreshScheduler()
-		return self.QueueLobbyRefresh ~= nil
-			and self.ScheduleCoalescedLobbyRefresh ~= nil
-			and self.RequestLobbyRefresh ~= nil
-	end
+	return self.QueueLobbyRefresh ~= nil
+		and self.ScheduleCoalescedLobbyRefresh ~= nil
+		and self.RequestLobbyRefresh ~= nil
+end
 
 function ITGOnline:CurrentRoomConflictCode(decoded, response)
 	local currentRoomMeta = sync_current_room_meta(decoded)
@@ -3120,6 +3090,9 @@ function ITGOnline:CompleteCancelledRequest(requestId, record, reason)
 		.. " reason=" .. tostring(reason or "cancelled"))
 	safe_callback(record.callback, false, nil, response)
 end
+
+-- HTTP request lifecycle
+-- -----------------------------------------------------------------------
 
 function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, options)
 	options = options or {}
@@ -4072,40 +4045,6 @@ function ITGOnline:ManagerAutoReadyKey(room, readyPhase)
 	return tostring(readyPhase or "") .. "|" .. tostring(self:RoomSongRoundKey(room))
 end
 
-function ITGOnline:RoomMembersConfirmedSelectedSong(room)
-	room = room or self.currentRoom
-	local members = room and room.members or {}
-	if #members == 0 then
-		return false, "no_members", "members=0"
-	end
-
-	local waiting = {}
-	local confirmed = 0
-	for member in ivalues(members) do
-		local user = member.user or member
-		local userId = tostring(user.id or member.user_id or "?")
-		local displayName = user_display_name(user, "Player " .. userId)
-		local packStatus = tostring(member.pack_sync_status or "none")
-		local songAvailable = member.song_available == true
-		local missingSong = member.missing_song == true
-
-		if songAvailable and not missingSong then
-			confirmed = confirmed + 1
-		else
-			waiting[#waiting + 1] = tostring(displayName)
-				.. ":songAvailable=" .. tostring(songAvailable)
-				.. ",missingSong=" .. tostring(missingSong)
-				.. ",packSyncStatus=" .. tostring(packStatus)
-		end
-	end
-
-	if #waiting > 0 then
-		return false, "members_song_not_confirmed", table.concat(waiting, ";")
-	end
-
-	return true, "all_members_song_confirmed", "confirmed=" .. tostring(confirmed) .. "/" .. tostring(#members)
-end
-
 function ITGOnline:MaybeAutoReadyManager(room)
 	room = room or self.currentRoom
 	if not room or not room.id or not self.currentRoomId then return end
@@ -4439,19 +4378,6 @@ function ITGOnline:KnownRoomPhaseOrNil(value)
 	local phase = self:NormalizeRoomPhase(value)
 	if phase == "unknown" then return nil end
 	return phase
-end
-
-function ITGOnline:RoomPhaseRank(phase)
-	phase = self:NormalizeRoomPhase(phase)
-	local ranks = {
-		lobby = 1,
-		lobby_ready = 2,
-		config = 3,
-		starting = 4,
-		playing = 5,
-		results = 6,
-	}
-	return ranks[phase] or 0
 end
 
 function ITGOnline:RoomSongRoundKey(room)
@@ -4833,6 +4759,9 @@ function ITGOnline:RoomSnapshotRegressesPhase(previousRoom, incomingRoom, source
 
 	return true
 end
+
+-- Authoritative room snapshots and reconciliation
+-- -----------------------------------------------------------------------
 
 function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	online_flow_trace_throttled("room_snapshot_normalize_begin", 0.75,
@@ -6682,6 +6611,9 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 	return keepAlive
 end
 
+-- Screen navigation driven by room phase
+-- -----------------------------------------------------------------------
+
 function ITGOnline:PreferredScreenForRoomPhase(screenName)
 	if not self.currentRoom then
 		online_flow_trace("preferred=nil reason=no_current_room screen=" .. tostring(screenName or "nil"))
@@ -7050,7 +6982,6 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 		local navigated = direct_navigation("evaluation_room_navigation_direct")
 		if navigated then
 			self.onlineEvaluationExitRequested = true
-			self.onlineEvaluationExitRequestedAt = GetTimeSinceStart()
 		end
 		return navigated
 	end
@@ -7510,6 +7441,9 @@ function ITGOnline:HandleOnlineGameplayScreenTransition(previousScreenName, next
 		end
 	end
 end
+
+-- Authentication and realtime connection
+-- -----------------------------------------------------------------------
 
 function ITGOnline:Login(callback)
 	self.authAttemptGeneration = (tonumber(self.authAttemptGeneration) or 0) + 1
@@ -8419,6 +8353,9 @@ function ITGOnline:Disconnect(options)
 	safe_broadcast("ITGOnlineLoginStateChanged")
 end
 
+-- Paginated session synchronization
+-- -----------------------------------------------------------------------
+
 function ITGOnline:Sync(callback)
 	if self.disconnecting then
 		online_flow_trace("sync_skipped reason=disconnecting")
@@ -8942,6 +8879,9 @@ function ITGOnline:SyncPages(accumulator, generation, pageCount)
 		self:FinishSync(generation, ok, decoded, response)
 	end)
 end
+
+-- Song identity, selection, and local chart matching
+-- -----------------------------------------------------------------------
 
 function ITGOnline:BuildSongPayloadFor(song, steps)
 	online_flow_trace_throttled("song_payload_build_for", 1.0,
@@ -10468,6 +10408,9 @@ function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
 	}, "|")
 end
 
+-- Live and final score delivery
+-- -----------------------------------------------------------------------
+
 function ITGOnline:BuildCurrentScoreSnapshot()
 	local player = online_score_source_player()
 	local stats = online_stage_stats_for_score(player)
@@ -11801,6 +11744,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end)
 end
 
+-- Ready state and room start
+-- -----------------------------------------------------------------------
+
 function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 	if not self.currentRoomId then
 		online_flow_trace("ready_request_failed reason=no_current_room phase=" .. tostring(phase)
@@ -12740,6 +12686,9 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	end
 end
 
+-- Gameplay session state
+-- -----------------------------------------------------------------------
+
 function ITGOnline:ApplyPlayStateSnapshot(playState, source, versionMs, options)
 	options = type(options) == "table" and options or {}
 	if type(playState) ~= "table" or not self.currentRoom then
@@ -12832,61 +12781,6 @@ function ITGOnline:BroadcastCurrentRoomState(source)
 	else
 		safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom))
 	end
-end
-
-function ITGOnline:ResetLocalPlayStateForLobby(source)
-	if not self.currentRoom then return false end
-
-	local roomId = tostring(self.currentRoomId or self.currentRoom.id or "")
-	local previousPlayState = type(self.currentRoom.play_state) == "table" and self.currentRoom.play_state or {}
-	local previousSessions = type(previousPlayState.sessions) == "table" and #previousPlayState.sessions or 0
-	local previousFinalResults = type(previousPlayState.final_results) == "table" and #previousPlayState.final_results or 0
-	local previousSubmittedScores = type(previousPlayState.submitted_scores) == "table" and #previousPlayState.submitted_scores or 0
-	local sessions = {}
-
-	for _, member in ipairs(self.currentRoom.members or {}) do
-		local user = type(member.user) == "table" and member.user or {}
-		local userId = member.user_id or member.userId or user.id or member.id
-		if userId ~= nil then
-			sessions[#sessions + 1] = {
-				user_id = userId,
-				user = user,
-				state = "pending",
-			}
-		end
-	end
-
-	self.currentRoom.play_state = {
-		state = "pending",
-		sessions = sessions,
-		submitted_scores = {},
-		final_results = {},
-		live_scores = {},
-		top_scores = {},
-	}
-
-	if roomId ~= "" then
-		self.currentRoomPlayStateByRoomId = self.currentRoomPlayStateByRoomId or {}
-		self.currentRoomPlayStateByRoomId[roomId] = {
-			play_state = self.currentRoom.play_state,
-			version_ms = 0,
-			applied_at = GetTimeSinceStart(),
-			source = tostring(source or "local_lobby_reset"),
-		}
-	end
-
-	if self.StopLiveScoreFlush then
-		self:StopLiveScoreFlush("local_lobby_play_state_reset:" .. tostring(source or "unknown"))
-	end
-
-	online_flow_trace("local_lobby_play_state_reset"
-		.. " source=" .. tostring(source or "unknown")
-		.. " room=" .. tostring(roomId)
-		.. " previousSessions=" .. tostring(previousSessions)
-		.. " nextSessions=" .. tostring(#sessions)
-		.. " previousFinalResults=" .. tostring(previousFinalResults)
-		.. " previousSubmittedScores=" .. tostring(previousSubmittedScores))
-	return true
 end
 
 function ITGOnline:ShouldBlockEvaluationAutoAdvance()
@@ -13913,6 +13807,9 @@ function ITGOnline:VisibleSecondsUntilScheduledStart()
 	return visible
 end
 
+-- Presence, heartbeat, and lobby discovery
+-- -----------------------------------------------------------------------
+
 function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	status = status or "available"
 	activityRetryCount = math.max(0, tonumber(activityRetryCount) or 0)
@@ -14472,7 +14369,6 @@ function ITGOnline:ResetPostRoomExitLobbyRefreshState(reason)
 	self.lobbyRefreshDropUntil = nil
 	self.postRoomExitLobbyRefreshPending = true
 	self.postRoomExitLobbyRefreshReason = source
-	self.postRoomExitLobbyRefreshRequestedAt = GetTimeSinceStart()
 	online_flow_trace("post_room_exit_lobby_refresh_state_reset reason=" .. source
 		.. " screen=" .. tostring(self.currentScreenName or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
@@ -14514,257 +14410,257 @@ function ITGOnline:ShouldSuppressLobbyCandidate(roomId, reason)
 end
 
 function ITGOnline:QueueLobbyRefresh(options)
-		options = type(options) == "table" and options or {}
-		local ignoreSuppression = options.ignoreSuppression == true
-		local refreshReason = tostring(options.reason or "unknown")
-		local refreshScreen = tostring(self.currentScreenName or "nil")
-		local forceFresh = options.forceFresh == true
-			or refreshReason:match("^post_room_exit:") ~= nil
-			or (self.currentRoomId == nil and self:IsOnlineLobbyScreen(refreshScreen) and refreshReason:match("refresh") ~= nil)
-		local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
-		local gameplayNoiseRefresh = refreshReason == "presence.updated"
-			or refreshReason == "heartbeat_ack"
-			or refreshReason == "lobby.updated"
-			or refreshReason == "room.started"
-			or refreshReason == "room.load_requested"
-			or refreshReason == "room.start_scheduled"
-			or refreshReason == "room.member_pack_sync_updated"
-		if refreshIsGameplay and self.currentRoomId and not ignoreSuppression and gameplayNoiseRefresh then
-			online_flow_trace("lobby_refresh_skipped reason=gameplay_lobby_noise"
-				.. " requestReason=" .. refreshReason
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " screen=" .. refreshScreen)
-			return
-		end
-		local now = GetTimeSinceStart()
-		local recentRoomSnapshotAge = now - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
-		local automaticRoomUiRefresh = refreshReason:match("^coalesced:queued_after_response:") ~= nil
-			or refreshReason:match("^queued_after_response:") ~= nil
-			or refreshReason:match("^room_ui_refresh:") ~= nil
-			or refreshReason == "lobby_refresh_current_room:fetch_lobby"
-		if not ignoreSuppression
-			and self.currentRoomId
-			and automaticRoomUiRefresh
-			and recentRoomSnapshotAge >= 0
-			and recentRoomSnapshotAge < 0.50 then
-			online_flow_trace("lobby_refresh_skipped reason=recent_room_snapshot"
-				.. " requestReason=" .. refreshReason
-				.. " age=" .. string.format("%.3f", recentRoomSnapshotAge)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
-				.. " screen=" .. refreshScreen)
-			return
-		end
-		if self.currentRoomId == nil and not ignoreSuppression and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
-			local lastPostLeaveAt = tonumber(self.lastPostLeaveLobbyRefreshAt) or 0
-			if refreshReason == "leave_room_confirmed" or lastPostLeaveAt <= 0 then
-				self.lastPostLeaveLobbyRefreshAt = now
-				self.lastPostLeaveLobbyRefreshReason = refreshReason
-			elseif now - lastPostLeaveAt < 0.8 then
-				online_flow_trace("lobby_refresh_skipped reason=post_leave_coalesced"
-					.. " requestReason=" .. refreshReason
-					.. " previousReason=" .. tostring(self.lastPostLeaveLobbyRefreshReason or "nil")
-					.. " age=" .. string.format("%.3f", now - lastPostLeaveAt))
-				return
-			else
-				self.lastPostLeaveLobbyRefreshAt = now
-				self.lastPostLeaveLobbyRefreshReason = refreshReason
-			end
-		end
-		online_flow_trace("lobby_refresh_queue_begin screen=" .. refreshScreen
-			.. " generation=" .. tostring(self.screenGeneration or "nil")
+	options = type(options) == "table" and options or {}
+	local ignoreSuppression = options.ignoreSuppression == true
+	local refreshReason = tostring(options.reason or "unknown")
+	local refreshScreen = tostring(self.currentScreenName or "nil")
+	local forceFresh = options.forceFresh == true
+		or refreshReason:match("^post_room_exit:") ~= nil
+		or (self.currentRoomId == nil and self:IsOnlineLobbyScreen(refreshScreen) and refreshReason:match("refresh") ~= nil)
+	local refreshIsGameplay = self:IsOnlineGameplayScreen(refreshScreen)
+	local gameplayNoiseRefresh = refreshReason == "presence.updated"
+		or refreshReason == "heartbeat_ack"
+		or refreshReason == "lobby.updated"
+		or refreshReason == "room.started"
+		or refreshReason == "room.load_requested"
+		or refreshReason == "room.start_scheduled"
+		or refreshReason == "room.member_pack_sync_updated"
+	if refreshIsGameplay and self.currentRoomId and not ignoreSuppression and gameplayNoiseRefresh then
+		online_flow_trace("lobby_refresh_skipped reason=gameplay_lobby_noise"
+			.. " requestReason=" .. refreshReason
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-			.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
-			.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
-			.. " deferred=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
-			.. " reason=" .. refreshReason
-			.. " ignoreSuppression=" .. tostring(ignoreSuppression == true)
-			.. " forceFresh=" .. tostring(forceFresh == true)
-			.. " autoSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
-			.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
-		if forceFresh then
-			self.lobbyRefreshSuppressedUntil = nil
-			self.lobbyRefreshDropUntil = nil
-			if self.lobbyRefreshInFlight then
-				local previousReason = tostring(self.lobbyRefreshQueuedReason or "")
-				self.lobbyRefreshQueued = true
-				self.lobbyRefreshQueuedReason = refreshReason
-				self.lobbyRefreshQueuedAt = GetTimeSinceStart()
-				self.lobbyRefreshQueuedForceFresh = true
-				online_flow_trace("lobby_refresh_force_fresh_queued reason=" .. refreshReason
-					.. " queuedReason=" .. tostring(self.lobbyRefreshQueuedReason or "nil")
-					.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil")
-					.. " screen=" .. refreshScreen)
-				return
-			end
-			self.lobbyRefreshGeneration = (tonumber(self.lobbyRefreshGeneration) or 0) + 1
-			self.lobbyRefreshQueued = false
-			self.lobbyRefreshQueuedReason = ""
-			self.lobbyRefreshQueuedAt = 0
-			self.lobbyRefreshQueuedForceFresh = false
-			self.lobbyRefreshDeferredScheduled = false
-			self.deferredLobbyRefreshReason = ""
-			self.deferredLobbyRefreshRoomUiGeneration = nil
-		end
-		if not ignoreSuppression and self:IsAutomaticLobbyRefreshSuppressed() then
-			local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
-			online_flow_trace("lobby_refresh_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
-			self.lobbyRefreshQueued = true
-			if not self.lobbyRefreshDeferredScheduled then
-				self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_auto_suppressed")
-			end
+			.. " screen=" .. refreshScreen)
+		return
+	end
+	local now = GetTimeSinceStart()
+	local recentRoomSnapshotAge = now - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+	local automaticRoomUiRefresh = refreshReason:match("^coalesced:queued_after_response:") ~= nil
+		or refreshReason:match("^queued_after_response:") ~= nil
+		or refreshReason:match("^room_ui_refresh:") ~= nil
+		or refreshReason == "lobby_refresh_current_room:fetch_lobby"
+	if not ignoreSuppression
+		and self.currentRoomId
+		and automaticRoomUiRefresh
+		and recentRoomSnapshotAge >= 0
+		and recentRoomSnapshotAge < 0.50 then
+		online_flow_trace("lobby_refresh_skipped reason=recent_room_snapshot"
+			.. " requestReason=" .. refreshReason
+			.. " age=" .. string.format("%.3f", recentRoomSnapshotAge)
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil")
+			.. " screen=" .. refreshScreen)
+		return
+	end
+	if self.currentRoomId == nil and not ignoreSuppression and self:IsPostLeaveLobbyRefreshReason(refreshReason) then
+		local lastPostLeaveAt = tonumber(self.lastPostLeaveLobbyRefreshAt) or 0
+		if refreshReason == "leave_room_confirmed" or lastPostLeaveAt <= 0 then
+			self.lastPostLeaveLobbyRefreshAt = now
+			self.lastPostLeaveLobbyRefreshReason = refreshReason
+		elseif now - lastPostLeaveAt < 0.8 then
+			online_flow_trace("lobby_refresh_skipped reason=post_leave_coalesced"
+				.. " requestReason=" .. refreshReason
+				.. " previousReason=" .. tostring(self.lastPostLeaveLobbyRefreshReason or "nil")
+				.. " age=" .. string.format("%.3f", now - lastPostLeaveAt))
 			return
+		else
+			self.lastPostLeaveLobbyRefreshAt = now
+			self.lastPostLeaveLobbyRefreshReason = refreshReason
 		end
-		if not ignoreSuppression and self:IsLobbyRefreshSuppressed() then
-			online_flow_trace("lobby_refresh_skipped reason=suppressed_after_leave")
-			self.lobbyRefreshQueued = true
-			if not self.lobbyRefreshDeferredScheduled then
-				self:ScheduleDeferredLobbyRefresh(
-					self:LobbyRefreshSuppressionRemaining() + 0.05,
-				"suppressed_before_request")
-			end
-			return
-		end
-		if refreshIsGameplay and not ignoreSuppression then
-			if self.lobbyRefreshInFlight then
-				online_flow_trace_throttled("lobby_refresh_gameplay_inflight_skip", 1.0,
-					"lobby_refresh_skipped reason=gameplay_inflight_no_replay"
-					.. " requestReason=" .. refreshReason
-					.. " screen=" .. refreshScreen
-					.. " room=" .. tostring(self.currentRoomId or "nil"))
-				return
-			end
-
-			local now = GetTimeSinceStart()
-			local minInterval = math.max(1.0, tonumber(self.gameplayLobbyRefreshMinIntervalSeconds) or 5.0)
-			local elapsed = now - (tonumber(self.lastGameplayLobbyRefreshAt) or 0)
-			if elapsed < minInterval then
-				online_flow_trace_throttled("lobby_refresh_gameplay_throttled", 1.0,
-					"lobby_refresh_skipped reason=gameplay_throttle"
-					.. " requestReason=" .. refreshReason
-					.. " elapsed=" .. string.format("%.2f", elapsed)
-					.. " minInterval=" .. string.format("%.2f", minInterval)
-					.. " room=" .. tostring(self.currentRoomId or "nil"))
-				return
-			end
-			self.lastGameplayLobbyRefreshAt = now
-		end
+	end
+	online_flow_trace("lobby_refresh_queue_begin screen=" .. refreshScreen
+		.. " generation=" .. tostring(self.screenGeneration or "nil")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+		.. " inFlight=" .. tostring(self.lobbyRefreshInFlight == true)
+		.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
+		.. " deferred=" .. tostring(self.lobbyRefreshDeferredScheduled == true)
+		.. " reason=" .. refreshReason
+		.. " ignoreSuppression=" .. tostring(ignoreSuppression == true)
+		.. " forceFresh=" .. tostring(forceFresh == true)
+		.. " autoSuppressed=" .. tostring(self:IsAutomaticLobbyRefreshSuppressed() == true)
+		.. " suppressed=" .. tostring(self:IsLobbyRefreshSuppressed() == true))
+	if forceFresh then
+		self.lobbyRefreshSuppressedUntil = nil
+		self.lobbyRefreshDropUntil = nil
 		if self.lobbyRefreshInFlight then
 			local previousReason = tostring(self.lobbyRefreshQueuedReason or "")
 			self.lobbyRefreshQueued = true
 			self.lobbyRefreshQueuedReason = refreshReason
 			self.lobbyRefreshQueuedAt = GetTimeSinceStart()
-			self.lobbyRefreshQueuedForceFresh = self.lobbyRefreshQueuedForceFresh == true or forceFresh
-			online_flow_trace("lobby_refresh_join_inflight queued=true"
-				.. " reason=" .. refreshReason
-				.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil"))
+			self.lobbyRefreshQueuedForceFresh = true
+			online_flow_trace("lobby_refresh_force_fresh_queued reason=" .. refreshReason
+				.. " queuedReason=" .. tostring(self.lobbyRefreshQueuedReason or "nil")
+				.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil")
+				.. " screen=" .. refreshScreen)
 			return
 		end
+		self.lobbyRefreshGeneration = (tonumber(self.lobbyRefreshGeneration) or 0) + 1
+		self.lobbyRefreshQueued = false
+		self.lobbyRefreshQueuedReason = ""
+		self.lobbyRefreshQueuedAt = 0
+		self.lobbyRefreshQueuedForceFresh = false
 		self.lobbyRefreshDeferredScheduled = false
-
-		self.lobbyRefreshInFlight = true
-		local lobbyRefreshGeneration = tonumber(self.lobbyRefreshGeneration) or 0
-		local refreshPurpose = "background_state_tracking"
-		if self:IsOnlineLobbyScreen(refreshScreen) then
-			refreshPurpose = "lobby_ui_and_state"
-		elseif self:IsOnlineOptionsScreen(refreshScreen) then
-			refreshPurpose = "options_room_state_tracking"
-		elseif self:IsOnlineGameplayScreen(refreshScreen) then
-			refreshPurpose = "gameplay_room_state_tracking"
+		self.deferredLobbyRefreshReason = ""
+		self.deferredLobbyRefreshRoomUiGeneration = nil
+	end
+	if not ignoreSuppression and self:IsAutomaticLobbyRefreshSuppressed() then
+		local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
+		online_flow_trace("lobby_refresh_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
+		self.lobbyRefreshQueued = true
+		if not self.lobbyRefreshDeferredScheduled then
+			self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_auto_suppressed")
 		end
-		online_flow_trace("lobby_refresh_request screen=" .. tostring(self.currentScreenName or "nil")
-			.. " room=" .. tostring(self.currentRoomId or "nil")
-			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-			.. " purpose=" .. tostring(refreshPurpose))
-		self:FetchLobby(function(ok, decoded)
-			if lobbyRefreshGeneration ~= (tonumber(self.lobbyRefreshGeneration) or 0) then
-				online_flow_trace("lobby_refresh_response_dropped reason=generation_mismatch"
-					.. " requestGeneration=" .. tostring(lobbyRefreshGeneration)
-					.. " currentGeneration=" .. tostring(self.lobbyRefreshGeneration or 0)
-					.. " reason=" .. tostring(refreshReason))
-				return
-			end
-			self.lobbyRefreshInFlight = false
-			if forceFresh then
-				self.postRoomExitLobbyRefreshPending = false
-				self.postRoomExitLobbyRefreshReason = ""
-			end
-			if self.disconnecting or not sessionAccessToken then
-				self.lobbyRefreshQueued = false
-				self.lobbyRefreshQueuedReason = ""
-				self.lobbyRefreshQueuedAt = 0
-				online_flow_trace("lobby_refresh_response_dropped reason=disconnecting_or_logged_out"
-					.. " ok=" .. tostring(ok == true)
-					.. " screen=" .. tostring(self.currentScreenName or "nil")
-					.. " disconnecting=" .. tostring(self.disconnecting == true)
-					.. " hasToken=" .. tostring(sessionAccessToken ~= nil))
-				return
-			end
-			local rawVisibleRoomCount = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0
-			local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
-				or decoded and decoded.online_players and #decoded.online_players
-				or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
-				or 0
-			online_flow_trace("lobby_refresh_response ok=" .. tostring(ok == true)
-				.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
-				.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
-				.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
-				.. " screen=" .. tostring(self.currentScreenName or "nil")
-				.. " room=" .. tostring(self.currentRoomId or "nil")
-				.. " currentRoomWillBeMerged=" .. tostring(self.currentRoom ~= nil))
-				if ok then
-					if not ignoreSuppression and self:IsAutomaticLobbyRefreshSuppressed() then
-						local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
-						online_flow_trace("lobby_refresh_result_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
-						self.lobbyRefreshQueued = true
-						if not self.lobbyRefreshDeferredScheduled then
-							self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_response")
-						end
-						return
-					end
-					if not ignoreSuppression and self:IsLobbyRefreshSuppressed() then
-						online_flow_trace("lobby_refresh_result_dropped reason=suppressed_after_leave")
-						self.lobbyRefreshQueued = true
-						if not self.lobbyRefreshDeferredScheduled then
-						self:ScheduleDeferredLobbyRefresh(
-							self:LobbyRefreshSuppressionRemaining() + 0.05,
-							"suppressed_after_response")
-					end
-				else
-					local lobbyPayload = self:LobbySearchPayload(decoded)
-					local currentRoomMerged = self:ReconcileCurrentRoomFromLobbyPayload(decoded, "fetch_lobby")
-					if self.currentRoomId and not currentRoomMerged then
-						self:FetchCurrentRoomFallback("lobby_refresh_missing_current_room", 0.75)
-					end
-					self.lobbyRefreshLastAppliedAt = GetTimeSinceStart()
-					online_flow_trace("lobby_refresh_broadcast source=fetch_lobby"
-						.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
-						.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
-						.. " normalizedLobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
-						.. " displayOnlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
-					safe_broadcast("LobbySearched", lobbyPayload)
-				end
-			end
-		if self.lobbyRefreshQueued and not self.disconnecting then
-			local queuedReason = tostring(self.lobbyRefreshQueuedReason or "")
-			local queuedForceFresh = self.lobbyRefreshQueuedForceFresh == true
+		return
+	end
+	if not ignoreSuppression and self:IsLobbyRefreshSuppressed() then
+		online_flow_trace("lobby_refresh_skipped reason=suppressed_after_leave")
+		self.lobbyRefreshQueued = true
+		if not self.lobbyRefreshDeferredScheduled then
+			self:ScheduleDeferredLobbyRefresh(
+				self:LobbyRefreshSuppressionRemaining() + 0.05,
+			"suppressed_before_request")
+		end
+		return
+	end
+	if refreshIsGameplay and not ignoreSuppression then
+		if self.lobbyRefreshInFlight then
+			online_flow_trace_throttled("lobby_refresh_gameplay_inflight_skip", 1.0,
+				"lobby_refresh_skipped reason=gameplay_inflight_no_replay"
+				.. " requestReason=" .. refreshReason
+				.. " screen=" .. refreshScreen
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
+			return
+		end
+
+		local now = GetTimeSinceStart()
+		local minInterval = math.max(1.0, tonumber(self.gameplayLobbyRefreshMinIntervalSeconds) or 5.0)
+		local elapsed = now - (tonumber(self.lastGameplayLobbyRefreshAt) or 0)
+		if elapsed < minInterval then
+			online_flow_trace_throttled("lobby_refresh_gameplay_throttled", 1.0,
+				"lobby_refresh_skipped reason=gameplay_throttle"
+				.. " requestReason=" .. refreshReason
+				.. " elapsed=" .. string.format("%.2f", elapsed)
+				.. " minInterval=" .. string.format("%.2f", minInterval)
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
+			return
+		end
+		self.lastGameplayLobbyRefreshAt = now
+	end
+	if self.lobbyRefreshInFlight then
+		local previousReason = tostring(self.lobbyRefreshQueuedReason or "")
+		self.lobbyRefreshQueued = true
+		self.lobbyRefreshQueuedReason = refreshReason
+		self.lobbyRefreshQueuedAt = GetTimeSinceStart()
+		self.lobbyRefreshQueuedForceFresh = self.lobbyRefreshQueuedForceFresh == true or forceFresh
+		online_flow_trace("lobby_refresh_join_inflight queued=true"
+			.. " reason=" .. refreshReason
+			.. " previousReason=" .. tostring(previousReason ~= "" and previousReason or "nil"))
+		return
+	end
+	self.lobbyRefreshDeferredScheduled = false
+
+	self.lobbyRefreshInFlight = true
+	local lobbyRefreshGeneration = tonumber(self.lobbyRefreshGeneration) or 0
+	local refreshPurpose = "background_state_tracking"
+	if self:IsOnlineLobbyScreen(refreshScreen) then
+		refreshPurpose = "lobby_ui_and_state"
+	elseif self:IsOnlineOptionsScreen(refreshScreen) then
+		refreshPurpose = "options_room_state_tracking"
+	elseif self:IsOnlineGameplayScreen(refreshScreen) then
+		refreshPurpose = "gameplay_room_state_tracking"
+	end
+	online_flow_trace("lobby_refresh_request screen=" .. tostring(self.currentScreenName or "nil")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " purpose=" .. tostring(refreshPurpose))
+	self:FetchLobby(function(ok, decoded)
+		if lobbyRefreshGeneration ~= (tonumber(self.lobbyRefreshGeneration) or 0) then
+			online_flow_trace("lobby_refresh_response_dropped reason=generation_mismatch"
+				.. " requestGeneration=" .. tostring(lobbyRefreshGeneration)
+				.. " currentGeneration=" .. tostring(self.lobbyRefreshGeneration or 0)
+				.. " reason=" .. tostring(refreshReason))
+			return
+		end
+		self.lobbyRefreshInFlight = false
+		if forceFresh then
+			self.postRoomExitLobbyRefreshPending = false
+			self.postRoomExitLobbyRefreshReason = ""
+		end
+		if self.disconnecting or not sessionAccessToken then
 			self.lobbyRefreshQueued = false
 			self.lobbyRefreshQueuedReason = ""
 			self.lobbyRefreshQueuedAt = 0
-			self.lobbyRefreshQueuedForceFresh = false
-			online_flow_trace("lobby_refresh_replay_coalesced reason=" .. tostring(queuedReason ~= "" and queuedReason or "queued_after_response"))
-			if queuedForceFresh then
-				self:QueueLobbyRefresh({
-					reason = queuedReason ~= "" and queuedReason or "queued_after_response",
-					forceFresh = true,
-					ignoreSuppression = true,
-				})
+			online_flow_trace("lobby_refresh_response_dropped reason=disconnecting_or_logged_out"
+				.. " ok=" .. tostring(ok == true)
+				.. " screen=" .. tostring(self.currentScreenName or "nil")
+				.. " disconnecting=" .. tostring(self.disconnecting == true)
+				.. " hasToken=" .. tostring(sessionAccessToken ~= nil))
+			return
+		end
+		local rawVisibleRoomCount = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0
+		local rawOnlineUserCount = decoded and decoded.online_users and #decoded.online_users
+			or decoded and decoded.online_players and #decoded.online_players
+			or decoded and decoded.onlinePlayers and #decoded.onlinePlayers
+			or 0
+		online_flow_trace("lobby_refresh_response ok=" .. tostring(ok == true)
+			.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
+			.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
+			.. " queued=" .. tostring(self.lobbyRefreshQueued == true)
+			.. " screen=" .. tostring(self.currentScreenName or "nil")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " currentRoomWillBeMerged=" .. tostring(self.currentRoom ~= nil))
+			if ok then
+				if not ignoreSuppression and self:IsAutomaticLobbyRefreshSuppressed() then
+					local remaining = math.max(0.05, (tonumber(self.lobbyRefreshDropUntil) or 0) - GetTimeSinceStart() + 0.05)
+					online_flow_trace("lobby_refresh_result_deferred reason=post_leave_auto_suppressed delay=" .. tostring(remaining))
+					self.lobbyRefreshQueued = true
+					if not self.lobbyRefreshDeferredScheduled then
+						self:ScheduleDeferredLobbyRefresh(remaining, "post_leave_response")
+					end
+					return
+				end
+				if not ignoreSuppression and self:IsLobbyRefreshSuppressed() then
+					online_flow_trace("lobby_refresh_result_dropped reason=suppressed_after_leave")
+					self.lobbyRefreshQueued = true
+					if not self.lobbyRefreshDeferredScheduled then
+					self:ScheduleDeferredLobbyRefresh(
+						self:LobbyRefreshSuppressionRemaining() + 0.05,
+						"suppressed_after_response")
+				end
 			else
-				self:ScheduleCoalescedLobbyRefresh("queued_after_response:" .. tostring(queuedReason ~= "" and queuedReason or "unknown"))
+				local lobbyPayload = self:LobbySearchPayload(decoded)
+				local currentRoomMerged = self:ReconcileCurrentRoomFromLobbyPayload(decoded, "fetch_lobby")
+				if self.currentRoomId and not currentRoomMerged then
+					self:FetchCurrentRoomFallback("lobby_refresh_missing_current_room", 0.75)
+				end
+				self.lobbyRefreshLastAppliedAt = GetTimeSinceStart()
+				online_flow_trace("lobby_refresh_broadcast source=fetch_lobby"
+					.. " rawVisibleRooms=" .. tostring(rawVisibleRoomCount)
+					.. " rawOnlineUsers=" .. tostring(rawOnlineUserCount)
+					.. " normalizedLobbies=" .. tostring(#(lobbyPayload.lobbies or {}))
+					.. " displayOnlinePlayers=" .. tostring(#(lobbyPayload.onlinePlayers or {})))
+				safe_broadcast("LobbySearched", lobbyPayload)
 			end
 		end
-	end)
+	if self.lobbyRefreshQueued and not self.disconnecting then
+		local queuedReason = tostring(self.lobbyRefreshQueuedReason or "")
+		local queuedForceFresh = self.lobbyRefreshQueuedForceFresh == true
+		self.lobbyRefreshQueued = false
+		self.lobbyRefreshQueuedReason = ""
+		self.lobbyRefreshQueuedAt = 0
+		self.lobbyRefreshQueuedForceFresh = false
+		online_flow_trace("lobby_refresh_replay_coalesced reason=" .. tostring(queuedReason ~= "" and queuedReason or "queued_after_response"))
+		if queuedForceFresh then
+			self:QueueLobbyRefresh({
+				reason = queuedReason ~= "" and queuedReason or "queued_after_response",
+				forceFresh = true,
+				ignoreSuppression = true,
+			})
+		else
+			self:ScheduleCoalescedLobbyRefresh("queued_after_response:" .. tostring(queuedReason ~= "" and queuedReason or "unknown"))
+		end
+	end
+end)
 end
 
 function ITGOnline:ApplyLobbyPresencePayload(payload)
@@ -14872,6 +14768,9 @@ function ITGOnline:FetchCurrentRoom(callback)
 		safe_callback(callback, ok, decoded, response)
 	end)
 end
+
+-- Room membership and invitations
+-- -----------------------------------------------------------------------
 
 function ITGOnline:CreateRoom(callback, visibility)
 	local roomName = local_profile_name() .. "'s room"
@@ -15137,27 +15036,27 @@ function ITGOnline:RequestJoinRoom(roomId, callback, options)
 end
 
 function ITGOnline:CancelJoinRequest(callback)
-		local joinRequestId = self.pendingJoinRequestId
-		local joinRoomId = self.pendingJoinRoomId
-		if not joinRequestId then
-			self.pendingJoinRoomId = nil
-			safe_callback(callback, true, {
-				message = online_client_text("NoPendingJoinRequest", "No room join request is pending.")
-			}, nil)
-			return
-		end
-
-		self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/cancel", {}, function(ok, decoded, response)
-			if ok and tostring(self.pendingJoinRequestId or "") == tostring(joinRequestId or "") then
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
-			elseif ok and joinRoomId ~= nil and online_room_ids_match(self.pendingJoinRoomId, joinRoomId) then
-				self.pendingJoinRoomId = nil
-				self.pendingJoinRequestId = nil
-			end
-			safe_callback(callback, ok, decoded, response)
-		end)
+	local joinRequestId = self.pendingJoinRequestId
+	local joinRoomId = self.pendingJoinRoomId
+	if not joinRequestId then
+		self.pendingJoinRoomId = nil
+		safe_callback(callback, true, {
+			message = online_client_text("NoPendingJoinRequest", "No room join request is pending.")
+		}, nil)
+		return
 	end
+
+	self:Request("POST", "/room-join-requests/" .. tostring(joinRequestId) .. "/cancel", {}, function(ok, decoded, response)
+		if ok and tostring(self.pendingJoinRequestId or "") == tostring(joinRequestId or "") then
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+		elseif ok and joinRoomId ~= nil and online_room_ids_match(self.pendingJoinRoomId, joinRoomId) then
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+		end
+		safe_callback(callback, ok, decoded, response)
+	end)
+end
 
 function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	online_flow_trace("song_availability_begin"
@@ -15366,39 +15265,39 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
-		self:TraceOnlineState("join_user_room_request", {
+	self:TraceOnlineState("join_user_room_request", {
+		source = "request_join_user_room",
+		targetUser = userId,
+		pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+	})
+	self:Request("POST", "/users/" .. tostring(userId) .. "/room-join-request", {}, function(ok, decoded, response)
+		self:TraceOnlineState("join_user_room_response", {
 			source = "request_join_user_room",
+			roomSnapshot = decoded and decoded.room or nil,
 			targetUser = userId,
-			pendingJoinRoomId = self.pendingJoinRoomId or "nil",
+			ok = ok == true,
+			status = response and response.statusCode or "nil",
+			hasRoom = decoded and decoded.room ~= nil,
+			hasJoinRequest = decoded and decoded.join_request ~= nil,
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
 		})
-		self:Request("POST", "/users/" .. tostring(userId) .. "/room-join-request", {}, function(ok, decoded, response)
-			self:TraceOnlineState("join_user_room_response", {
-				source = "request_join_user_room",
-				roomSnapshot = decoded and decoded.room or nil,
-				targetUser = userId,
-				ok = ok == true,
-				status = response and response.statusCode or "nil",
-				hasRoom = decoded and decoded.room ~= nil,
-				hasJoinRequest = decoded and decoded.join_request ~= nil,
-				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
-			})
-			if ok and decoded and decoded.room then
-				local room = self:ApplyDecodedRoomSnapshot(decoded, "request_join_user_room")
-				ok = room ~= nil
-				if room then
-					self.pendingJoinRoomId = nil
-					self.pendingJoinRequestId = nil
-				end
-			elseif ok and decoded and decoded.join_request then
-				self.pendingJoinRoomId = decoded.join_request.room_id
-				self.pendingJoinRequestId = decoded.join_request.id
-			elseif not ok then
+		if ok and decoded and decoded.room then
+			local room = self:ApplyDecodedRoomSnapshot(decoded, "request_join_user_room")
+			ok = room ~= nil
+			if room then
 				self.pendingJoinRoomId = nil
 				self.pendingJoinRequestId = nil
 			end
-			safe_callback(callback, ok, decoded, response)
-		end)
-	end
+		elseif ok and decoded and decoded.join_request then
+			self.pendingJoinRoomId = decoded.join_request.room_id
+			self.pendingJoinRequestId = decoded.join_request.id
+		elseif not ok then
+			self.pendingJoinRoomId = nil
+			self.pendingJoinRequestId = nil
+		end
+		safe_callback(callback, ok, decoded, response)
+	end)
+end
 
 function ITGOnline:InviteUser(roomId, userId, callback)
 	roomId = online_canonical_id(roomId)
@@ -15583,93 +15482,97 @@ function ITGOnline:ClearCurrentRoomState(source)
 end
 
 function ITGOnline:LeaveRoom(callback)
-		if not self.currentRoomId then
-			online_flow_trace("leave_room_skipped reason=no_current_room")
-			safe_callback(callback, true, {})
-			return
-		end
-		local roomId = self.currentRoomId
+	if not self.currentRoomId then
+		online_flow_trace("leave_room_skipped reason=no_current_room")
+		safe_callback(callback, true, {})
+		return
+	end
+
+	local roomId = self.currentRoomId
 	local roomKey = self:RoomKey(roomId)
-		self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
-			if self.leaveRoomCallbacksByRoomId[roomKey] then
-			online_flow_trace("leave_room_join_inflight room=" .. tostring(roomId)
-				.. " callbacks=" .. tostring(#self.leaveRoomCallbacksByRoomId[roomKey])
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-				.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
-			if callback then
-					append_coalesced_callback(self.leaveRoomCallbacksByRoomId[roomKey], callback, "leave_room", function(cb)
-						safe_callback(cb, false, nil, { errorMessage = "Too many pending leave-room requests." })
-					end)
-			end
-			return
+	self.leaveRoomCallbacksByRoomId = self.leaveRoomCallbacksByRoomId or {}
+	if self.leaveRoomCallbacksByRoomId[roomKey] then
+		online_flow_trace("leave_room_join_inflight room=" .. tostring(roomId)
+			.. " callbacks=" .. tostring(#self.leaveRoomCallbacksByRoomId[roomKey])
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+			.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
+		if callback then
+			append_coalesced_callback(self.leaveRoomCallbacksByRoomId[roomKey], callback, "leave_room", function(cb)
+				safe_callback(cb, false, nil, { errorMessage = "Too many pending leave-room requests." })
+			end)
 		end
-		self.leaveRoomCallbacksByRoomId[roomKey] = callback and { callback } or {}
-		online_flow_trace("leave_room_begin room=" .. tostring(roomId)
-			.. " currentRoomId=" .. tostring(self.currentRoomId)
-			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
-		self:TraceOnlineState("leave_room_begin", {
+		return
+	end
+
+	self.leaveRoomCallbacksByRoomId[roomKey] = callback and { callback } or {}
+	online_flow_trace("leave_room_begin room=" .. tostring(roomId)
+		.. " currentRoomId=" .. tostring(self.currentRoomId)
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	self:TraceOnlineState("leave_room_begin", {
+		source = "leave_room",
+		targetRoom = roomId,
+		phase = self.currentRoom and self.currentRoom.phase or "nil",
+		leaving = self:IsLeavingRoom(roomId) == true,
+	})
+	self:MarkLeavingRoom(roomId, true)
+	self:IgnoreRoomEvents(roomId, 30)
+	self:CancelPendingRequests()
+	online_flow_trace("leave_room_request room=" .. tostring(roomId))
+	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {
+		client_action_id = self:NewClientActionId("room-leave"),
+	}, function(ok, decoded, response)
+		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
+		online_flow_trace("leave_room_response room=" .. tostring(roomId)
+			.. " ok=" .. tostring(ok == true)
+			.. " gone=" .. tostring(gone == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		self:TraceOnlineState("leave_room_response", {
 			source = "leave_room",
 			targetRoom = roomId,
-			phase = self.currentRoom and self.currentRoom.phase or "nil",
+			ok = ok == true,
+			gone = gone == true,
+			status = response and response.statusCode or "nil",
+			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
 			leaving = self:IsLeavingRoom(roomId) == true,
 		})
-		self:MarkLeavingRoom(roomId, true)
-		self:IgnoreRoomEvents(roomId, 30)
-		self:CancelPendingRequests()
-		online_flow_trace("leave_room_request room=" .. tostring(roomId))
-		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/leave", {
-			client_action_id = self:NewClientActionId("room-leave"),
-		}, function(ok, decoded, response)
-			local gone = response and (response.statusCode == 404 or response.statusCode == 410)
-			online_flow_trace("leave_room_response room=" .. tostring(roomId)
-				.. " ok=" .. tostring(ok == true)
-				.. " gone=" .. tostring(gone == true)
-				.. " status=" .. tostring(response and response.statusCode or "nil")
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
-			self:TraceOnlineState("leave_room_response", {
-				source = "leave_room",
-				targetRoom = roomId,
-				ok = ok == true,
-				gone = gone == true,
-				status = response and response.statusCode or "nil",
-				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
-				leaving = self:IsLeavingRoom(roomId) == true,
-			})
-			if ok or gone then
+
+		if ok or gone then
 			if self.currentRoomId ~= nil and online_room_ids_match(self.currentRoomId, roomId) then
-					online_flow_trace("leave_room_clear_current room=" .. tostring(roomId))
-					self:ClearCurrentRoomState("leave_room_confirmed")
-				else
-					online_flow_trace("leave_room_mark_not_leaving room=" .. tostring(roomId)
-						.. " reason=current_room_changed")
-					self:MarkLeavingRoom(roomId, false)
-				end
-					if gone then self:RememberDeletedRoom(roomId, 60) end
-					self:ClearLobbyRefreshSuppression("leave_room_confirmed")
-					self:QueueLobbyRefresh({ ignoreSuppression = true, reason = "leave_room_confirmed" })
-				else
-				online_flow_trace("leave_room_failed_unmark room=" .. tostring(roomId))
+				online_flow_trace("leave_room_clear_current room=" .. tostring(roomId))
+				self:ClearCurrentRoomState("leave_room_confirmed")
+			else
+				online_flow_trace("leave_room_mark_not_leaving room=" .. tostring(roomId)
+					.. " reason=current_room_changed")
 				self:MarkLeavingRoom(roomId, false)
 			end
-			local callbacks = self.leaveRoomCallbacksByRoomId and self.leaveRoomCallbacksByRoomId[roomKey] or {}
-			if self.leaveRoomCallbacksByRoomId then self.leaveRoomCallbacksByRoomId[roomKey] = nil end
-			online_flow_trace("leave_room_callbacks_begin room=" .. tostring(roomId)
-				.. " count=" .. tostring(#callbacks)
-				.. " okOrGone=" .. tostring((ok or gone) == true)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
-			for index, cb in ipairs(callbacks) do
-				online_flow_trace("leave_room_callback_call room=" .. tostring(roomId)
-					.. " index=" .. tostring(index)
-					.. " okOrGone=" .. tostring((ok or gone) == true))
-				safe_callback(cb, ok or gone, decoded, response)
-			end
-			online_flow_trace("leave_room_callbacks_end room=" .. tostring(roomId)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
-		end)
-	end
+			if gone then self:RememberDeletedRoom(roomId, 60) end
+			self:ClearLobbyRefreshSuppression("leave_room_confirmed")
+			self:QueueLobbyRefresh({ ignoreSuppression = true, reason = "leave_room_confirmed" })
+		else
+			online_flow_trace("leave_room_failed_unmark room=" .. tostring(roomId))
+			self:MarkLeavingRoom(roomId, false)
+		end
+
+		local callbacks = self.leaveRoomCallbacksByRoomId and self.leaveRoomCallbacksByRoomId[roomKey] or {}
+		if self.leaveRoomCallbacksByRoomId then self.leaveRoomCallbacksByRoomId[roomKey] = nil end
+		online_flow_trace("leave_room_callbacks_begin room=" .. tostring(roomId)
+			.. " count=" .. tostring(#callbacks)
+			.. " okOrGone=" .. tostring((ok or gone) == true)
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
+		for index, cb in ipairs(callbacks) do
+			online_flow_trace("leave_room_callback_call room=" .. tostring(roomId)
+				.. " index=" .. tostring(index)
+				.. " okOrGone=" .. tostring((ok or gone) == true))
+			safe_callback(cb, ok or gone, decoded, response)
+		end
+		online_flow_trace("leave_room_callbacks_end room=" .. tostring(roomId)
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
+	end)
+end
 
 function ITGOnline:FetchRoom(roomId, callback)
 	roomId = roomId or self.currentRoomId or self.pendingJoinRoomId
@@ -15807,21 +15710,8 @@ function ITGOnline:MarkRealtimeEventProcessed(eventId)
 	return duplicate
 end
 
-function ITGOnline:UnmarkRealtimeEventProcessed(eventId)
-	local normalizedId = online_canonical_id(eventId)
-	if not normalizedId or normalizedId == "0" then return end
-	if type(self.processedRealtimeEventIds) == "table" then
-		self.processedRealtimeEventIds[normalizedId] = nil
-	end
-	if type(self.processedRealtimeEventOrder) == "table" then
-		for index = #self.processedRealtimeEventOrder, 1, -1 do
-			if self.processedRealtimeEventOrder[index] == normalizedId then
-				table.remove(self.processedRealtimeEventOrder, index)
-				break
-			end
-		end
-	end
-end
+-- Realtime event validation and dispatch
+-- -----------------------------------------------------------------------
 
 function ITGOnline:DispatchRealtimeEvent(event, source, options)
 	options = options or {}
@@ -15872,935 +15762,935 @@ function ITGOnline:DispatchRealtimeEvent(event, source, options)
 end
 
 function ITGOnline:RealtimeRoomEventPolicy(name, hasRoomSnapshot)
-		local policies = {
-			["room.member_joined"] = {
-				memberChange = true,
-				fetchRoom = true,
-				refreshLobby = true,
-				reason = "member_joined_requires_room_and_lobby_refresh",
-			},
-			["room.member_left"] = {
-				memberChange = true,
-				fetchRoom = true,
-				refreshLobby = true,
-				reason = "member_left_requires_room_and_lobby_refresh",
-			},
-			["room.manager_transferred"] = {
-				memberChange = true,
-				fetchRoom = true,
-				refreshLobby = true,
-				reason = "manager_transfer_requires_authoritative_room_and_lobby_refresh",
-			},
-			["room.member_pack_sync_updated"] = {
-				roomUiRefresh = true,
-				minLobbyRefreshInterval = 1.5,
-				reason = "pack_sync_updates_player_ui",
-			},
-			["room.member_song_availability_updated"] = {
-				roomUiRefresh = true,
-				minLobbyRefreshInterval = 0.5,
-				reason = "song_availability_updates_player_ui",
-			},
-			["room.song_selected"] = {
-				fetchRoom = true,
-				roomUiRefresh = true,
-				minLobbyRefreshInterval = 0.25,
-				reason = "song_selected_requires_authoritative_room_refresh",
-			},
-			["room.song_selection_cancelled"] = {
-				roomUiRefresh = true,
-				minLobbyRefreshInterval = 0.25,
-				reason = "song_selection_cancelled_snapshot_updates_room_ui_only",
-			},
-			["room.ready_updated"] = {
-				roomUiRefresh = true,
-				minLobbyRefreshInterval = 0.5,
-				reason = "ready_state_updates_room_ui",
-			},
+	local policies = {
+		["room.member_joined"] = {
+			memberChange = true,
+			fetchRoom = true,
+			refreshLobby = true,
+			reason = "member_joined_requires_room_and_lobby_refresh",
+		},
+		["room.member_left"] = {
+			memberChange = true,
+			fetchRoom = true,
+			refreshLobby = true,
+			reason = "member_left_requires_room_and_lobby_refresh",
+		},
+		["room.manager_transferred"] = {
+			memberChange = true,
+			fetchRoom = true,
+			refreshLobby = true,
+			reason = "manager_transfer_requires_authoritative_room_and_lobby_refresh",
+		},
+		["room.member_pack_sync_updated"] = {
+			roomUiRefresh = true,
+			minLobbyRefreshInterval = 1.5,
+			reason = "pack_sync_updates_player_ui",
+		},
+		["room.member_song_availability_updated"] = {
+			roomUiRefresh = true,
+			minLobbyRefreshInterval = 0.5,
+			reason = "song_availability_updates_player_ui",
+		},
+		["room.song_selected"] = {
+			fetchRoom = true,
+			roomUiRefresh = true,
+			minLobbyRefreshInterval = 0.25,
+			reason = "song_selected_requires_authoritative_room_refresh",
+		},
+		["room.song_selection_cancelled"] = {
+			roomUiRefresh = true,
+			minLobbyRefreshInterval = 0.25,
+			reason = "song_selection_cancelled_snapshot_updates_room_ui_only",
+		},
+		["room.ready_updated"] = {
+			roomUiRefresh = true,
+			minLobbyRefreshInterval = 0.5,
+			reason = "ready_state_updates_room_ui",
+		},
+	}
+	local policy = policies[tostring(name or "")]
+	if not policy then
+		policy = {
+			reason = "default_room_event_state_only",
 		}
-		local policy = policies[tostring(name or "")]
-		if not policy then
-			policy = {
-				reason = "default_room_event_state_only",
-			}
-		end
-		online_flow_trace("realtime_room_policy name=" .. tostring(name or "nil")
-			.. " reason=" .. tostring(policy.reason or "nil")
-			.. " hasRoomSnapshot=" .. tostring(hasRoomSnapshot == true)
-			.. " memberChange=" .. tostring(policy.memberChange == true)
-			.. " fetchRoom=" .. tostring(policy.fetchRoom == true)
-			.. " refreshLobby=" .. tostring(policy.refreshLobby == true)
-			.. " roomUiRefresh=" .. tostring(policy.roomUiRefresh == true)
-			.. " minLobbyRefreshInterval=" .. tostring(policy.minLobbyRefreshInterval or "nil"))
-		return policy
 	end
+	online_flow_trace("realtime_room_policy name=" .. tostring(name or "nil")
+		.. " reason=" .. tostring(policy.reason or "nil")
+		.. " hasRoomSnapshot=" .. tostring(hasRoomSnapshot == true)
+		.. " memberChange=" .. tostring(policy.memberChange == true)
+		.. " fetchRoom=" .. tostring(policy.fetchRoom == true)
+		.. " refreshLobby=" .. tostring(policy.refreshLobby == true)
+		.. " roomUiRefresh=" .. tostring(policy.roomUiRefresh == true)
+		.. " minLobbyRefreshInterval=" .. tostring(policy.minLobbyRefreshInterval or "nil"))
+	return policy
+end
 
 function ITGOnline:RealtimeNonRoomEventPolicy(name)
-		local policies = {
-			["connection.ready"] = {
-				action = "sync_unless_lobby_screen_or_recent_sync",
-				reason = "connection_ready_reconciles_client_state",
-			},
-			["server.ping"] = {
-				action = "ignore_control_frame",
-				reason = "server_ping_has_no_state",
-			},
-			["pong"] = {
-				action = "update_server_clock",
-				reason = "keepalive_ack_has_no_room_state",
-			},
-			["client.error"] = {
-				action = "notify_protocol_error",
-				reason = "server_rejected_a_client_realtime_message",
-			},
-			["connection.closed"] = {
-				action = "ignore_control_frame",
-				reason = "close_lifecycle_handled_by_socket",
-			},
-			["auth.session_revoked"] = {
-				action = "invalidate_authenticated_session",
-				reason = "same_account_connected_elsewhere",
-			},
-			["presence.pruned"] = {
-				action = "queue_lobby_refresh",
-				reason = "presence_cleanup_changes_online_players",
-			},
-			["room.left"] = {
-				action = "leave_current_room_if_matching",
-				reason = "server_confirms_local_room_exit_or_ejection",
-			},
-			["lobby.updated"] = {
-				action = "apply_presence_cache_then_refresh_lobby",
-				reason = "lobby_presence_or_room_list_changed",
-			},
-			["room.invitation.created"] = {
-				action = "broadcast_invitation",
-				reason = "user_action_required",
-			},
-			["room.join_request.declined"] = {
-				action = "clear_pending_join_and_notify",
-				reason = "pending_join_terminal_state",
-			},
-			["room.join_request.expired"] = {
-				action = "clear_pending_join_and_notify",
-				reason = "pending_join_terminal_state",
-			},
-			["room.join_request.cancelled"] = {
-				action = "clear_requester_pending_join_or_notify_manager",
-				reason = "pending_join_cancelled",
-			},
-			["room.join_request.accepted"] = {
-				action = "fetch_room_then_broadcast",
-				reason = "pending_join_accepted_needs_room_snapshot",
-			},
-		}
-		local policy = policies[tostring(name or "")] or {
-			action = "fallback_event_handler",
-			reason = "no_explicit_non_room_policy",
-		}
-		local traceMessage = "realtime_non_room_policy name=" .. tostring(name or "nil")
-			.. " action=" .. tostring(policy.action or "nil")
-			.. " reason=" .. tostring(policy.reason or "nil")
-		if policy.action == "ignore_control_frame" or policy.action == "update_server_clock" then
-			online_flow_trace_throttled("realtime_non_room_policy:" .. tostring(name or "nil"), 30.0, traceMessage)
-		else
-			online_flow_trace(traceMessage)
-		end
-		return policy
+	local policies = {
+		["connection.ready"] = {
+			action = "sync_unless_lobby_screen_or_recent_sync",
+			reason = "connection_ready_reconciles_client_state",
+		},
+		["server.ping"] = {
+			action = "ignore_control_frame",
+			reason = "server_ping_has_no_state",
+		},
+		["pong"] = {
+			action = "update_server_clock",
+			reason = "keepalive_ack_has_no_room_state",
+		},
+		["client.error"] = {
+			action = "notify_protocol_error",
+			reason = "server_rejected_a_client_realtime_message",
+		},
+		["connection.closed"] = {
+			action = "ignore_control_frame",
+			reason = "close_lifecycle_handled_by_socket",
+		},
+		["auth.session_revoked"] = {
+			action = "invalidate_authenticated_session",
+			reason = "same_account_connected_elsewhere",
+		},
+		["presence.pruned"] = {
+			action = "queue_lobby_refresh",
+			reason = "presence_cleanup_changes_online_players",
+		},
+		["room.left"] = {
+			action = "leave_current_room_if_matching",
+			reason = "server_confirms_local_room_exit_or_ejection",
+		},
+		["lobby.updated"] = {
+			action = "apply_presence_cache_then_refresh_lobby",
+			reason = "lobby_presence_or_room_list_changed",
+		},
+		["room.invitation.created"] = {
+			action = "broadcast_invitation",
+			reason = "user_action_required",
+		},
+		["room.join_request.declined"] = {
+			action = "clear_pending_join_and_notify",
+			reason = "pending_join_terminal_state",
+		},
+		["room.join_request.expired"] = {
+			action = "clear_pending_join_and_notify",
+			reason = "pending_join_terminal_state",
+		},
+		["room.join_request.cancelled"] = {
+			action = "clear_requester_pending_join_or_notify_manager",
+			reason = "pending_join_cancelled",
+		},
+		["room.join_request.accepted"] = {
+			action = "fetch_room_then_broadcast",
+			reason = "pending_join_accepted_needs_room_snapshot",
+		},
+	}
+	local policy = policies[tostring(name or "")] or {
+		action = "fallback_event_handler",
+		reason = "no_explicit_non_room_policy",
+	}
+	local traceMessage = "realtime_non_room_policy name=" .. tostring(name or "nil")
+		.. " action=" .. tostring(policy.action or "nil")
+		.. " reason=" .. tostring(policy.reason or "nil")
+	if policy.action == "ignore_control_frame" or policy.action == "update_server_clock" then
+		online_flow_trace_throttled("realtime_non_room_policy:" .. tostring(name or "nil"), 30.0, traceMessage)
+	else
+		online_flow_trace(traceMessage)
 	end
+	return policy
+end
 
 function ITGOnline:PendingJoinEventMatches(payload)
-	if not ITGOnlineProtocol or not ITGOnlineProtocol.pending_join_event_matches then
-		return false, "protocol_helper_unavailable"
-	end
-	return ITGOnlineProtocol.pending_join_event_matches({
-		current_room_id = self.currentRoomId,
-		pending_join_room_id = self.pendingJoinRoomId,
-		pending_join_request_id = self.pendingJoinRequestId,
-	}, payload)
+if not ITGOnlineProtocol or not ITGOnlineProtocol.pending_join_event_matches then
+	return false, "protocol_helper_unavailable"
+end
+return ITGOnlineProtocol.pending_join_event_matches({
+	current_room_id = self.currentRoomId,
+	pending_join_room_id = self.pendingJoinRoomId,
+	pending_join_request_id = self.pendingJoinRequestId,
+}, payload)
 end
 
 function ITGOnline:HandleDeletedRoom(roomId, source)
-	roomId = online_canonical_id(roomId)
+roomId = online_canonical_id(roomId)
+if not roomId then
+	online_flow_trace("room_deleted_event_ignored reason=missing_room_id"
+		.. " source=" .. tostring(source or "unknown")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+	return false
+end
+
+local activeRoomDeleted = online_room_ids_match(self.currentRoomId, roomId)
+	or online_room_ids_match(self.pendingJoinRoomId, roomId)
+local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
+local roomCode = self.currentRoom and
+	(self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
+online_flow_trace("room_deleted_event_begin roomId=" .. tostring(roomId)
+	.. " source=" .. tostring(source or "unknown")
+	.. " active=" .. tostring(activeRoomDeleted == true)
+	.. " ignoredAfterLeave=" .. tostring(ignoredAfterLeave == true)
+	.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+	.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+
+self:RememberDeletedRoom(roomId, 60)
+self:IgnoreRoomEvents(roomId, 30)
+local refreshQueued = false
+if self.PurgeStaleLobbyCandidate then
+	self:PurgeStaleLobbyCandidate(roomId, tostring(source or "room_deleted_event"))
+	refreshQueued = true
+end
+
+if ignoredAfterLeave then
+	online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. tostring(roomId)
+		.. " source=" .. tostring(source or "unknown"))
+elseif activeRoomDeleted then
+	self:ClearCurrentRoomState(tostring(source or "room_deleted_event"))
+	safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
+	safe_broadcast("OnlineLobbyLeft", {
+		left = true,
+		roomId = roomId,
+		lobbyCode = roomCode,
+		reason = "room_deleted",
+		source = tostring(source or "room.deleted"),
+	})
+	safe_broadcast("OnlineResponseStatus", {
+		event = "roomDeleted",
+		success = false,
+		message = online_client_text("RoomClosed", "The lobby was closed."),
+	})
+end
+
+if not refreshQueued then
+	self:QueueLobbyRefresh({ reason = tostring(source or "room_deleted_event") })
+end
+online_flow_trace("room_deleted_event_end roomId=" .. tostring(roomId)
+	.. " source=" .. tostring(source or "unknown")
+	.. " activeCleared=" .. tostring(activeRoomDeleted and not ignoredAfterLeave))
+return activeRoomDeleted and not ignoredAfterLeave
+end
+
+function ITGOnline:HandleRealtimeEvent(event)
+	if type(event) ~= "table" then
+		online_trace("Ignored malformed realtime event.")
+		return false
+	end
+	local name = event.event or event.name
+	local payload = event.payload or {}
+	if type(name) ~= "string" or type(payload) ~= "table" then
+		online_trace("Ignored realtime event with an invalid schema.")
+		return false
+	end
+	local eventId = online_canonical_id(event.id)
+	local payloadRoom = type(payload.room) == "table" and payload.room or nil
+	local payloadMembers = payloadRoom and (payloadRoom.members or payloadRoom.players or payloadRoom.room_members) or payload.members
+	local payloadReadyStates = payloadRoom and payloadRoom.ready_states or payload.ready_states
+	local payloadFinalResults = payloadRoom and payloadRoom.final_results or payload.final_results
+	local payloadSessions = payloadRoom and payloadRoom.play_sessions or payload.play_sessions
+	local payloadLeaderboard = payload.leaderboard or (payloadRoom and payloadRoom.leaderboard)
+	local payloadPlayState = payload.play_state or payload.playState or (payloadRoom and (payloadRoom.play_state or payloadRoom.playState))
+	local eventTrace = "realtime_event_begin name=" .. tostring(name or "nil")
+		.. " eventId=" .. tostring(eventId or "nil")
+		.. " payloadRoomId=" .. tostring(payload.room_id or (payload.room and payload.room.id) or "nil")
+		.. " payloadPhase=" .. tostring(payload.room and payload.room.phase or payload.room_phase or "nil")
+		.. " payloadMembers=" .. tostring(type(payloadMembers) == "table" and #payloadMembers or "nil")
+		.. " payloadReadyStates=" .. tostring(type(payloadReadyStates) == "table" and #payloadReadyStates or "nil")
+		.. " payloadFinalResults=" .. tostring(type(payloadFinalResults) == "table" and #payloadFinalResults or "nil")
+		.. " payloadSessions=" .. tostring(type(payloadSessions) == "table" and #payloadSessions or "nil")
+		.. " payloadLeaderboard=" .. tostring(type(payloadLeaderboard) == "table" and #payloadLeaderboard or "nil")
+		.. " payloadSelectedAt=" .. tostring((payloadRoom and payloadRoom.selected_song and payloadRoom.selected_song.selected_at) or payload.selected_at or "nil")
+		.. " payloadPlayStateVersion=" .. tostring(type(payloadPlayState) == "table" and (payloadPlayState.version or payloadPlayState.play_state_version) or "nil")
+		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+		.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+		.. " screen=" .. tostring(self.currentScreenName or "nil")
+		.. " generation=" .. tostring(self.screenGeneration or "nil")
+	if name == "server.ping" or name == "pong" then
+		online_flow_trace_throttled("realtime_control_event:" .. tostring(name), 30, eventTrace)
+	else
+		online_flow_trace(eventTrace)
+	end
+	local idlessControlEvents = {
+		["connection.ready"] = true,
+		["connection.closed"] = true,
+		["server.ping"] = true,
+		["pong"] = true,
+		["client.error"] = true,
+		["auth.session_revoked"] = true,
+	}
+	if not name then
+		online_trace("Ignored realtime event without name.")
+		online_flow_trace("realtime_event_ignored reason=missing_name eventId=" .. tostring(eventId or "nil"))
+		return false
+	end
+	if (not eventId or eventId == "0") and not idlessControlEvents[name] then
+		online_trace("Ignored idless non-control realtime event: " .. tostring(name))
+		online_flow_trace("realtime_event_ignored reason=idless_non_control name=" .. tostring(name))
+		return false
+	end
+	if not tostring(name):match("^room%.") or name == "room.left"
+		or name == "room.invitation.created"
+		or name == "room.join_request.declined"
+		or name == "room.join_request.expired"
+		or name == "room.join_request.cancelled"
+		or name == "room.join_request.accepted" then
+		self:RealtimeNonRoomEventPolicy(name)
+	end
+
+local room_event_is_relevant = function(roomId)
+	local expected = self.currentRoomId or self.pendingJoinRoomId
+	if roomId and self:ShouldIgnoreRoomEvents(roomId) then
+		online_flow_trace("room_event_ignored reason=recently_left_room room=" .. tostring(roomId)
+			.. " event=" .. tostring(name))
+		return false
+	end
+	if not expected then
+		online_flow_trace("room_event_ignored reason=no_expected_room"
+			.. " room=" .. tostring(roomId or "nil")
+			.. " event=" .. tostring(name)
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		return false
+	end
 	if not roomId then
-		online_flow_trace("room_deleted_event_ignored reason=missing_room_id"
-			.. " source=" .. tostring(source or "unknown")
+		online_flow_trace("room_event_ignored reason=missing_payload_room"
+			.. " event=" .. tostring(name)
+			.. " expected=" .. tostring(expected)
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 		return false
 	end
-
-	local activeRoomDeleted = online_room_ids_match(self.currentRoomId, roomId)
-		or online_room_ids_match(self.pendingJoinRoomId, roomId)
-	local ignoredAfterLeave = self:ShouldIgnoreRoomEvents(roomId) or self:IsLeavingRoom(roomId)
-	local roomCode = self.currentRoom and
-		(self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
-	online_flow_trace("room_deleted_event_begin roomId=" .. tostring(roomId)
-		.. " source=" .. tostring(source or "unknown")
-		.. " active=" .. tostring(activeRoomDeleted == true)
-		.. " ignoredAfterLeave=" .. tostring(ignoredAfterLeave == true)
-		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-
-	self:RememberDeletedRoom(roomId, 60)
-	self:IgnoreRoomEvents(roomId, 30)
-	local refreshQueued = false
-	if self.PurgeStaleLobbyCandidate then
-		self:PurgeStaleLobbyCandidate(roomId, tostring(source or "room_deleted_event"))
-		refreshQueued = true
+	if self:IsLeavingRoom(roomId) then
+		online_flow_trace("room_event_ignored reason=leaving_room room=" .. tostring(roomId)
+			.. " event=" .. tostring(name))
+		return false
 	end
-
-	if ignoredAfterLeave then
-		online_flow_trace("room_deleted_event_ignored reason=recently_left_room roomId=" .. tostring(roomId)
-			.. " source=" .. tostring(source or "unknown"))
-	elseif activeRoomDeleted then
-		self:ClearCurrentRoomState(tostring(source or "room_deleted_event"))
-		safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(nil))
-		safe_broadcast("OnlineLobbyLeft", {
-			left = true,
-			roomId = roomId,
-			lobbyCode = roomCode,
-			reason = "room_deleted",
-			source = tostring(source or "room.deleted"),
-		})
-		safe_broadcast("OnlineResponseStatus", {
-			event = "roomDeleted",
-			success = false,
-			message = online_client_text("RoomClosed", "The lobby was closed."),
-		})
-	end
-
-	if not refreshQueued then
-		self:QueueLobbyRefresh({ reason = tostring(source or "room_deleted_event") })
-	end
-	online_flow_trace("room_deleted_event_end roomId=" .. tostring(roomId)
-		.. " source=" .. tostring(source or "unknown")
-		.. " activeCleared=" .. tostring(activeRoomDeleted and not ignoredAfterLeave))
-	return activeRoomDeleted and not ignoredAfterLeave
-end
-
-function ITGOnline:HandleRealtimeEvent(event)
-		if type(event) ~= "table" then
-			online_trace("Ignored malformed realtime event.")
-			return false
-		end
-		local name = event.event or event.name
-		local payload = event.payload or {}
-		if type(name) ~= "string" or type(payload) ~= "table" then
-			online_trace("Ignored realtime event with an invalid schema.")
-			return false
-		end
-		local eventId = online_canonical_id(event.id)
-		local payloadRoom = type(payload.room) == "table" and payload.room or nil
-		local payloadMembers = payloadRoom and (payloadRoom.members or payloadRoom.players or payloadRoom.room_members) or payload.members
-		local payloadReadyStates = payloadRoom and payloadRoom.ready_states or payload.ready_states
-		local payloadFinalResults = payloadRoom and payloadRoom.final_results or payload.final_results
-		local payloadSessions = payloadRoom and payloadRoom.play_sessions or payload.play_sessions
-		local payloadLeaderboard = payload.leaderboard or (payloadRoom and payloadRoom.leaderboard)
-		local payloadPlayState = payload.play_state or payload.playState or (payloadRoom and (payloadRoom.play_state or payloadRoom.playState))
-		local eventTrace = "realtime_event_begin name=" .. tostring(name or "nil")
-			.. " eventId=" .. tostring(eventId or "nil")
-			.. " payloadRoomId=" .. tostring(payload.room_id or (payload.room and payload.room.id) or "nil")
-			.. " payloadPhase=" .. tostring(payload.room and payload.room.phase or payload.room_phase or "nil")
-			.. " payloadMembers=" .. tostring(type(payloadMembers) == "table" and #payloadMembers or "nil")
-			.. " payloadReadyStates=" .. tostring(type(payloadReadyStates) == "table" and #payloadReadyStates or "nil")
-			.. " payloadFinalResults=" .. tostring(type(payloadFinalResults) == "table" and #payloadFinalResults or "nil")
-			.. " payloadSessions=" .. tostring(type(payloadSessions) == "table" and #payloadSessions or "nil")
-			.. " payloadLeaderboard=" .. tostring(type(payloadLeaderboard) == "table" and #payloadLeaderboard or "nil")
-			.. " payloadSelectedAt=" .. tostring((payloadRoom and payloadRoom.selected_song and payloadRoom.selected_song.selected_at) or payload.selected_at or "nil")
-			.. " payloadPlayStateVersion=" .. tostring(type(payloadPlayState) == "table" and (payloadPlayState.version or payloadPlayState.play_state_version) or "nil")
+	local relevant = online_room_ids_match(roomId, expected)
+	if not relevant then
+		online_flow_trace("room_event_ignored reason=room_mismatch"
+			.. " room=" .. tostring(roomId)
+			.. " expected=" .. tostring(expected)
+			.. " event=" .. tostring(name)
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-			.. " currentPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-			.. " screen=" .. tostring(self.currentScreenName or "nil")
-			.. " generation=" .. tostring(self.screenGeneration or "nil")
-		if name == "server.ping" or name == "pong" then
-			online_flow_trace_throttled("realtime_control_event:" .. tostring(name), 30, eventTrace)
-		else
-			online_flow_trace(eventTrace)
-		end
-		local idlessControlEvents = {
-			["connection.ready"] = true,
-			["connection.closed"] = true,
-			["server.ping"] = true,
-			["pong"] = true,
-			["client.error"] = true,
-			["auth.session_revoked"] = true,
-		}
-		if not name then
-			online_trace("Ignored realtime event without name.")
-			online_flow_trace("realtime_event_ignored reason=missing_name eventId=" .. tostring(eventId or "nil"))
-			return false
-		end
-		if (not eventId or eventId == "0") and not idlessControlEvents[name] then
-			online_trace("Ignored idless non-control realtime event: " .. tostring(name))
-			online_flow_trace("realtime_event_ignored reason=idless_non_control name=" .. tostring(name))
-			return false
-		end
-		if not tostring(name):match("^room%.") or name == "room.left"
-			or name == "room.invitation.created"
-			or name == "room.join_request.declined"
-			or name == "room.join_request.expired"
-			or name == "room.join_request.cancelled"
-			or name == "room.join_request.accepted" then
-			self:RealtimeNonRoomEventPolicy(name)
-		end
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+	else
+		online_flow_trace("room_event_relevant reason=room_match"
+			.. " room=" .. tostring(roomId)
+			.. " expected=" .. tostring(expected)
+			.. " event=" .. tostring(name))
+	end
+	return relevant
+end
 
-	local room_event_is_relevant = function(roomId)
-		local expected = self.currentRoomId or self.pendingJoinRoomId
-		if roomId and self:ShouldIgnoreRoomEvents(roomId) then
-			online_flow_trace("room_event_ignored reason=recently_left_room room=" .. tostring(roomId)
-				.. " event=" .. tostring(name))
-			return false
+if name == "connection.ready" then
+		online_flow_trace("realtime_event_apply name=connection.ready"
+			.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
+		self:ObserveRoomServerTime(event.server_time or payload.server_time, "connection.ready")
+		local screen = top_screen()
+		local screenName = screen and screen:GetName() or ""
+		if screenName == "ScreenOnlineLobbies" then
+			online_flow_trace("connection_ready_sync_deferred_to_lobby_screen")
+		elseif not self.syncInFlight and GetTimeSinceStart() - (self.lastSyncRequestedAt or 0) > 1 then
+			online_flow_trace("connection_ready_sync_requested screen=" .. tostring(screenName))
+			self:Sync()
+		else
+			online_flow_trace("connection_ready_sync_skipped inFlight=" .. tostring(self.syncInFlight == true)
+				.. " lastSyncAge=" .. tostring(GetTimeSinceStart() - (self.lastSyncRequestedAt or 0)))
 		end
-		if not expected then
-			online_flow_trace("room_event_ignored reason=no_expected_room"
-				.. " room=" .. tostring(roomId or "nil")
-				.. " event=" .. tostring(name)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-			return false
+elseif name == "server.ping" then
+	online_flow_trace("realtime_event_apply name=server.ping action=client_ping")
+	if self.SendRealtimePing then
+		self:SendRealtimePing("server.ping")
+	end
+	return
+elseif name == "pong" then
+	online_flow_trace("realtime_event_apply name=pong action=keepalive_ack"
+		.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
+	local pingId = tostring(payload.ping_id or event.ping_id or "")
+	local startedAt = pingId ~= "" and self.realtimeClockPingSamples[pingId] or nil
+	if startedAt then
+		self.realtimeClockPingSamples[pingId] = nil
+		self:UpdateServerClockOffset(
+			event.server_time or payload.server_time,
+			startedAt,
+			GetTimeSinceStart()
+		)
+	else
+		online_flow_trace("clock_sample_rejected reason=uncorrelated_pong pingId="
+			.. tostring(pingId ~= "" and pingId or "missing"))
+	end
+	return
+elseif name == "client.error" then
+	local errorCode = tostring(payload.error_code or payload.code or "realtime_protocol_error")
+	online_flow_trace("realtime_event_apply name=client.error action=notify_protocol_error"
+		.. " code=" .. errorCode
+		.. " hasMessage=" .. tostring(payload.message ~= nil))
+	safe_broadcast("OnlineResponseStatus", {
+		event = "realtime",
+		success = false,
+		message = online_client_text("RealtimeCommunicationError", "Realtime communication error: %s", errorCode),
+	})
+	return
+	elseif name == "connection.closed" then
+		-- Informational frame. WebSocket close lifecycle is handled by onMessage Close.
+		online_flow_trace("realtime_event_apply name=connection.closed action=none")
+		return
+	elseif name == "auth.session_revoked" then
+		online_flow_trace("realtime_event_apply name=auth.session_revoked action=invalidate_authenticated_session"
+			.. " eventId=" .. tostring(eventId or "nil")
+			.. " reason=" .. tostring(payload.reason or "nil")
+			.. " user=" .. tostring(payload.user_id or payload.userId or "nil"))
+		if eventId and eventId ~= "0" then
+			self:SendRealtimeAck(eventId)
+			event._itgOnlineAckHandled = true
 		end
-		if not roomId then
-			online_flow_trace("room_event_ignored reason=missing_payload_room"
-				.. " event=" .. tostring(name)
-				.. " expected=" .. tostring(expected)
+		self:InvalidateAuthenticatedSession("auth.session_revoked", payload)
+		return
+	elseif name == "presence.pruned" then
+		-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
+		online_flow_trace("presence_pruned_refresh_requested")
+		self:QueueLobbyRefresh({ reason = "presence_pruned" })
+		return
+	elseif name == "room.left" then
+		local roomId = payload.room_id
+		if not online_room_ids_match(roomId, self.currentRoomId) then
+			online_flow_trace("room_left_event_ignored reason=room_mismatch"
+				.. " payloadRoomId=" .. tostring(roomId)
 				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-			return false
+			return
 		end
-		if self:IsLeavingRoom(roomId) then
-			online_flow_trace("room_event_ignored reason=leaving_room room=" .. tostring(roomId)
-				.. " event=" .. tostring(name))
-			return false
-		end
-		local relevant = online_room_ids_match(roomId, expected)
-		if not relevant then
-			online_flow_trace("room_event_ignored reason=room_mismatch"
-				.. " room=" .. tostring(roomId)
-				.. " expected=" .. tostring(expected)
-				.. " event=" .. tostring(name)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " screen=" .. tostring(self.currentScreenName or "nil"))
-		else
-			online_flow_trace("room_event_relevant reason=room_match"
-				.. " room=" .. tostring(roomId)
-				.. " expected=" .. tostring(expected)
-				.. " event=" .. tostring(name))
-		end
-		return relevant
-	end
 
-	if name == "connection.ready" then
-			online_flow_trace("realtime_event_apply name=connection.ready"
-				.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
-			self:ObserveRoomServerTime(event.server_time or payload.server_time, "connection.ready")
-			local screen = top_screen()
-			local screenName = screen and screen:GetName() or ""
-			if screenName == "ScreenOnlineLobbies" then
-				online_flow_trace("connection_ready_sync_deferred_to_lobby_screen")
-			elseif not self.syncInFlight and GetTimeSinceStart() - (self.lastSyncRequestedAt or 0) > 1 then
-				online_flow_trace("connection_ready_sync_requested screen=" .. tostring(screenName))
-				self:Sync()
-			else
-				online_flow_trace("connection_ready_sync_skipped inFlight=" .. tostring(self.syncInFlight == true)
-					.. " lastSyncAge=" .. tostring(GetTimeSinceStart() - (self.lastSyncRequestedAt or 0)))
-			end
-	elseif name == "server.ping" then
-		online_flow_trace("realtime_event_apply name=server.ping action=client_ping")
-		if self.SendRealtimePing then
-			self:SendRealtimePing("server.ping")
-		end
-		return
-	elseif name == "pong" then
-		online_flow_trace("realtime_event_apply name=pong action=keepalive_ack"
-			.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
-		local pingId = tostring(payload.ping_id or event.ping_id or "")
-		local startedAt = pingId ~= "" and self.realtimeClockPingSamples[pingId] or nil
-		if startedAt then
-			self.realtimeClockPingSamples[pingId] = nil
-			self:UpdateServerClockOffset(
-				event.server_time or payload.server_time,
-				startedAt,
-				GetTimeSinceStart()
-			)
-		else
-			online_flow_trace("clock_sample_rejected reason=uncorrelated_pong pingId="
-				.. tostring(pingId ~= "" and pingId or "missing"))
-		end
-		return
-	elseif name == "client.error" then
-		local errorCode = tostring(payload.error_code or payload.code or "realtime_protocol_error")
-		online_flow_trace("realtime_event_apply name=client.error action=notify_protocol_error"
-			.. " code=" .. errorCode
-			.. " hasMessage=" .. tostring(payload.message ~= nil))
+		local reason = tostring(payload.reason or "")
+		local roomCode = self.currentRoom and (self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
+		online_flow_trace("room_left_event_apply room=" .. tostring(roomId)
+			.. " reason=" .. tostring(reason)
+			.. " roomCode=" .. tostring(roomCode or "nil"))
+		self:IgnoreRoomEvents(roomId, 30)
+		self:ClearCurrentRoomState("room_left_event")
+		safe_broadcast("OnlineLobbyLeft", {
+			left=true,
+			roomId=roomId,
+			lobbyCode=roomCode,
+			reason=reason,
+			source="room.left",
+		})
 		safe_broadcast("OnlineResponseStatus", {
-			event = "realtime",
-			success = false,
-			message = online_client_text("RealtimeCommunicationError", "Realtime communication error: %s", errorCode),
+			event = "leaveLobby",
+			success = true,
+			message = reason == "pack_sync_timeout"
+				and online_client_text("PackSyncTimeoutRemoved", "You were removed from the lobby because the pack download did not start in time.")
+				or online_client_text("LeftLobby", "You left the lobby.")
 		})
 		return
-		elseif name == "connection.closed" then
-			-- Informational frame. WebSocket close lifecycle is handled by onMessage Close.
-			online_flow_trace("realtime_event_apply name=connection.closed action=none")
-			return
-		elseif name == "auth.session_revoked" then
-			online_flow_trace("realtime_event_apply name=auth.session_revoked action=invalidate_authenticated_session"
-				.. " eventId=" .. tostring(eventId or "nil")
-				.. " reason=" .. tostring(payload.reason or "nil")
-				.. " user=" .. tostring(payload.user_id or payload.userId or "nil"))
-			if eventId and eventId ~= "0" then
-				self:SendRealtimeAck(eventId)
-				event._itgOnlineAckHandled = true
-			end
-			self:InvalidateAuthenticatedSession("auth.session_revoked", payload)
-			return
-		elseif name == "presence.pruned" then
-			-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
-			online_flow_trace("presence_pruned_refresh_requested")
-			self:QueueLobbyRefresh({ reason = "presence_pruned" })
-			return
-		elseif name == "room.left" then
-			local roomId = payload.room_id
-			if not online_room_ids_match(roomId, self.currentRoomId) then
-				online_flow_trace("room_left_event_ignored reason=room_mismatch"
-					.. " payloadRoomId=" .. tostring(roomId)
-					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-				return
-			end
-
-			local reason = tostring(payload.reason or "")
-			local roomCode = self.currentRoom and (self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
-			online_flow_trace("room_left_event_apply room=" .. tostring(roomId)
-				.. " reason=" .. tostring(reason)
-				.. " roomCode=" .. tostring(roomCode or "nil"))
-			self:IgnoreRoomEvents(roomId, 30)
-			self:ClearCurrentRoomState("room_left_event")
-			safe_broadcast("OnlineLobbyLeft", {
-				left=true,
-				roomId=roomId,
-				lobbyCode=roomCode,
-				reason=reason,
-				source="room.left",
-			})
-			safe_broadcast("OnlineResponseStatus", {
-				event = "leaveLobby",
-				success = true,
-				message = reason == "pack_sync_timeout"
-					and online_client_text("PackSyncTimeoutRemoved", "You were removed from the lobby because the pack download did not start in time.")
-					or online_client_text("LeftLobby", "You left the lobby.")
-			})
-			return
-			elseif name == "lobby.updated" then
-				local lobbyUpdateReason = tostring(payload.reason or "lobby.updated")
-				local hasUserPayload = type(payload.user) == "table"
-				local lobbyRoomId = payload.room_id or payload.roomId or (payload.room and payload.room.id)
-				online_flow_trace("lobby_updated_event begin hasLobbyPayload=" .. tostring(type(payload) == "table")
-					.. " reason=" .. lobbyUpdateReason
-					.. " userId=" .. tostring(payload.user_id or "nil")
+		elseif name == "lobby.updated" then
+			local lobbyUpdateReason = tostring(payload.reason or "lobby.updated")
+			local hasUserPayload = type(payload.user) == "table"
+			local lobbyRoomId = payload.room_id or payload.roomId or (payload.room and payload.room.id)
+			online_flow_trace("lobby_updated_event begin hasLobbyPayload=" .. tostring(type(payload) == "table")
+				.. " reason=" .. lobbyUpdateReason
+				.. " userId=" .. tostring(payload.user_id or "nil")
+				.. " roomId=" .. tostring(lobbyRoomId or "nil")
+				.. " hasUser=" .. tostring(hasUserPayload == true))
+			if self:IsOnlineGameplayScreen(tostring(self.currentScreenName or ""))
+				and (lobbyUpdateReason == "presence.updated"
+					or lobbyUpdateReason == "room.started"
+					or lobbyUpdateReason == "room.load_requested"
+					or lobbyUpdateReason == "room.start_scheduled"
+					or lobbyUpdateReason == "room.member_pack_sync_updated") then
+				online_flow_trace("lobby_updated_event ignored reason=gameplay_lobby_noise"
+					.. " updateReason=" .. lobbyUpdateReason
 					.. " roomId=" .. tostring(lobbyRoomId or "nil")
-					.. " hasUser=" .. tostring(hasUserPayload == true))
-				if self:IsOnlineGameplayScreen(tostring(self.currentScreenName or ""))
-					and (lobbyUpdateReason == "presence.updated"
-						or lobbyUpdateReason == "room.started"
-						or lobbyUpdateReason == "room.load_requested"
-						or lobbyUpdateReason == "room.start_scheduled"
-						or lobbyUpdateReason == "room.member_pack_sync_updated") then
-					online_flow_trace("lobby_updated_event ignored reason=gameplay_lobby_noise"
-						.. " updateReason=" .. lobbyUpdateReason
-						.. " roomId=" .. tostring(lobbyRoomId or "nil")
-						.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-						.. " screen=" .. tostring(self.currentScreenName or "nil"))
-					return
-				end
-				if lobbyUpdateReason == "room.results_ready" then
-					online_flow_trace("lobby_updated_event ignored reason=room_results_ready_room_scoped"
-						.. " roomId=" .. tostring(lobbyRoomId or "nil")
-						.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-						.. " screen=" .. tostring(self.currentScreenName or "nil"))
-					return
-				end
-				if lobbyUpdateReason == "room.deleted" and lobbyRoomId then
-					local activeRoomCleared = self:HandleDeletedRoom(lobbyRoomId, "lobby_updated_room_deleted")
-					if activeRoomCleared then return end
-				end
-				local appliedPresence = false
-				if hasUserPayload then
-					appliedPresence = self:ApplyLobbyPresencePayload(payload)
-				else
-					online_flow_trace("lobby_updated_event presence_skipped reason=room_or_lobby_event_without_user"
-						.. " updateReason=" .. lobbyUpdateReason
-						.. " roomId=" .. tostring(lobbyRoomId or "nil"))
-				end
-				online_flow_trace("lobby_updated_event presence_applied=" .. tostring(appliedPresence == true)
-					.. " cachedLobbies=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.lobbies and #self.cachedLobbySearchPayload.lobbies or 0)
-					.. " cachedOnlinePlayers=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.onlinePlayers and #self.cachedLobbySearchPayload.onlinePlayers or 0))
-				if appliedPresence then
-					online_flow_trace("lobby_updated_event broadcast_cached")
-					safe_broadcast("LobbySearched", self.cachedLobbySearchPayload)
-				end
-				online_flow_trace("lobby_updated_event queue_lobby_refresh")
-				self:QueueLobbyRefresh({ reason = lobbyUpdateReason })
-		elseif name == "room.invitation.created" and type(payload.invitation) == "table" then
-			online_flow_trace("realtime_event_apply name=room.invitation.created action=broadcast_invitation"
-				.. " invitationId=" .. tostring(payload.invitation.id or payload.invitation_id or payload.id or "nil"))
-			safe_broadcast("OnlineRoomInvitation", payload)
-		elseif name == "room.join_request.created"
-			and type(payload.join_request) == "table"
-			and type(payload.requester) == "table" then
-			online_flow_trace("realtime_event_apply name=room.join_request.created action=broadcast_join_request"
-				.. " joinRequestId=" .. tostring(payload.join_request.id or "nil")
-				.. " requesterId=" .. tostring(payload.requester.id or "nil"))
-			safe_broadcast("OnlinePrivateJoinRequest", payload)
-		elseif name == "room.join_request.declined" then
-			local applies, matchReason = self:PendingJoinEventMatches(payload)
-			online_flow_trace("realtime_event_join_terminal name=room.join_request.declined"
-				.. " applies=" .. tostring(applies == true)
-				.. " matchReason=" .. tostring(matchReason)
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+					.. " screen=" .. tostring(self.currentScreenName or "nil"))
+				return
+			end
+			if lobbyUpdateReason == "room.results_ready" then
+				online_flow_trace("lobby_updated_event ignored reason=room_results_ready_room_scoped"
+					.. " roomId=" .. tostring(lobbyRoomId or "nil")
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+					.. " screen=" .. tostring(self.currentScreenName or "nil"))
+				return
+			end
+			if lobbyUpdateReason == "room.deleted" and lobbyRoomId then
+				local activeRoomCleared = self:HandleDeletedRoom(lobbyRoomId, "lobby_updated_room_deleted")
+				if activeRoomCleared then return end
+			end
+			local appliedPresence = false
+			if hasUserPayload then
+				appliedPresence = self:ApplyLobbyPresencePayload(payload)
+			else
+				online_flow_trace("lobby_updated_event presence_skipped reason=room_or_lobby_event_without_user"
+					.. " updateReason=" .. lobbyUpdateReason
+					.. " roomId=" .. tostring(lobbyRoomId or "nil"))
+			end
+			online_flow_trace("lobby_updated_event presence_applied=" .. tostring(appliedPresence == true)
+				.. " cachedLobbies=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.lobbies and #self.cachedLobbySearchPayload.lobbies or 0)
+				.. " cachedOnlinePlayers=" .. tostring(self.cachedLobbySearchPayload and self.cachedLobbySearchPayload.onlinePlayers and #self.cachedLobbySearchPayload.onlinePlayers or 0))
+			if appliedPresence then
+				online_flow_trace("lobby_updated_event broadcast_cached")
+				safe_broadcast("LobbySearched", self.cachedLobbySearchPayload)
+			end
+			online_flow_trace("lobby_updated_event queue_lobby_refresh")
+			self:QueueLobbyRefresh({ reason = lobbyUpdateReason })
+	elseif name == "room.invitation.created" and type(payload.invitation) == "table" then
+		online_flow_trace("realtime_event_apply name=room.invitation.created action=broadcast_invitation"
+			.. " invitationId=" .. tostring(payload.invitation.id or payload.invitation_id or payload.id or "nil"))
+		safe_broadcast("OnlineRoomInvitation", payload)
+	elseif name == "room.join_request.created"
+		and type(payload.join_request) == "table"
+		and type(payload.requester) == "table" then
+		online_flow_trace("realtime_event_apply name=room.join_request.created action=broadcast_join_request"
+			.. " joinRequestId=" .. tostring(payload.join_request.id or "nil")
+			.. " requesterId=" .. tostring(payload.requester.id or "nil"))
+		safe_broadcast("OnlinePrivateJoinRequest", payload)
+	elseif name == "room.join_request.declined" then
+		local applies, matchReason = self:PendingJoinEventMatches(payload)
+		online_flow_trace("realtime_event_join_terminal name=room.join_request.declined"
+			.. " applies=" .. tostring(applies == true)
+			.. " matchReason=" .. tostring(matchReason)
+			.. " roomId=" .. tostring(payload.room_id or "nil")
+			.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+			.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " reason=" .. tostring(payload.reason or "nil"))
+		if not applies then return end
+		self.pendingJoinRoomId = nil
+		self.pendingJoinRequestId = nil
+		safe_broadcast("OnlineResponseStatus", {
+			event = "joinLobby",
+			success = false,
+			joinRequestId = payload.join_request_id,
+			roomId = payload.room_id,
+			errorCode = "room_join_request_declined",
+			reason = payload.reason,
+			retryAfterSeconds = tonumber(payload.retry_after_seconds) or 30,
+			message = online_client_text("JoinRequestDeclined", "The room manager declined your request. You can try again in %d seconds.",
+				tonumber(payload.retry_after_seconds) or 30)
+		})
+	elseif name == "room.join_request.expired" then
+		if tostring(payload.recipient_role or "") == "manager" then
+			online_flow_trace("realtime_event_apply name=room.join_request.expired action=notify_manager"
+				.. " roomId=" .. tostring(payload.room_id or "nil")
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+			safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
+			return
+		end
+		local applies, matchReason = self:PendingJoinEventMatches(payload)
+		online_flow_trace("realtime_event_join_terminal name=room.join_request.expired"
+			.. " applies=" .. tostring(applies == true)
+			.. " matchReason=" .. tostring(matchReason)
+			.. " roomId=" .. tostring(payload.room_id or "nil")
+			.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+			.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " reason=" .. tostring(payload.reason or "nil"))
+		if not applies then return end
+		self.pendingJoinRoomId = nil
+		self.pendingJoinRequestId = nil
+		safe_broadcast("OnlineResponseStatus", {
+			event = "joinLobby",
+			success = false,
+			joinRequestId = payload.join_request_id,
+			roomId = payload.room_id,
+			errorCode = payload.reason == "cancelled_by_user" and "room_join_request_cancelled" or "room_join_request_expired",
+			message = payload.reason == "cancelled_by_user"
+				and online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
+				or online_client_text("JoinRequestExpired", "Your room join request expired.")
+		})
+	elseif name == "room.join_request.cancelled" then
+		if tostring(payload.recipient_role or "") == "manager" then
+			online_flow_trace("realtime_event_apply name=room.join_request.cancelled action=notify_manager"
 				.. " roomId=" .. tostring(payload.room_id or "nil")
 				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " reason=" .. tostring(payload.reason or "nil"))
-			if not applies then return end
-			self.pendingJoinRoomId = nil
-			self.pendingJoinRequestId = nil
-			safe_broadcast("OnlineResponseStatus", {
-				event = "joinLobby",
-				success = false,
-				joinRequestId = payload.join_request_id,
-				roomId = payload.room_id,
-				errorCode = "room_join_request_declined",
-				reason = payload.reason,
-				retryAfterSeconds = tonumber(payload.retry_after_seconds) or 30,
-				message = online_client_text("JoinRequestDeclined", "The room manager declined your request. You can try again in %d seconds.",
-					tonumber(payload.retry_after_seconds) or 30)
-			})
-		elseif name == "room.join_request.expired" then
-			if tostring(payload.recipient_role or "") == "manager" then
-				online_flow_trace("realtime_event_apply name=room.join_request.expired action=notify_manager"
-					.. " roomId=" .. tostring(payload.room_id or "nil")
-					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
-				safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
-				return
-			end
-			local applies, matchReason = self:PendingJoinEventMatches(payload)
-			online_flow_trace("realtime_event_join_terminal name=room.join_request.expired"
-				.. " applies=" .. tostring(applies == true)
-				.. " matchReason=" .. tostring(matchReason)
-				.. " roomId=" .. tostring(payload.room_id or "nil")
-				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " reason=" .. tostring(payload.reason or "nil"))
-			if not applies then return end
-			self.pendingJoinRoomId = nil
-			self.pendingJoinRequestId = nil
-			safe_broadcast("OnlineResponseStatus", {
-				event = "joinLobby",
-				success = false,
-				joinRequestId = payload.join_request_id,
-				roomId = payload.room_id,
-				errorCode = payload.reason == "cancelled_by_user" and "room_join_request_cancelled" or "room_join_request_expired",
-				message = payload.reason == "cancelled_by_user"
-					and online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
-					or online_client_text("JoinRequestExpired", "Your room join request expired.")
-			})
-		elseif name == "room.join_request.cancelled" then
-			if tostring(payload.recipient_role or "") == "manager" then
-				online_flow_trace("realtime_event_apply name=room.join_request.cancelled action=notify_manager"
-					.. " roomId=" .. tostring(payload.room_id or "nil")
-					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
-					.. " requesterUserId=" .. tostring(payload.requester_user_id or "nil"))
-				safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
-				return
-			end
-			local applies, matchReason = self:PendingJoinEventMatches(payload)
-			online_flow_trace("realtime_event_join_terminal name=room.join_request.cancelled"
-				.. " applies=" .. tostring(applies == true)
-				.. " matchReason=" .. tostring(matchReason)
-				.. " roomId=" .. tostring(payload.room_id or "nil")
-				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
-				.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
-			if not applies then return end
-			self.pendingJoinRoomId = nil
-			self.pendingJoinRequestId = nil
-			safe_broadcast("OnlineResponseStatus", {
-				event = "joinLobby",
-				success = false,
-				joinRequestId = payload.join_request_id,
-				roomId = payload.room_id,
-				errorCode = "room_join_request_cancelled",
-				message = online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
-			})
-		elseif name == "room.join_request.accepted" and payload.room_id then
-			if online_room_ids_match(payload.room_id, self.currentRoomId) then
-				online_flow_trace("realtime_join_request_accepted_ignored reason=room_membership_already_applied"
-					.. " roomId=" .. tostring(payload.room_id)
-					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
-				return
-			end
-			local applies, matchReason = self:PendingJoinEventMatches(payload)
-			if not applies then
-				online_flow_trace("realtime_join_request_accepted_ignored reason=" .. tostring(matchReason)
-					.. " roomId=" .. tostring(payload.room_id)
-					.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
-				return
-			end
-			online_flow_trace("realtime_event_apply name=room.join_request.accepted action=fetch_room"
+				.. " requesterUserId=" .. tostring(payload.requester_user_id or "nil"))
+			safe_broadcast("OnlinePrivateJoinRequestCancelled", payload)
+			return
+		end
+		local applies, matchReason = self:PendingJoinEventMatches(payload)
+		online_flow_trace("realtime_event_join_terminal name=room.join_request.cancelled"
+			.. " applies=" .. tostring(applies == true)
+			.. " matchReason=" .. tostring(matchReason)
+			.. " roomId=" .. tostring(payload.room_id or "nil")
+			.. " joinRequestId=" .. tostring(payload.join_request_id or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+			.. " pendingJoinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		if not applies then return end
+		self.pendingJoinRoomId = nil
+		self.pendingJoinRequestId = nil
+		safe_broadcast("OnlineResponseStatus", {
+			event = "joinLobby",
+			success = false,
+			joinRequestId = payload.join_request_id,
+			roomId = payload.room_id,
+			errorCode = "room_join_request_cancelled",
+			message = online_client_text("JoinRequestCancelled", "Your room join request was cancelled.")
+		})
+	elseif name == "room.join_request.accepted" and payload.room_id then
+		if online_room_ids_match(payload.room_id, self.currentRoomId) then
+			online_flow_trace("realtime_join_request_accepted_ignored reason=room_membership_already_applied"
 				.. " roomId=" .. tostring(payload.room_id)
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
-			self.pendingJoinRoomId = nil
-			self.pendingJoinRequestId = nil
-			self:FetchRoom(payload.room_id, function(ok, decoded)
-				online_flow_trace("realtime_join_request_accepted_fetch_result ok=" .. tostring(ok == true)
-					.. " roomId=" .. tostring(payload.room_id)
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+			return
+		end
+		local applies, matchReason = self:PendingJoinEventMatches(payload)
+		if not applies then
+			online_flow_trace("realtime_join_request_accepted_ignored reason=" .. tostring(matchReason)
+				.. " roomId=" .. tostring(payload.room_id)
+				.. " joinRequestId=" .. tostring(payload.join_request_id or "nil"))
+			return
+		end
+		online_flow_trace("realtime_event_apply name=room.join_request.accepted action=fetch_room"
+			.. " roomId=" .. tostring(payload.room_id)
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+		self.pendingJoinRoomId = nil
+		self.pendingJoinRequestId = nil
+		self:FetchRoom(payload.room_id, function(ok, decoded)
+			online_flow_trace("realtime_join_request_accepted_fetch_result ok=" .. tostring(ok == true)
+				.. " roomId=" .. tostring(payload.room_id)
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
+			if ok and decoded and decoded.room then
+				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
+			end
+	end)
+elseif name == "room.song_previewed" then
+	local roomId = payload.room_id or payload.roomId
+	if not room_event_is_relevant(roomId) then return end
+	if not self:RememberActiveSongPreview(roomId, payload.preview, "realtime_room_song_previewed") then
+		return
+	end
+	online_flow_trace("realtime_event_apply name=room.song_previewed action=broadcast_preview"
+		.. " title=" .. tostring(payload.preview and (payload.preview.title or payload.preview.folder_name) or "nil")
+		.. " pack=" .. tostring(payload.preview and payload.preview.pack or "nil")
+		.. " session=" .. tostring(payload.preview and (payload.preview.preview_session_id or payload.preview.previewSessionId) or "nil"))
+	safe_broadcast("OnlineSongPreview", payload.preview or {})
+elseif name == "room.song_preview_cleared" then
+	local roomId = payload.room_id or payload.roomId
+	if not room_event_is_relevant(roomId) then return end
+	local sessionId = payload.preview_session_id or payload.previewSessionId
+	if not self:ClearActiveSongPreview(sessionId, "realtime_room_song_preview_cleared") then
+		return
+	end
+	if tostring(self.activeSongPreviewSessionId or "") == tostring(sessionId or "") then
+		self.activeSongPreviewSessionId = nil
+	end
+	online_flow_trace("realtime_event_apply name=room.song_preview_cleared action=broadcast_clear"
+		.. " room=" .. tostring(roomId or "nil")
+		.. " session=" .. tostring(sessionId or "nil"))
+	safe_broadcast("OnlineSongPreviewCleared", payload)
+elseif name == "room.score_updated" then
+	self.lastLeaderboardRealtimeAt = GetTimeSinceStart()
+		local roomId = payload.room_id
+		local expectedRoomId = self.currentRoomId or self.pendingJoinRoomId
+		if roomId ~= nil and expectedRoomId ~= nil and not online_room_ids_match(roomId, expectedRoomId) then
+		online_flow_trace("score_updated_ignored reason=room_mismatch"
+			.. " roomId=" .. tostring(roomId)
+			.. " expectedRoomId=" .. tostring(expectedRoomId))
+		return
+	end
+	online_flow_trace("score_updated_event_begin roomId=" .. tostring(roomId or "nil")
+		.. " expectedRoomId=" .. tostring(expectedRoomId)
+		.. " leaderboardVersion=" .. tostring(payload.leaderboard_version_ms or "nil")
+		.. " playStateVersion=" .. tostring(payload.play_state_version_ms or payload.play_state and payload.play_state.version_ms or "nil")
+		.. " hasLeaderboard=" .. tostring(payload.leaderboard ~= nil)
+		.. " hasPlayState=" .. tostring(payload.play_state ~= nil)
+		.. " roomPhase=" .. tostring(payload.room_phase or "nil"))
+
+	local incomingVersion = tonumber(payload.leaderboard_version_ms) or 0
+	local incomingPlayStateVersion = tonumber(payload.play_state_version_ms or (payload.play_state and payload.play_state.version_ms)) or 0
+		local versionRoomId = self:RoomKey(roomId or expectedRoomId)
+	local leaderboardIsFresh = false
+	if payload.leaderboard and versionRoomId ~= "" then
+		local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
+		if incomingVersion > 0 and incomingVersion < previousVersion then
+			online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
+				.. " previous=" .. tostring(previousVersion))
+		elseif incomingVersion > 0 then
+			self.lastLeaderboardVersionByRoomId[versionRoomId] = incomingVersion
+			leaderboardIsFresh = true
+		else
+			local now = GetTimeSinceStart()
+			if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) > 1 then
+				self.lastUnversionedPlayStateFetchAt = now
+				self:FetchRoom(roomId or expectedRoomId)
+			end
+		end
+	end
+
+	if payload.leaderboard and leaderboardIsFresh then
+		if self.currentRoom then
+			self.currentRoom.live_scores = payload.leaderboard
+			self.currentRoom.leaderboard_version_ms = incomingVersion
+			self.currentRoom.live_score_version_ms = incomingVersion
+			online_flow_trace("score_updated_live_scores_applied roomId=" .. tostring(payload.room_id or "nil")
+				.. " version=" .. tostring(incomingVersion)
+				.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
+				.. " phase=" .. tostring(self.currentRoom.phase or "nil")
+				.. " rowsSummary=" .. online_score_rows_summary(payload.leaderboard, 8))
+		end
+		local topScreen = top_screen()
+		local screenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
+		local suppressPostResultsBroadcast = self:IsPostResultsLobbyScreen(self.currentRoom, screenName)
+		if suppressPostResultsBroadcast then
+			online_flow_trace_throttled("post_results_score_leaderboard_suppressed", 1.0,
+				"score_updated_leaderboard_broadcast_suppressed reason=post_results_lobby"
+				.. " roomId=" .. tostring(payload.room_id or "nil")
+				.. " version=" .. tostring(incomingVersion)
+				.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
+				.. " phase=" .. tostring((self.currentRoom and self.currentRoom.phase) or "nil")
+				.. " screen=" .. screenName)
+		else
+			online_flow_trace("score_updated_leaderboard_broadcast roomId=" .. tostring(payload.room_id or "nil")
+				.. " version=" .. tostring(incomingVersion)
+				.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0))
+		end
+		if self.debugScoreTrace == true then
+			online_score_trace("score_updated_leaderboard_rows room=" .. tostring(payload.room_id or "nil")
+				.. " version=" .. tostring(incomingVersion)
+				.. " rowCount=" .. tostring(online_count(payload.leaderboard)))
+		end
+		if self.debugScoreTrace == true then
+			local score = payload.score or {}
+			local localDisplayed = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.displayedPercent) or -1
+			local localScore = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.scorePercent) or -1
+			local localEx = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.exScorePercent) or -1
+			online_score_trace("score_update room=" .. tostring(payload.room_id or "")
+				.. " version=" .. tostring(incomingVersion)
+				.. " hasScore=" .. tostring(type(score) == "table" and next(score) ~= nil)
+				.. " playStateSessions=" .. tostring(online_count(payload.play_state and payload.play_state.sessions))
+				.. " local_displayed=" .. tostring(localDisplayed)
+				.. " local_score=" .. tostring(localScore)
+				.. " local_ex=" .. tostring(localEx))
+		end
+		if not suppressPostResultsBroadcast then
+			safe_broadcast("ITGOnlineLeaderboardUpdated", {
+				leaderboard = payload.leaderboard,
+				room_id = payload.room_id,
+				leaderboard_version_ms = incomingVersion,
+			})
+		end
+	end
+	if payload.play_state and self.currentRoom then
+		local playStateVersionKey = tostring(roomId or expectedRoomId or "")
+		local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
+		if incomingPlayStateVersion <= 0 and previousPlayStateVersion > 0 then
+			online_flow_trace("ignored_unversioned_score_play_state previous=" .. tostring(previousPlayStateVersion))
+		elseif incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion then
+			online_flow_trace("ignored_stale_score_play_state version=" .. tostring(incomingPlayStateVersion)
+				.. " previous=" .. tostring(previousPlayStateVersion))
+		else
+			if incomingPlayStateVersion > 0 then
+				self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingPlayStateVersion
+			end
+			self.currentRoom.play_state = payload.play_state
+			online_flow_trace("score_updated_play_state_applied roomId=" .. tostring(playStateVersionKey)
+				.. " version=" .. tostring(incomingPlayStateVersion)
+				.. " previousVersion=" .. tostring(previousPlayStateVersion)
+				.. " roomPhase=" .. tostring(payload.room_phase or "nil")
+				.. " sessions=" .. tostring(payload.play_state.sessions and #payload.play_state.sessions or 0))
+			if payload.room_phase then
+				if self:RoomPhaseFromScoreEventIsStale(payload.room_phase) then
+					online_flow_trace("ignored_stale_score_room_phase current="
+						.. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+						.. " incoming=" .. tostring(payload.room_phase))
+				else
+					self:ApplyRoomPhase(payload.room_phase, "score_updated")
+				end
+			end
+			self:ApplyPlayStateSnapshot(payload.play_state, "score_updated", incomingPlayStateVersion)
+			if self.EnforceRoomPhaseScreen then
+				self:EnforceRoomPhaseScreen()
+			end
+		end
+	end
+	elseif name == "room.deleted" then
+		local roomId = payload.room_id
+			or (event.target and event.target.id)
+			or payload.id
+		self:HandleDeletedRoom(roomId, "room_deleted_event")
+	elseif name == "room.load_timeout" then
+		local timeoutRoomId = payload.room_id
+			or (payload.room and (payload.room.id or payload.room_id or payload.roomId))
+			or (event.target and event.target.id)
+		if not room_event_is_relevant(timeoutRoomId) then return end
+		if payload.room then
+			online_flow_trace("load_timeout_event_apply hasRoom=true phase=" .. tostring(payload.room.phase or "nil")
+				.. " roomId=" .. tostring(payload.room.id or payload.room_id or "nil"))
+			local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
+			if not room then return false end
+			self.songLoadedAckKey = ""
+			safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
+		end
+	safe_broadcast("OnlineResponseStatus", {
+		event = "songLoaded",
+		success = false,
+		message = online_client_text("SongLoadTimeout", "Song loading timed out. Returning to the lobby.")
+	})
+	elseif name and name:match("^room%.") then
+		local roomId = payload.room_id
+			or (payload.room and payload.room.id)
+			or (event.target and event.target.id)
+			or payload.id
+
+		if not room_event_is_relevant(roomId) then return end
+		if payload.room then
+			online_flow_trace("realtime_room_event_apply_snapshot_begin name=" .. tostring(name)
+				.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
+				.. " eventId=" .. tostring(eventId or "nil")
+				.. " payloadPhase=" .. tostring(payload.room.phase or "nil")
+				.. " payloadMembers=" .. tostring(payload.room.members and #payload.room.members or 0)
+				.. " payloadReadyStates=" .. tostring(payload.room.ready_states and #payload.room.ready_states or 0)
+				.. " payloadSelectedAt=" .. tostring(payload.room.selected_song and (payload.room.selected_song.selected_at or payload.room.selected_song.selectedAt) or "nil"))
+			local versionRoomId = tostring(roomId or payload.room.id or "")
+			if eventId and eventId ~= "0" and versionRoomId ~= "" then
+				local previousRoomEventId = online_canonical_id(self.lastRoomEventIdByRoomId[versionRoomId]) or "0"
+				if online_decimal_id_greater(previousRoomEventId, eventId) then
+					online_flow_trace("ignored_stale_room_event name=" .. tostring(name)
+						.. " roomId=" .. tostring(versionRoomId)
+						.. " previousEventId=" .. tostring(previousRoomEventId)
+						.. " eventId=" .. tostring(eventId))
+					return
+				end
+			end
+			if not self:ShouldApplyRoomSnapshotPayload(payload.room, "realtime_room_event:" .. tostring(name), eventId) then
+				return
+			end
+			online_flow_trace("realtime_room_event name=" .. tostring(name)
+				.. " payloadPhase=" .. tostring(payload.room.phase)
+				.. " previousPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "no-room")
+				.. " eventId=" .. tostring(eventId))
+			local room = self:ApplyRoomSnapshot(payload.room, "realtime_room_event:" .. tostring(name))
+			if not room then return false end
+			if eventId and eventId ~= "0" and versionRoomId ~= "" then
+				self.lastRoomEventIdByRoomId[versionRoomId] = eventId
+			end
+			online_flow_trace("realtime_room_event_broadcast_state name=" .. tostring(name)
+				.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
+				.. " appliedRoom=" .. tostring(room and room.id or "nil")
+				.. " appliedPhase=" .. tostring(room and room.phase or "nil")
+				.. " members=" .. tostring(room and room.members and #room.members or 0)
+				.. " readyStates=" .. tostring(room and room.ready_states and #room.ready_states or 0)
+				.. " eventId=" .. tostring(eventId))
+			safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
+			self:BroadcastLeaderboardFromRoom(room, "realtime_room_event:" .. tostring(name))
+			local roomPolicy = self:RealtimeRoomEventPolicy(name, payload.room ~= nil)
+			if roomPolicy.fetchRoom == true then
+				online_flow_trace("realtime_room_fetch_skipped reason=authoritative_snapshot"
+					.. " name=" .. tostring(name)
+					.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
+					.. " eventId=" .. tostring(eventId or "nil"))
+			end
+			if roomPolicy.memberChange == true then
+				online_flow_trace("room_member_change_refresh_requested name=" .. tostring(name)
+					.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
+					.. " eventId=" .. tostring(eventId)
+					.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
+				if roomPolicy.refreshLobby == true then
+					online_flow_trace("room_policy_lobby_refresh name=" .. tostring(name)
+						.. " reason=" .. tostring(roomPolicy.reason or "nil"))
+					self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_policy") })
+				end
+			elseif roomPolicy.roomUiRefresh == true then
+				if payload.room then
+					if self.InvalidateRoomUiLobbyRefresh then
+						self:InvalidateRoomUiLobbyRefresh("snapshot_already_applied:" .. tostring(name))
+					end
+					online_flow_trace("room_ui_lobby_refresh_skipped name=" .. tostring(name)
+						.. " reason=snapshot_already_applied"
+						.. " screen=" .. tostring(self.currentScreenName or "nil")
+						.. " phase=" .. tostring(room and room.phase or self.currentRoom and self.currentRoom.phase or "nil"))
+				else
+				local now = GetTimeSinceStart()
+				local minInterval = tonumber(roomPolicy.minLobbyRefreshInterval) or 0.5
+				local lastRefreshAt = tonumber(self.lastRoomUiLobbyRefreshAt) or 0
+				if now - lastRefreshAt >= minInterval then
+					self.lastRoomUiLobbyRefreshAt = now
+					online_flow_trace("room_ui_lobby_refresh_immediate name=" .. tostring(name)
+						.. " age=" .. tostring(now - lastRefreshAt)
+						.. " minInterval=" .. tostring(minInterval)
+						.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
+					self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_ui_refresh") })
+				elseif not self.roomUiLobbyRefreshDeferredScheduled and self.ScheduleDeferredLobbyRefresh then
+					self.roomUiLobbyRefreshDeferredScheduled = true
+					online_flow_trace("room_ui_lobby_refresh_deferred name=" .. tostring(name)
+						.. " age=" .. tostring(now - lastRefreshAt)
+						.. " delay=" .. tostring(math.max(0.1, minInterval - (now - lastRefreshAt) + 0.05))
+						.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
+					self:ScheduleDeferredLobbyRefresh(
+						math.max(0.1, minInterval - (now - lastRefreshAt) + 0.05),
+						"room_ui_refresh:" .. tostring(name))
+				else
+					online_flow_trace("room_ui_lobby_refresh_already_deferred name=" .. tostring(name)
+						.. " age=" .. tostring(now - lastRefreshAt)
+						.. " minInterval=" .. tostring(minInterval)
+						.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
+				end
+				end
+			end
+			if name == "room.join_request.created" then
+				online_flow_trace("room_join_request_broadcast_pending source=realtime roomId=" .. tostring(roomId or payload.room.id or "nil"))
+				self:BroadcastPendingJoinRequestsFromRoom(room)
+			end
+			if room and room.play_state then
+				online_flow_trace("realtime_room_event_broadcast_play_state name=" .. tostring(name)
+					.. " version=" .. tostring(room.play_state.version_ms or "nil")
+					.. " phase=" .. tostring(room.phase or "nil"))
+				self:ApplyPlayStateSnapshot(room.play_state, "realtime_room_event:" .. tostring(name), room.play_state.version_ms, {
+					suppressLobbyBroadcast = true,
+				})
+			end
+		elseif roomId then
+			online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
+				.. " roomId=" .. tostring(roomId)
+				.. " eventId=" .. tostring(eventId))
+			self:FetchRoom(roomId, function(ok, decoded)
+				online_flow_trace("realtime_room_event_fetch_callback name=" .. tostring(name)
+					.. " ok=" .. tostring(ok == true)
+					.. " roomId=" .. tostring(roomId)
 					.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 					.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
 				if ok and decoded and decoded.room then
-					safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(decoded.room))
-				end
-		end)
-	elseif name == "room.song_previewed" then
-		local roomId = payload.room_id or payload.roomId
-		if not room_event_is_relevant(roomId) then return end
-		if not self:RememberActiveSongPreview(roomId, payload.preview, "realtime_room_song_previewed") then
-			return
-		end
-		online_flow_trace("realtime_event_apply name=room.song_previewed action=broadcast_preview"
-			.. " title=" .. tostring(payload.preview and (payload.preview.title or payload.preview.folder_name) or "nil")
-			.. " pack=" .. tostring(payload.preview and payload.preview.pack or "nil")
-			.. " session=" .. tostring(payload.preview and (payload.preview.preview_session_id or payload.preview.previewSessionId) or "nil"))
-		safe_broadcast("OnlineSongPreview", payload.preview or {})
-	elseif name == "room.song_preview_cleared" then
-		local roomId = payload.room_id or payload.roomId
-		if not room_event_is_relevant(roomId) then return end
-		local sessionId = payload.preview_session_id or payload.previewSessionId
-		if not self:ClearActiveSongPreview(sessionId, "realtime_room_song_preview_cleared") then
-			return
-		end
-		if tostring(self.activeSongPreviewSessionId or "") == tostring(sessionId or "") then
-			self.activeSongPreviewSessionId = nil
-		end
-		online_flow_trace("realtime_event_apply name=room.song_preview_cleared action=broadcast_clear"
-			.. " room=" .. tostring(roomId or "nil")
-			.. " session=" .. tostring(sessionId or "nil"))
-		safe_broadcast("OnlineSongPreviewCleared", payload)
-	elseif name == "room.score_updated" then
-		self.lastLeaderboardRealtimeAt = GetTimeSinceStart()
-			local roomId = payload.room_id
-			local expectedRoomId = self.currentRoomId or self.pendingJoinRoomId
-			if roomId ~= nil and expectedRoomId ~= nil and not online_room_ids_match(roomId, expectedRoomId) then
-			online_flow_trace("score_updated_ignored reason=room_mismatch"
-				.. " roomId=" .. tostring(roomId)
-				.. " expectedRoomId=" .. tostring(expectedRoomId))
-			return
-		end
-		online_flow_trace("score_updated_event_begin roomId=" .. tostring(roomId or "nil")
-			.. " expectedRoomId=" .. tostring(expectedRoomId)
-			.. " leaderboardVersion=" .. tostring(payload.leaderboard_version_ms or "nil")
-			.. " playStateVersion=" .. tostring(payload.play_state_version_ms or payload.play_state and payload.play_state.version_ms or "nil")
-			.. " hasLeaderboard=" .. tostring(payload.leaderboard ~= nil)
-			.. " hasPlayState=" .. tostring(payload.play_state ~= nil)
-			.. " roomPhase=" .. tostring(payload.room_phase or "nil"))
-
-		local incomingVersion = tonumber(payload.leaderboard_version_ms) or 0
-		local incomingPlayStateVersion = tonumber(payload.play_state_version_ms or (payload.play_state and payload.play_state.version_ms)) or 0
-			local versionRoomId = self:RoomKey(roomId or expectedRoomId)
-		local leaderboardIsFresh = false
-		if payload.leaderboard and versionRoomId ~= "" then
-			local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
-			if incomingVersion > 0 and incomingVersion < previousVersion then
-				online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
-					.. " previous=" .. tostring(previousVersion))
-			elseif incomingVersion > 0 then
-				self.lastLeaderboardVersionByRoomId[versionRoomId] = incomingVersion
-				leaderboardIsFresh = true
-			else
-				local now = GetTimeSinceStart()
-				if now - (tonumber(self.lastUnversionedPlayStateFetchAt) or 0) > 1 then
-					self.lastUnversionedPlayStateFetchAt = now
-					self:FetchRoom(roomId or expectedRoomId)
-				end
-			end
-		end
-
-		if payload.leaderboard and leaderboardIsFresh then
-			if self.currentRoom then
-				self.currentRoom.live_scores = payload.leaderboard
-				self.currentRoom.leaderboard_version_ms = incomingVersion
-				self.currentRoom.live_score_version_ms = incomingVersion
-				online_flow_trace("score_updated_live_scores_applied roomId=" .. tostring(payload.room_id or "nil")
-					.. " version=" .. tostring(incomingVersion)
-					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
-					.. " phase=" .. tostring(self.currentRoom.phase or "nil")
-					.. " rowsSummary=" .. online_score_rows_summary(payload.leaderboard, 8))
-			end
-			local topScreen = top_screen()
-			local screenName = tostring((topScreen and topScreen:GetName()) or self.currentScreenName or "")
-			local suppressPostResultsBroadcast = self:IsPostResultsLobbyScreen(self.currentRoom, screenName)
-			if suppressPostResultsBroadcast then
-				online_flow_trace_throttled("post_results_score_leaderboard_suppressed", 1.0,
-					"score_updated_leaderboard_broadcast_suppressed reason=post_results_lobby"
-					.. " roomId=" .. tostring(payload.room_id or "nil")
-					.. " version=" .. tostring(incomingVersion)
-					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0)
-					.. " phase=" .. tostring((self.currentRoom and self.currentRoom.phase) or "nil")
-					.. " screen=" .. screenName)
-			else
-				online_flow_trace("score_updated_leaderboard_broadcast roomId=" .. tostring(payload.room_id or "nil")
-					.. " version=" .. tostring(incomingVersion)
-					.. " entries=" .. tostring(payload.leaderboard and #payload.leaderboard or 0))
-			end
-			if self.debugScoreTrace == true then
-				online_score_trace("score_updated_leaderboard_rows room=" .. tostring(payload.room_id or "nil")
-					.. " version=" .. tostring(incomingVersion)
-					.. " rowCount=" .. tostring(online_count(payload.leaderboard)))
-			end
-			if self.debugScoreTrace == true then
-				local score = payload.score or {}
-				local localDisplayed = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.displayedPercent) or -1
-				local localScore = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.scorePercent) or -1
-				local localEx = tonumber(self.lastDisplayedScoreSnapshot and self.lastDisplayedScoreSnapshot.exScorePercent) or -1
-				online_score_trace("score_update room=" .. tostring(payload.room_id or "")
-					.. " version=" .. tostring(incomingVersion)
-					.. " hasScore=" .. tostring(type(score) == "table" and next(score) ~= nil)
-					.. " playStateSessions=" .. tostring(online_count(payload.play_state and payload.play_state.sessions))
-					.. " local_displayed=" .. tostring(localDisplayed)
-					.. " local_score=" .. tostring(localScore)
-					.. " local_ex=" .. tostring(localEx))
-			end
-			if not suppressPostResultsBroadcast then
-				safe_broadcast("ITGOnlineLeaderboardUpdated", {
-					leaderboard = payload.leaderboard,
-					room_id = payload.room_id,
-					leaderboard_version_ms = incomingVersion,
-				})
-			end
-		end
-		if payload.play_state and self.currentRoom then
-			local playStateVersionKey = tostring(roomId or expectedRoomId or "")
-			local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
-			if incomingPlayStateVersion <= 0 and previousPlayStateVersion > 0 then
-				online_flow_trace("ignored_unversioned_score_play_state previous=" .. tostring(previousPlayStateVersion))
-			elseif incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion then
-				online_flow_trace("ignored_stale_score_play_state version=" .. tostring(incomingPlayStateVersion)
-					.. " previous=" .. tostring(previousPlayStateVersion))
-			else
-				if incomingPlayStateVersion > 0 then
-					self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingPlayStateVersion
-				end
-				self.currentRoom.play_state = payload.play_state
-				online_flow_trace("score_updated_play_state_applied roomId=" .. tostring(playStateVersionKey)
-					.. " version=" .. tostring(incomingPlayStateVersion)
-					.. " previousVersion=" .. tostring(previousPlayStateVersion)
-					.. " roomPhase=" .. tostring(payload.room_phase or "nil")
-					.. " sessions=" .. tostring(payload.play_state.sessions and #payload.play_state.sessions or 0))
-				if payload.room_phase then
-					if self:RoomPhaseFromScoreEventIsStale(payload.room_phase) then
-						online_flow_trace("ignored_stale_score_room_phase current="
-							.. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-							.. " incoming=" .. tostring(payload.room_phase))
-					else
-						self:ApplyRoomPhase(payload.room_phase, "score_updated")
-					end
-				end
-				self:ApplyPlayStateSnapshot(payload.play_state, "score_updated", incomingPlayStateVersion)
-				if self.EnforceRoomPhaseScreen then
-					self:EnforceRoomPhaseScreen()
-				end
-			end
-		end
-		elseif name == "room.deleted" then
-			local roomId = payload.room_id
-				or (event.target and event.target.id)
-				or payload.id
-			self:HandleDeletedRoom(roomId, "room_deleted_event")
-		elseif name == "room.load_timeout" then
-			local timeoutRoomId = payload.room_id
-				or (payload.room and (payload.room.id or payload.room_id or payload.roomId))
-				or (event.target and event.target.id)
-			if not room_event_is_relevant(timeoutRoomId) then return end
-			if payload.room then
-				online_flow_trace("load_timeout_event_apply hasRoom=true phase=" .. tostring(payload.room.phase or "nil")
-					.. " roomId=" .. tostring(payload.room.id or payload.room_id or "nil"))
-				local room = self:ApplyRoomSnapshot(payload.room, "load_timeout")
-				if not room then return false end
-				self.songLoadedAckKey = ""
-				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
-			end
-		safe_broadcast("OnlineResponseStatus", {
-			event = "songLoaded",
-			success = false,
-			message = online_client_text("SongLoadTimeout", "Song loading timed out. Returning to the lobby.")
-		})
-		elseif name and name:match("^room%.") then
-			local roomId = payload.room_id
-				or (payload.room and payload.room.id)
-				or (event.target and event.target.id)
-				or payload.id
-
-			if not room_event_is_relevant(roomId) then return end
-			if payload.room then
-				online_flow_trace("realtime_room_event_apply_snapshot_begin name=" .. tostring(name)
-					.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
-					.. " eventId=" .. tostring(eventId or "nil")
-					.. " payloadPhase=" .. tostring(payload.room.phase or "nil")
-					.. " payloadMembers=" .. tostring(payload.room.members and #payload.room.members or 0)
-					.. " payloadReadyStates=" .. tostring(payload.room.ready_states and #payload.room.ready_states or 0)
-					.. " payloadSelectedAt=" .. tostring(payload.room.selected_song and (payload.room.selected_song.selected_at or payload.room.selected_song.selectedAt) or "nil"))
-				local versionRoomId = tostring(roomId or payload.room.id or "")
-				if eventId and eventId ~= "0" and versionRoomId ~= "" then
-					local previousRoomEventId = online_canonical_id(self.lastRoomEventIdByRoomId[versionRoomId]) or "0"
-					if online_decimal_id_greater(previousRoomEventId, eventId) then
-						online_flow_trace("ignored_stale_room_event name=" .. tostring(name)
-							.. " roomId=" .. tostring(versionRoomId)
-							.. " previousEventId=" .. tostring(previousRoomEventId)
-							.. " eventId=" .. tostring(eventId))
-						return
-					end
-				end
-				if not self:ShouldApplyRoomSnapshotPayload(payload.room, "realtime_room_event:" .. tostring(name), eventId) then
-					return
-				end
-				online_flow_trace("realtime_room_event name=" .. tostring(name)
-					.. " payloadPhase=" .. tostring(payload.room.phase)
-					.. " previousPhase=" .. tostring(self.currentRoom and self.currentRoom.phase or "no-room")
-					.. " eventId=" .. tostring(eventId))
-				local room = self:ApplyRoomSnapshot(payload.room, "realtime_room_event:" .. tostring(name))
-				if not room then return false end
-				if eventId and eventId ~= "0" and versionRoomId ~= "" then
-					self.lastRoomEventIdByRoomId[versionRoomId] = eventId
-				end
-				online_flow_trace("realtime_room_event_broadcast_state name=" .. tostring(name)
-					.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
-					.. " appliedRoom=" .. tostring(room and room.id or "nil")
-					.. " appliedPhase=" .. tostring(room and room.phase or "nil")
-					.. " members=" .. tostring(room and room.members and #room.members or 0)
-					.. " readyStates=" .. tostring(room and room.ready_states and #room.ready_states or 0)
-					.. " eventId=" .. tostring(eventId))
-				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room or self.currentRoom or payload.room))
-				self:BroadcastLeaderboardFromRoom(room, "realtime_room_event:" .. tostring(name))
-				local roomPolicy = self:RealtimeRoomEventPolicy(name, payload.room ~= nil)
-				if roomPolicy.fetchRoom == true then
-					online_flow_trace("realtime_room_fetch_skipped reason=authoritative_snapshot"
-						.. " name=" .. tostring(name)
-						.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
-						.. " eventId=" .. tostring(eventId or "nil"))
-				end
-				if roomPolicy.memberChange == true then
-					online_flow_trace("room_member_change_refresh_requested name=" .. tostring(name)
-						.. " roomId=" .. tostring(roomId or payload.room.id or "nil")
-						.. " eventId=" .. tostring(eventId)
-						.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
-					if roomPolicy.refreshLobby == true then
-						online_flow_trace("room_policy_lobby_refresh name=" .. tostring(name)
-							.. " reason=" .. tostring(roomPolicy.reason or "nil"))
-						self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_policy") })
-					end
-				elseif roomPolicy.roomUiRefresh == true then
-					if payload.room then
-						if self.InvalidateRoomUiLobbyRefresh then
-							self:InvalidateRoomUiLobbyRefresh("snapshot_already_applied:" .. tostring(name))
-						end
-						online_flow_trace("room_ui_lobby_refresh_skipped name=" .. tostring(name)
-							.. " reason=snapshot_already_applied"
-							.. " screen=" .. tostring(self.currentScreenName or "nil")
-							.. " phase=" .. tostring(room and room.phase or self.currentRoom and self.currentRoom.phase or "nil"))
-					else
-					local now = GetTimeSinceStart()
-					local minInterval = tonumber(roomPolicy.minLobbyRefreshInterval) or 0.5
-					local lastRefreshAt = tonumber(self.lastRoomUiLobbyRefreshAt) or 0
-					if now - lastRefreshAt >= minInterval then
-						self.lastRoomUiLobbyRefreshAt = now
-						online_flow_trace("room_ui_lobby_refresh_immediate name=" .. tostring(name)
-							.. " age=" .. tostring(now - lastRefreshAt)
-							.. " minInterval=" .. tostring(minInterval)
-							.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
-						self:QueueLobbyRefresh({ reason = tostring(roomPolicy.reason or name or "room_ui_refresh") })
-					elseif not self.roomUiLobbyRefreshDeferredScheduled and self.ScheduleDeferredLobbyRefresh then
-						self.roomUiLobbyRefreshDeferredScheduled = true
-						online_flow_trace("room_ui_lobby_refresh_deferred name=" .. tostring(name)
-							.. " age=" .. tostring(now - lastRefreshAt)
-							.. " delay=" .. tostring(math.max(0.1, minInterval - (now - lastRefreshAt) + 0.05))
-							.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
-						self:ScheduleDeferredLobbyRefresh(
-							math.max(0.1, minInterval - (now - lastRefreshAt) + 0.05),
-							"room_ui_refresh:" .. tostring(name))
-					else
-						online_flow_trace("room_ui_lobby_refresh_already_deferred name=" .. tostring(name)
-							.. " age=" .. tostring(now - lastRefreshAt)
-							.. " minInterval=" .. tostring(minInterval)
-							.. " policyReason=" .. tostring(roomPolicy.reason or "nil"))
-					end
-					end
-				end
-				if name == "room.join_request.created" then
-					online_flow_trace("room_join_request_broadcast_pending source=realtime roomId=" .. tostring(roomId or payload.room.id or "nil"))
-					self:BroadcastPendingJoinRequestsFromRoom(room)
-				end
-				if room and room.play_state then
-					online_flow_trace("realtime_room_event_broadcast_play_state name=" .. tostring(name)
-						.. " version=" .. tostring(room.play_state.version_ms or "nil")
-						.. " phase=" .. tostring(room.phase or "nil"))
-					self:ApplyPlayStateSnapshot(room.play_state, "realtime_room_event:" .. tostring(name), room.play_state.version_ms, {
-						suppressLobbyBroadcast = true,
-					})
-				end
-			elseif roomId then
-				online_flow_trace("realtime_room_event_fetch name=" .. tostring(name)
-					.. " roomId=" .. tostring(roomId)
-					.. " eventId=" .. tostring(eventId))
-				self:FetchRoom(roomId, function(ok, decoded)
-					online_flow_trace("realtime_room_event_fetch_callback name=" .. tostring(name)
-						.. " ok=" .. tostring(ok == true)
+					online_flow_trace("realtime_room_event_fetch_result name=" .. tostring(name)
 						.. " roomId=" .. tostring(roomId)
-						.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
-						.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil"))
-					if ok and decoded and decoded.room then
-						online_flow_trace("realtime_room_event_fetch_result name=" .. tostring(name)
-							.. " roomId=" .. tostring(roomId)
-							.. " phase=" .. tostring(decoded.room.phase)
-							.. " members=" .. tostring(decoded.room.members and #decoded.room.members or 0)
-							.. " readyStates=" .. tostring(decoded.room.ready_states and #decoded.room.ready_states or 0)
-							.. " selectedAt=" .. tostring(decoded.room.selected_song and (decoded.room.selected_song.selected_at or decoded.room.selected_song.selectedAt) or "nil"))
-						local room = decoded.room
-						if room then
-							safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
-							self:BroadcastLeaderboardFromRoom(room, "realtime_room_event_fetch:" .. tostring(name))
-							if name == "room.join_request.created" then
-								self:BroadcastPendingJoinRequestsFromRoom(room)
-							end
+						.. " phase=" .. tostring(decoded.room.phase)
+						.. " members=" .. tostring(decoded.room.members and #decoded.room.members or 0)
+						.. " readyStates=" .. tostring(decoded.room.ready_states and #decoded.room.ready_states or 0)
+						.. " selectedAt=" .. tostring(decoded.room.selected_song and (decoded.room.selected_song.selected_at or decoded.room.selected_song.selectedAt) or "nil"))
+					local room = decoded.room
+					if room then
+						safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
+						self:BroadcastLeaderboardFromRoom(room, "realtime_room_event_fetch:" .. tostring(name))
+						if name == "room.join_request.created" then
+							self:BroadcastPendingJoinRequestsFromRoom(room)
 						end
 					end
-				end)
-			end
-	else
-		online_flow_trace_throttled("unhandled_realtime_event:" .. tostring(name), 30.0,
-			"realtime_event_unhandled name=" .. tostring(name)
-			.. " eventId=" .. tostring(eventId or "nil"))
-		if not self.syncInFlight then
-			online_flow_trace("realtime_event_unhandled_sync_requested name=" .. tostring(name)
-				.. " eventId=" .. tostring(eventId or "nil"))
-			self:Sync()
-		else
-			self.syncQueued = true
-			online_flow_trace("realtime_event_unhandled_sync_queued name=" .. tostring(name)
-				.. " eventId=" .. tostring(eventId or "nil"))
+				end
+			end)
 		end
-		-- A snapshot may repair current state, but cannot prove that a future
-		-- command had no side effect outside /sync. Keep the event unacknowledged
-		-- so the server retries it and the incompatibility remains observable.
-		return false
+else
+	online_flow_trace_throttled("unhandled_realtime_event:" .. tostring(name), 30.0,
+		"realtime_event_unhandled name=" .. tostring(name)
+		.. " eventId=" .. tostring(eventId or "nil"))
+	if not self.syncInFlight then
+		online_flow_trace("realtime_event_unhandled_sync_requested name=" .. tostring(name)
+			.. " eventId=" .. tostring(eventId or "nil"))
+		self:Sync()
+	else
+		self.syncQueued = true
+		online_flow_trace("realtime_event_unhandled_sync_queued name=" .. tostring(name)
+			.. " eventId=" .. tostring(eventId or "nil"))
 	end
-	return true
+	-- A snapshot may repair current state, but cannot prove that a future
+	-- command had no side effect outside /sync. Keep the event unacknowledged
+	-- so the server retries it and the incompatibility remains observable.
+	return false
+end
+return true
 end
 
 function ITGOnline:LobbySearchPayload(decoded)

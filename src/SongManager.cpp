@@ -2833,10 +2833,14 @@ void SongManager::FreeAllLoadedFromProfile(ProfileSlot slot) {
     delete apToDelete[i];
   }
 
-  // Popular and Shuffled may refer to courses that we just freed.
-  UpdatePopular();
-  UpdateShuffled();
-  RefreshCourseGroupInfo();
+  // These caches can only contain dangling course pointers when a course was
+  // actually removed.  Rebuilding them for an empty profile cleanup sorts the
+  // complete song and course library during a menu transition.
+  if (!apToDelete.empty()) {
+    UpdatePopular();
+    UpdateShuffled();
+    RefreshCourseGroupInfo();
+  }
 
   // Free profile steps.
   std::set<Steps*> setInUse;

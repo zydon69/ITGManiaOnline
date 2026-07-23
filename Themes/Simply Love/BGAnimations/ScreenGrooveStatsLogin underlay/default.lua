@@ -357,7 +357,11 @@ local af = Def.ActorFrame{
 				if panel then panel:playcommand("SetStatus", { text = THEME:GetString("ScreenSelectProfile", "GuestProfile") }) end
 
 			else
-				ParseArrowCloudIni(player)
+				if type(EnsureArrowCloudIniLoaded) == "function" then
+					EnsureArrowCloudIniLoaded(player)
+				else
+					ParseArrowCloudIni(player)
+				end
 
 				if SL[pn].ArrowCloudApiKey and SL[pn].ArrowCloudApiKey ~= "" then
 					if panel then panel:playcommand("SetStatus", { text = THEME:GetString("ScreenSelectProfile", "ArrowCloudProfileConnected") }) end

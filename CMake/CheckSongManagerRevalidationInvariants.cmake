@@ -26,6 +26,7 @@ require_contains("${source}" "p->SetPreferredCourses(sPreferredCourses" "Lua pre
 require_contains("${header}" "index >= m_sSongGroupNames.size()" "song group index API is bounded")
 require_contains("${source}" "refused to delete steps whose parent song" "DeleteSteps validates parent ownership")
 require_contains("${source}" "refused to delete course" "DeleteCourse rejects invalid ownership")
+require_contains("${source}" "if (!apToDelete.empty()) {" "empty profile cleanup skips global course cache rebuilds")
 require_contains("${source}" "MakeLower(audio_ext);" "song folder sanity check is case independent")
 require_contains("${source}" "MAX_EDIT_COURSES_PER_PROFILE - iNumCourseEditsLoaded" "profile course limit includes loaded edits")
 require_contains(
