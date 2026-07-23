@@ -1635,7 +1635,10 @@ pack_sync_busy = function()
 	if ITGOnline.PackSync.activeBrowseOnlyDownload == true then return true end
 	if ITGOnline.PackSync.pendingPostReloadSongInfo ~= nil then return true end
 	local status = trim_text(ITGOnline.PackSync.currentStatus)
-	return status == "download_requested" or status == "download_in_progress" or status == "reloading_songs"
+	return status == "download_requested"
+		or status == "download_in_progress"
+		or status == "reloading_songs"
+		or status == "validating_download"
 end
 
 local function lobby_song_selected_at(songInfo)
@@ -1744,6 +1747,7 @@ function pack_sync_is_checking_joined_song()
 		or status == "download_requested"
 		or status == "download_in_progress"
 		or status == "reloading_songs"
+		or status == "validating_download"
 		or status == "downloaded_ok"
 		or status == "ready"
 end
@@ -1754,6 +1758,7 @@ local function pack_sync_status_blocks_missing_verdict(status)
 		or status == "download_requested"
 		or status == "download_in_progress"
 		or status == "reloading_songs"
+		or status == "validating_download"
 		or status == "downloaded_ok"
 		or status == "local_chart_match_found"
 		or status == "ready"
@@ -2398,7 +2403,7 @@ local function pack_sync_line_for_player(player)
 			online_lobby_text("PackDownloading", "Downloading") .. suffix,
 			isCurrentUser and "local_progress" or "remote_progress_hidden")
 	end
-	if status == "download_requested" or status == "reloading_songs" then
+	if status == "download_requested" or status == "reloading_songs" or status == "validating_download" then
 		return ScreenOnlineLobbiesPackSyncDisplayLine(player, status,
 			online_lobby_text("PackDownloading", "Downloading"), "transient_download")
 	end

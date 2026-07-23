@@ -20,6 +20,7 @@
 #include "Course.h"
 #include "CourseLoaderCRS.h"
 #include "CourseUtil.h"
+#include "CryptManager.h"
 #include "Difficulty.h"
 #include "EnumHelper.h"
 #include "GameConstantsAndTypes.h"
@@ -2953,6 +2954,58 @@ class LunaSongManager : public Luna<SongManager> {
     LuaHelpers::CreateTableFromArray<Song*>(v, L);
     return 1;
   }
+
+  static int FindStepsByOnlineChartHash(T* p, lua_State* L) {
+    std::string expectedHash = SArg(1);
+    MakeLower(expectedHash);
+    if (expectedHash.size() != 64 ||
+        expectedHash.find_first_not_of("0123456789abcdef") !=
+            std::string::npos) {
+      lua_createtable(L, 0, 0);
+      return 1;
+    }
+
+    lua_createtable(L, 0, 0);
+    int resultIndex = 1;
+    for (Song* song : p->GetAllSongs()) {
+      if (song == nullptr) {
+        continue;
+      }
+      for (Steps* steps : song->GetAllSteps()) {
+        if (steps == nullptr) {
+          continue;
+        }
+
+        std::string rawHash = steps->GetGrooveStatsHash();
+        if (rawHash.empty()) {
+          rawHash = std::to_string(steps->GetHash());
+        }
+        MakeLower(rawHash);
+
+        std::string normalizedHash;
+        if (rawHash.size() == 64 &&
+            rawHash.find_first_not_of("0123456789abcdef") ==
+                std::string::npos) {
+          normalizedHash = rawHash;
+        } else {
+          normalizedHash =
+              BinaryToHex(CryptManager::GetSHA256ForString(rawHash));
+          MakeLower(normalizedHash);
+        }
+        if (normalizedHash != expectedHash) {
+          continue;
+        }
+
+        lua_createtable(L, 0, 2);
+        song->PushSelf(L);
+        lua_setfield(L, -2, "song");
+        steps->PushSelf(L);
+        lua_setfield(L, -2, "steps");
+        lua_rawseti(L, -2, resultIndex++);
+      }
+    }
+    return 1;
+  }
   static int GetAllCourses(T* p, lua_State* L) {
     std::vector<Course*> v;
     p->GetAllCourses(v, BArg(1));
@@ -3190,6 +3243,7 @@ class LunaSongManager : public Luna<SongManager> {
 
   LunaSongManager() {
     ADD_METHOD(GetAllSongs);
+    ADD_METHOD(FindStepsByOnlineChartHash);
     ADD_METHOD(GetAllCourses);
     ADD_METHOD(FindSong);
     ADD_METHOD(FindCourse);

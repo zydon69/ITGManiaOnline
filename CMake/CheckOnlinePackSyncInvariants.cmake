@@ -28,6 +28,10 @@ file(
   NETWORK_MANAGER_TEXT)
 file(
   READ
+  "${ITGMANIA_SOURCE_DIR}/src/SongManager.cpp"
+  SONG_MANAGER_TEXT)
+file(
+  READ
   "${ITGMANIA_SOURCE_DIR}/src/RageFileManager.cpp"
   RAGE_FILE_MANAGER_TEXT)
 
@@ -54,6 +58,9 @@ foreach(REQUIRED_SNIPPET
     "local expectedArchiveHash = \"\""
     "download_callback_exception"
     "download_reload_requested"
+    "ValidatingDownload = \"validating_download\""
+    "local_success_response"
+    "SONGMAN:FindStepsByOnlineChartHash(expectedChartHash)"
     "self.activeBrowseOnlyDownload == true"
     "SRC_REVIEW_TRACE [OnlinePackSync]")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
@@ -61,6 +68,18 @@ foreach(REQUIRED_SNIPPET
     message(
       FATAL_ERROR
       "Online pack-sync invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "FindStepsByOnlineChartHash"
+    "CryptManager::GetSHA256ForString(rawHash)"
+    "ADD_METHOD(FindStepsByOnlineChartHash)")
+  string(FIND "${SONG_MANAGER_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+      FATAL_ERROR
+      "Online native chart lookup invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 
@@ -119,6 +138,11 @@ foreach(REQUIRED_SNIPPET
     "evaluation_room_navigation_direct"
     "lobby_enter_navigation_direct"
     "EstimatedServerTimeMilliseconds"
+    "userActivityMinIntervalSeconds = ITGOnline.userActivityMinIntervalSeconds or 15"
+    "final_score_submission_started:"
+    "local_round_terminal"
+    "fetchPlayStateRequests"
+    "source = \"ready_request_replayed_success\""
     "profile-guid:v2:"
     "stored_token_binding_user_mismatch"
     "stored token ignored reason=profile_binding_missing_or_invalid"
@@ -130,6 +154,17 @@ foreach(REQUIRED_SNIPPET
       "Online heartbeat invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+string(
+  FIND
+  "${ONLINE_CLIENT_TEXT}"
+  "lobby_state_payload_final_result_player_restored"
+  RESTORED_RESULT_PLAYER_OFFSET)
+if(NOT RESTORED_RESULT_PLAYER_OFFSET EQUAL -1)
+  message(
+    FATAL_ERROR
+    "Online lobby roster invariant failed: historical result player restored into live members")
+endif()
 
 string(FIND "${ONLINE_CLIENT_TEXT}" "lower(chartHash)" INVALID_GLOBAL_LOWER_OFFSET)
 if(NOT INVALID_GLOBAL_LOWER_OFFSET EQUAL -1)

@@ -10,6 +10,15 @@ ITGOnline.PackSync = ITGOnline.PackSync or {}
 
 local PackSync = ITGOnline.PackSync
 
+local function local_success_response(source)
+	return {
+		statusCode = 200,
+		transportAttempted = false,
+		localOnly = true,
+		source = tostring(source or "local_success"),
+	}
+end
+
 local function pack_text(key, fallback, ...)
 	local value = fallback or key
 	if THEME and THEME.HasString and THEME:HasString("ScreenOnlineLobbies", key) then
@@ -90,6 +99,7 @@ PackSync.status = {
 	DownloadInProgress = "download_in_progress",
 	DownloadFailed = "download_failed",
 	ReloadingSongs = "reloading_songs",
+	ValidatingDownload = "validating_download",
 	DownloadedOk = "downloaded_ok",
 	ChartMismatch = "chart_mismatch",
 }
@@ -106,6 +116,7 @@ PackSync.statusText = {
 	download_in_progress = "Download in progress",
 	download_failed = "Download failed",
 	reloading_songs = "Reloading songs",
+	validating_download = "Validating downloaded chart",
 	downloaded_ok = "Download complete",
 	chart_mismatch = "Different chart",
 }
@@ -122,6 +133,7 @@ PackSync.statusTextKeys = {
 	download_in_progress = "PackStatusDownloadInProgress",
 	download_failed = "PackStatusDownloadFailed",
 	reloading_songs = "PackStatusReloadingSongs",
+	validating_download = "PackStatusValidatingDownload",
 	downloaded_ok = "PackStatusDownloaded",
 	chart_mismatch = "PackStatusChartMismatch",
 }
@@ -139,6 +151,7 @@ function PackSync:IsActiveDownloadStatus(status)
 	return status == self.status.DownloadRequested
 		or status == self.status.DownloadInProgress
 		or status == self.status.ReloadingSongs
+		or status == self.status.ValidatingDownload
 end
 
 function PackSync:IsActiveDownload()
@@ -1285,7 +1298,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 				ignored_reason = "client_local_scan_status",
 			},
 			local_only = true,
-		}, nil)
+		}, local_success_response("client_local_scan_status"))
 		return
 	end
 	if status == self.status.Ready and currentSelectedAt ~= "" then
@@ -1323,7 +1336,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 						server_ready = alreadyReadyForSelection,
 					},
 					local_only = true,
-				}, nil)
+				}, local_success_response("client_ready_status_protected_from_local_scan"))
 				return
 			end
 		end
@@ -1353,7 +1366,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 					ignored_reason = "client_no_active_selection_local_only",
 				},
 				local_only = true,
-			}, nil)
+			}, local_success_response("client_no_active_selection_local_only"))
 			return
 		end
 	local usesDownloadSequence = self:UsesDownloadStatusSequence(status)
@@ -1390,7 +1403,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 						ignored_reason = "client_duplicate_status_intent",
 					},
 					duplicate = true,
-				}, nil)
+				}, local_success_response("client_duplicate_status_intent"))
 				return
 			end
 		end
@@ -1467,7 +1480,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 					ignored_reason = "client_duplicate_status",
 				},
 				duplicate = true,
-			}, nil)
+			}, local_success_response("client_duplicate_status"))
 			return
 		end
 		self.currentStatus = status
@@ -2240,6 +2253,7 @@ function PackSync:FindLocalMatch(songInfo)
 		self:ApplyLocalStatus(self.status.LocalChartMatchFound, cachedScan.matchMessage)
 		return {
 			ok = true,
+			status = "matched",
 			song = cachedScan.song,
 			steps = cachedScan.steps,
 			payload = cachedScan.payload,
@@ -2265,7 +2279,11 @@ function PackSync:FindLocalMatch(songInfo)
 		}
 	end
 	trace("Searching local charts title=" .. selected_title(songInfo) .. " pack=" .. selected_pack(songInfo))
-	self:UpdateStatus(self.status.SearchingLocalCharts, nil)
+	if self.validatingPostReload == true then
+		self:ApplyLocalStatus(self.status.ValidatingDownload)
+	else
+		self:UpdateStatus(self.status.SearchingLocalCharts, nil)
+	end
 
 	local expectedChartHash = selected_chart_hash(songInfo)
 		if expectedChartHash == "" then
@@ -2329,7 +2347,7 @@ function PackSync:FindLocalMatch(songInfo)
 				and pack_text("PackAndChartFound", "Pack and chart found")
 				or pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
 			self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
-			local result = { ok = true, song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
+			local result = { ok = true, status = "matched", song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
 			self.localScanCache[scanKey] = result
 			return result
 		end
@@ -2353,7 +2371,21 @@ function PackSync:FindLocalMatch(songInfo)
 		end
 	end
 
-	local indexedCandidates = self:LocalChartIndex()[expectedChartHash] or {}
+	local indexedCandidates = {}
+	if SONGMAN.FindStepsByOnlineChartHash then
+		local okCandidates, candidates = pcall(function()
+			return SONGMAN:FindStepsByOnlineChartHash(expectedChartHash)
+		end)
+		if okCandidates and type(candidates) == "table" then
+			indexedCandidates = candidates
+		else
+			trace("Native chart hash lookup failed; using Lua index fallback error="
+				.. tostring(candidates or "invalid_result"))
+			indexedCandidates = self:LocalChartIndex()[expectedChartHash] or {}
+		end
+	else
+		indexedCandidates = self:LocalChartIndex()[expectedChartHash] or {}
+	end
 	trace("Local chart hash index candidates hash=" .. tostring(expectedChartHash)
 		.. " count=" .. tostring(#indexedCandidates))
 	for candidate in ivalues(indexedCandidates) do
@@ -2365,7 +2397,7 @@ function PackSync:FindLocalMatch(songInfo)
 				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
 				local matchMessage = pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
 				self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
-				local result = { ok = true, song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
+				local result = { ok = true, status = "matched", song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
 				self.localScanCache[scanKey] = result
 				return result
 			end
