@@ -1558,6 +1558,17 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 	self.pendingOnlineOptionSongHash = currentSong and self.SongHashFor and self:SongHashFor(currentSong) or ""
 	self.pendingOnlineOptionSelectionKey = self.CurrentOptionsSelectionKey
 		and self:CurrentOptionsSelectionKey(self.currentRoom) or ""
+	local selectedSong = self.currentRoom and self.currentRoom.selected_song or nil
+	local selectedSongHash = type(selectedSong) == "table"
+		and tostring(selectedSong.song_hash or selectedSong.songHash or "") or ""
+	if self.pendingOnlineOptionSongHash == ""
+		and self.pendingOnlineOptionSelectionKey ~= ""
+		and selectedSongHash ~= "" then
+		-- Some engine transitions clear the song's file-backed hash before
+		-- SaveSelections runs. The immutable room selection key still binds these
+		-- freshly saved steps to the exact selected song.
+		self.pendingOnlineOptionSongHash = selectedSongHash
+	end
 	local optionPlayerKey = local_player_key(player)
 	self.pendingOnlineOptionStateByPlayer[optionPlayerKey] = {
 		steps = steps,
@@ -8618,6 +8629,35 @@ function ITGOnline:HandleLocalPartyInvariantFailure(reason, player, payload)
 	end
 end
 
+function ITGOnline:SendCompanionRealtimePing(player, source)
+	local context = self:CompanionRealtimeContext(player)
+	if not context.socket or context.connected ~= true then
+		online_flow_trace("companion_realtime_ping_skipped localPlayer=" .. local_player_key(player)
+			.. " reason=no_connected_socket"
+			.. " source=" .. tostring(source or "unknown"))
+		return false
+	end
+
+	local pingId = request_id()
+	local encodedOk, encoded = pcall(JsonEncode, {
+		action = "ping",
+		ping_id = pingId,
+	})
+	if not encodedOk or not encoded then
+		online_flow_trace("companion_realtime_ping_encode_failed localPlayer=" .. local_player_key(player))
+		return false
+	end
+
+	local sendOk, sent = safe_call("companion_realtime_ping:" .. local_player_key(player), function()
+		return context.socket:Send(encoded)
+	end)
+	online_flow_trace_throttled("companion_realtime_ping:" .. local_player_key(player), 30,
+		"companion_realtime_ping localPlayer=" .. local_player_key(player)
+		.. " source=" .. tostring(source or "unknown")
+		.. " sent=" .. tostring(sendOk and sent == true))
+	return sendOk and sent == true
+end
+
 function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
 	local normalized, normalizeError
 	if ITGOnlineProtocol and ITGOnlineProtocol.normalize_event then
@@ -8636,7 +8676,12 @@ function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
 		.. " event=" .. tostring(eventName)
 		.. " room=" .. tostring(eventPayload.room_id or eventPayload.roomId or "nil"))
 
-	if eventName == "auth.session_revoked" then
+	if eventName == "server.ping" then
+		self:SendCompanionRealtimePing(player, "server.ping")
+	elseif eventName == "connection.ready" or eventName == "pong" then
+		-- These control events only keep the companion transport alive. P1 remains
+		-- the coordinator responsible for applying shared room state.
+	elseif eventName == "auth.session_revoked" then
 		self:ClearLocalPlayerSession(player, { clearStored = true })
 		self:HandleLocalPartyInvariantFailure("companion_auth_session_revoked", player, eventPayload)
 	elseif eventName == "room.kicked" or eventName == "room.left" then
@@ -9605,9 +9650,12 @@ function ITGOnline:BroadcastPendingJoinRequest(joinRequest, room)
 			id = joinRequest.id,
 			room_id = roomId,
 			user_id = joinRequest.user_id or (joinRequest.user and joinRequest.user.id) or nil,
+			companion_user_id = joinRequest.companion_user_id
+				or (joinRequest.companion and joinRequest.companion.id) or nil,
 			status = joinRequest.status or "pending",
 		},
 		requester = joinRequest.user,
+		companion = joinRequest.companion,
 		room = resolvedRoom,
 	})
 	return true
@@ -13654,10 +13702,10 @@ function ITGOnline:CurrentOnlineOptionSummary(player)
 		and tostring(self:CurrentOptionsSelectionKey(self.currentRoom) or "") or ""
 	if songHash == ""
 		and selectedSongHash ~= ""
-		and rememberedSongHash ~= ""
 		and rememberedSelectionKey ~= ""
 		and rememberedSelectionKey == currentSelectionKey
-		and rememberedSongHash:lower() == selectedSongHash:lower() then
+		and (rememberedSongHash == ""
+			or rememberedSongHash:lower() == selectedSongHash:lower()) then
 		-- ScreenPlayerOptions can clear GAMESTATE's song while returning to the
 		-- lobby. Each local player's remembered option state is bound to the
 		-- immutable room selection, so a different P2 difficulty remains valid.

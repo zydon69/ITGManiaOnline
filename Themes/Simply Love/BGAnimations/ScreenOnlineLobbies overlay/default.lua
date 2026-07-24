@@ -86,7 +86,20 @@ end
 
 local function enqueue_private_prompt(actor, params, kind)
 	local key = private_prompt_key(params, kind)
-	if key:sub(-1) == ":" or private_prompt_keys[key] then return false end
+	if key:sub(-1) == ":" then return false end
+	if private_prompt_keys[key] then
+		if showing_private_join_prompt
+			and private_prompt_key(private_join_request, private_join_prompt_kind) == key
+		then
+			private_join_request = params
+			private_join_prompt_kind = kind
+			actor:queuecommand("UpdatePrivateJoinPrompt")
+			lobby_flow_trace("private_prompt_refreshed kind=" .. tostring(kind)
+				.. " key=" .. tostring(key))
+			return true
+		end
+		return false
+	end
 	private_prompt_keys[key] = true
 	if not showing_private_join_prompt then
 		display_private_prompt(actor, params, kind)
@@ -4479,6 +4492,7 @@ local af = Def.ActorFrame{
 		local prompt = self:GetChild("PrivateJoinPrompt")
 		if not prompt then return end
 		local requester = private_join_request and private_join_request.requester or {}
+		local companion = private_join_request and private_join_request.companion or {}
 		local inviter = private_join_request and private_join_request.inviter or {}
 		local room = private_join_request and private_join_request.room or {}
 		local title = prompt:GetChild("PrivateJoinTitle")
@@ -4487,8 +4501,15 @@ local af = Def.ActorFrame{
 				title:settext(online_lobby_text("PlayerInvitesYou", "%s invites you",
 					tostring(inviter.name or online_lobby_text("UnknownPlayer", "Player"))))
 			else
-				title:settext(online_lobby_text("PlayerWantsToJoin", "%s wants to join",
-					tostring(requester.name or online_lobby_text("UnknownPlayer", "Player"))))
+				local requesterName = tostring(requester.name or online_lobby_text("UnknownPlayer", "Player"))
+				local companionName = tostring(companion.name or "")
+				if companionName ~= "" then
+					title:settext(online_lobby_text("PlayersWantToJoin", "Accept %s and %s?",
+						requesterName, companionName))
+				else
+					title:settext(online_lobby_text("PlayerWantsToJoin", "%s wants to join",
+						requesterName))
+				end
 			end
 		end
 		local detail = prompt:GetChild("PrivateJoinDetail")
