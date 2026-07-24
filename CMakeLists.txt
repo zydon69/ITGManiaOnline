@@ -56,11 +56,6 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckSrcRevalidationBatch001Invariants.cmake)
   add_test(
-    NAME src_review_tracker_invariants
-    COMMAND ${CMAKE_COMMAND}
-            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSrcReviewTrackerInvariants.cmake)
-  add_test(
     NAME writer_revalidation_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}

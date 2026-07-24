@@ -108,3 +108,11 @@ BuildLog.htm
 *.pc
 *.d
 *.lastcodeanalysissucceeded
+
+# Local audit, review, and implementation tracking
+/PLAN-*.md
+/Docs/*_code_review.md
+/Docs/*_review.md
+/Docs/*_integration_plan.md
+/Docs/*_sync.md
+/CMake/CheckSrcReviewTrackerInvariants.cmake
