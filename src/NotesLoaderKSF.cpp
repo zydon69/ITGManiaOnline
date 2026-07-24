@@ -43,7 +43,7 @@ static bool AddValidatedBPMAtRow(
   if (!IsValidPositiveBPM(bpm)) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored invalid KSF BPM in %s at row %i: %f.", context,
+        "ignored invalid KSF BPM in %s at row %i: %f.", context,
         row, bpm);
     return false;
   }
@@ -58,7 +58,7 @@ static bool SetValidatedBPMAtBeat(
   if (!IsValidPositiveBPM(bpm)) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored invalid KSF BPM in %s at beat %f: %f.", context,
+        "ignored invalid KSF BPM in %s at beat %f: %f.", context,
         beat, bpm);
     return false;
   }
@@ -75,7 +75,7 @@ static bool AddValidatedBunki(
       !std::isfinite(fPos) || fPos <= 0.0f) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored invalid KSF BUNKI in %s: previous BPM %f, new "
+        "ignored invalid KSF BUNKI in %s: previous BPM %f, new "
         "BPM %f, position %f.",
         context, fEarlyBPM, fCurBPM, fPos);
     return false;
@@ -91,7 +91,7 @@ static bool NormalizeTickCount(
   if (rawTicks <= 0) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored invalid KSF tick count in %s: %d.", context,
+        "ignored invalid KSF tick count in %s: %d.", context,
         rawTicks);
     if (rejectNonPositive) {
       return false;
@@ -103,7 +103,7 @@ static bool NormalizeTickCount(
   if (ticksOut != rawTicks) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX clamped KSF tick count in %s from %d to %d.", context,
+        "clamped KSF tick count in %s from %d to %d.", context,
         rawTicks, ticksOut);
   }
   return true;
@@ -114,7 +114,7 @@ static bool ExtractDirectMoveValue(
   if (row.size() <= 2) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored malformed KSF DirectMove command \"%s\".",
+        "ignored malformed KSF DirectMove command \"%s\".",
         row.c_str());
     return false;
   }
@@ -129,7 +129,7 @@ static bool ExtractDirectMoveValue(
   if (rawValue.empty()) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored KSF DirectMove command \"%s\" with an empty "
+        "ignored KSF DirectMove command \"%s\" with an empty "
         "value.",
         row.c_str());
     return false;
@@ -142,7 +142,7 @@ static bool ExtractDirectMoveValue(
       errno == ERANGE || !std::isfinite(valueOut)) {
     LOG->UserLog(
         "Song file", path,
-        "SRC_AUDIT_FIX ignored KSF DirectMove command \"%s\" with invalid "
+        "ignored KSF DirectMove command \"%s\" with invalid "
         "numeric value \"%s\".",
         row.c_str(), rawValue.c_str());
     return false;
@@ -252,7 +252,7 @@ static bool LoadFromKSFFile(
   if (!hasValidBPM) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX has no valid KSF BPM. Defaulting chart timing to 60.");
+        "has no valid KSF BPM. Defaulting chart timing to 60.");
     BPM1 = 60.0f;
     stepsTiming.AddSegment(BPMSegment(0, BPM1));
   }
@@ -273,7 +273,7 @@ static bool LoadFromKSFFile(
   if (vNoteRows.empty()) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX has no KSF STEP data. Chart ignored.");
+        "has no KSF STEP data. Chart ignored.");
     return false;
   }
 
@@ -390,7 +390,7 @@ static bool LoadFromKSFFile(
     default:
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX has unsupported KSF StepsType %i. Chart ignored.",
+          "has unsupported KSF StepsType %i. Chart ignored.",
           out.m_StepsType);
       return false;
   }
@@ -494,7 +494,7 @@ static bool LoadFromKSFFile(
         if (numTemp <= 0) {
           LOG->UserLog(
               "Song file", sPath,
-              "SRC_AUDIT_FIX ignored invalid KSF combo multiplier at beat %f: "
+              "ignored invalid KSF combo multiplier at beat %f: "
               "%f.",
               fCurBeat, numTemp);
           continue;
@@ -523,7 +523,7 @@ static bool LoadFromKSFFile(
     if (static_cast<int>(sRowString.size()) < notedata.GetNumTracks()) {
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX has a short KSF row \"%s\" for %i tracks. Chart "
+          "has a short KSF row \"%s\" for %i tracks. Chart "
           "ignored.",
           sRowString.c_str(), notedata.GetNumTracks());
       return false;
@@ -771,7 +771,7 @@ static bool LoadGlobalData(
   if (!hasValidBPM) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX has no valid global KSF BPM. Defaulting song timing to "
+        "has no valid global KSF BPM. Defaulting song timing to "
         "60.");
     BPM1 = 60.0f;
     out.m_SongTiming.AddSegment(BPMSegment(0, BPM1));
@@ -836,7 +836,7 @@ static bool LoadGlobalData(
     if (asBits.size() <= 1) {
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX could not infer KSF title from path.");
+          "could not infer KSF title from path.");
       return true;
     }
     LoadTags(asBits[asBits.size() - 2], out);
@@ -876,7 +876,7 @@ bool KSFLoader::LoadFromDir(const std::string& sDir, Song& out) {
   if (arrayKSFFileNames.empty()) {
     LOG->UserLog(
         "Song", sDir,
-        "SRC_AUDIT_FIX found no applicable KSF simfile for direct LoadFromDir.");
+        "found no applicable KSF simfile for direct LoadFromDir.");
     return false;
   }
 

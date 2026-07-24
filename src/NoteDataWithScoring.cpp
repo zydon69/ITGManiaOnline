@@ -50,7 +50,7 @@ TapNoteScore NormalizeTapNoteScore(
     return tns;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid TapNoteScore %i in "
+      "NoteDataWithScoring ignored invalid TapNoteScore %i in "
       "%s.",
       static_cast<int>(tns), context);
   return fallback;
@@ -62,7 +62,7 @@ TapNoteScore NormalizeThreshold(
     return tns;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: NoteDataWithScoring replaced invalid threshold %i in "
+      "NoteDataWithScoring replaced invalid threshold %i in "
       "%s with %s.",
       static_cast<int>(tns), context, TapNoteScoreToString(fallback).c_str());
   return fallback;
@@ -73,7 +73,7 @@ float NormalizeTapOffset(float offset, const char* context) {
     return offset;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: NoteDataWithScoring replaced non-finite tap offset %f "
+      "NoteDataWithScoring replaced non-finite tap offset %f "
       "in %s with 0.",
       offset, context);
   return 0.0f;
@@ -85,7 +85,7 @@ int AddSaturatedInt(int current, int add, const char* context) {
   }
   if (current > std::numeric_limits<int>::max() - add) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring saturated %s counter %i + %i.",
+        "NoteDataWithScoring saturated %s counter %i + %i.",
         context, current, add);
     return std::numeric_limits<int>::max();
   }
@@ -100,7 +100,7 @@ int ClampRadarCount(float value, RadarCategory rc) {
   if (!std::isfinite(value) || value <= 0.0f) {
     if (value < 0.0f || !std::isfinite(value)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: NoteDataWithScoring clamped invalid possible radar "
+          "NoteDataWithScoring clamped invalid possible radar "
           "%s value %f to 0.",
           RadarCategoryToString(rc).c_str(), value);
     }
@@ -109,7 +109,7 @@ int ClampRadarCount(float value, RadarCategory rc) {
   const float maxInt = static_cast<float>(std::numeric_limits<int>::max());
   if (value >= maxInt) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring saturated possible radar %s value "
+        "NoteDataWithScoring saturated possible radar %s value "
         "%f.",
         RadarCategoryToString(rc).c_str(), value);
     return std::numeric_limits<int>::max();
@@ -120,14 +120,14 @@ int ClampRadarCount(float value, RadarCategory rc) {
 int SafeHoldEndRow(int row, int duration) {
   if (duration <= 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid hold duration %i "
+        "NoteDataWithScoring ignored invalid hold duration %i "
         "at row %i.",
         duration, row);
     return -1;
   }
   if (duration > MAX_NOTE_ROW - row) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring clamped overflowing hold end row "
+        "NoteDataWithScoring clamped overflowing hold end row "
         "%i + %i.",
         row, duration);
     return MAX_NOTE_ROW;
@@ -138,7 +138,7 @@ int SafeHoldEndRow(int row, int duration) {
 bool NoteBelongsToPlayer(const TapNote& tn, PlayerNumber pn) {
   if (!IsValidPlayerNumberForScoring(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring ignored invalid PlayerNumber %i.",
+        "NoteDataWithScoring ignored invalid PlayerNumber %i.",
         static_cast<int>(pn));
     return false;
   }
@@ -151,7 +151,7 @@ bool NoteBelongsToPlayer(const TapNote& tn, PlayerNumber pn) {
 int LastTapNoteScoreTrack(const NoteData& in, unsigned iRow, PlayerNumber pn) {
   if (!IsValidScoringRow(iRow) || !IsValidPlayerNumberForScoring(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring rejected row helper request row=%u "
+        "NoteDataWithScoring rejected row helper request row=%u "
         "player=%i.",
         iRow, static_cast<int>(pn));
     return -1;
@@ -265,7 +265,7 @@ TapNoteScore NoteDataWithScoring::MinTapNoteScore(
   // LOG->Trace("Hey I'm NoteDataWithScoring::MinTapNoteScore");
   if (!IsValidScoringRow(row) || !IsValidPlayerNumberForScoring(plnum)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring rejected MinTapNoteScore row=%u "
+        "NoteDataWithScoring rejected MinTapNoteScore row=%u "
         "player=%i.",
         row, static_cast<int>(plnum));
     return TNS_None;
@@ -312,7 +312,7 @@ float GetActualVoltageRadarValue(
     if (!std::isfinite(MaxCombo.m_fSizeSeconds) ||
         MaxCombo.m_fSizeSeconds < 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: NoteDataWithScoring clamped invalid max combo "
+          "NoteDataWithScoring clamped invalid max combo "
           "seconds %f to 0.",
           MaxCombo.m_fSizeSeconds);
     }
@@ -322,7 +322,7 @@ float GetActualVoltageRadarValue(
       SCALE(MaxCombo.m_fSizeSeconds, 0, fSongSeconds, 0.0f, 1.0f);
   if (!std::isfinite(fComboPercent)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring clamped non-finite voltage %f to "
+        "NoteDataWithScoring clamped non-finite voltage %f to "
         "0.",
         fComboPercent);
     return 0.0f;
@@ -339,7 +339,7 @@ float GetActualChaosRadarValue(
   }
   if (iPossibleDP < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring clamped negative possible dance "
+        "NoteDataWithScoring clamped negative possible dance "
         "points %i for chaos radar.",
         iPossibleDP);
     return 0.0f;
@@ -348,7 +348,7 @@ float GetActualChaosRadarValue(
   const int ActualDP = pss.m_iActualDancePoints;
   if (ActualDP < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring clamped negative actual dance "
+        "NoteDataWithScoring clamped negative actual dance "
         "points %i for chaos radar.",
         ActualDP);
     return 0.0f;
@@ -356,7 +356,7 @@ float GetActualChaosRadarValue(
   const float chaos = float(ActualDP) / iPossibleDP;
   if (!std::isfinite(chaos)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring clamped non-finite chaos %f to 0.",
+        "NoteDataWithScoring clamped non-finite chaos %f to 0.",
         chaos);
     return 0.0f;
   }
@@ -487,7 +487,7 @@ void NoteDataWithScoring::GetActualRadarValues(
   // way to combine them into one. -Kyz
   if (!std::isfinite(song_seconds) || song_seconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring normalized invalid song duration "
+        "NoteDataWithScoring normalized invalid song duration "
         "%f to 0.",
         song_seconds);
     song_seconds = 0.0f;
@@ -496,7 +496,7 @@ void NoteDataWithScoring::GetActualRadarValues(
       pss.m_for_multiplayer ? PLAYER_INVALID : pss.m_player_number;
   if (!IsValidPlayerNumberForScoring(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: NoteDataWithScoring using PLAYER_INVALID for invalid "
+        "NoteDataWithScoring using PLAYER_INVALID for invalid "
         "actual radar player %i.",
         static_cast<int>(pn));
     pn = PLAYER_INVALID;
@@ -538,7 +538,7 @@ void NoteDataWithScoring::GetActualRadarValues(
         static bool loggedMissingTiming = false;
         if (!loggedMissingTiming) {
           LOG->Trace(
-              "SRC_AUDIT_FIX: NoteDataWithScoring::GetActualRadarValues used "
+              "NoteDataWithScoring::GetActualRadarValues used "
               "judgable fallback without processed timing data; player=%s "
               "song_seconds=%f row=%i. This should only happen while scoring "
               "synthetic or partially-loaded NoteData.",
@@ -616,7 +616,7 @@ void NoteDataWithScoring::GetActualRadarValues(
                 last_held_row = state.curr_row - 1;
               } else if (last_held_row > hold_end) {
                 LOG->Warn(
-                    "SRC_AUDIT_FIX: NoteDataWithScoring clamped hold last "
+                    "NoteDataWithScoring clamped hold last "
                     "held row %i to end row %i.",
                     last_held_row, hold_end);
                 last_held_row = hold_end;
@@ -664,7 +664,7 @@ void NoteDataWithScoring::GetActualRadarValues(
         hittable_steps_length = duration;
       } else if (!std::isfinite(duration)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: NoteDataWithScoring ignored non-finite hittable "
+            "NoteDataWithScoring ignored non-finite hittable "
             "duration %f.",
             duration);
       }

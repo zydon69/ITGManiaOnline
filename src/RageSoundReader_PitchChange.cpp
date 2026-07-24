@@ -48,7 +48,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
   std::unique_ptr<RageSoundReader> pOwnedSource(pSource);
   if (!IsUsableSource(pOwnedSource.get())) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange received an "
+        "RageSoundReader_PitchChange received an "
         "invalid source reader");
     return;
   }
@@ -61,7 +61,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
       pOwnedSource.release();
       if (!IsUsableSource(pSpeedChange.get())) {
         SetError(
-            "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+            "RageSoundReader_PitchChange could not "
             "build a usable speed-change reader");
         return;
       }
@@ -73,7 +73,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
       pSpeedChange.release();
       if (!IsUsableSource(pResample.get())) {
         SetError(
-            "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+            "RageSoundReader_PitchChange could not "
             "build a usable resampler");
         return;
       }
@@ -92,7 +92,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
     pOwnedSource.release();
     if (!IsUsableSource(pResample.get())) {
       SetError(
-          "SRC_AUDIT_FIX SRC-2825: RageSoundReader_PitchChange could not "
+          "RageSoundReader_PitchChange could not "
           "build a usable non-preserving resampler");
       return;
     }
@@ -101,7 +101,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
     m_pSource = pResample.release();
   } catch (const std::bad_alloc&) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2824: RageSoundReader_PitchChange ran out of "
+        "RageSoundReader_PitchChange ran out of "
         "memory while building its filter chain");
   }
 }
@@ -138,7 +138,7 @@ RageSoundReader_PitchChange::RageSoundReader_PitchChange(
 
   if (!IsTopologyUsable()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2826: RageSoundReader_PitchChange copy produced "
+        "RageSoundReader_PitchChange copy produced "
         "an invalid filter topology");
   }
 }
@@ -162,18 +162,18 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
     return 0;
   }
   if (pBuf == nullptr) {
-    SetError("SRC_AUDIT_FIX SRC-2827: PitchChange Read called with null buffer");
+    SetError("PitchChange Read called with null buffer");
     return RageSoundReader::ERROR;
   }
   if (iFrames < 0) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2827: PitchChange Read called with negative frame "
+        "PitchChange Read called with negative frame "
         "count");
     return RageSoundReader::ERROR;
   }
   if (!IsTopologyUsable()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2827: PitchChange Read has no usable filter "
+        "PitchChange Read has no usable filter "
         "topology");
     return RageSoundReader::ERROR;
   }
@@ -201,7 +201,7 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
       if (m_bPreservePitch) {
         if (!m_pResample->SetRate(m_fPitchRatio)) {
           SetError(
-              "SRC_AUDIT_FIX SRC-3321: PitchChange resampler refused pitch "
+              "PitchChange resampler refused pitch "
               "ratio");
           return RageSoundReader::ERROR;
         }
@@ -209,14 +209,14 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
         if (!std::isfinite(fActualPitchRatio) || fActualPitchRatio <= 0.0f ||
             m_pSpeedChange == nullptr) {
           SetError(
-              "SRC_AUDIT_FIX SRC-2830: PitchChange resampler rejected pitch "
+              "PitchChange resampler rejected pitch "
               "ratio");
           return RageSoundReader::ERROR;
         }
         float fRequestedSpeedRatio = m_fSpeedRatio / fActualPitchRatio;
         if (!m_pSpeedChange->SetSpeedRatio(fRequestedSpeedRatio)) {
           SetError(
-              "SRC_AUDIT_FIX SRC-2830: PitchChange speed-change reader rejected "
+              "PitchChange speed-change reader rejected "
               "derived speed ratio");
           return RageSoundReader::ERROR;
         }
@@ -225,14 +225,14 @@ int RageSoundReader_PitchChange::Read(float* pBuf, int iFrames) {
       } else {
         if (!m_pResample->SetRate(m_fSpeedRatio)) {
           SetError(
-              "SRC_AUDIT_FIX SRC-3321: PitchChange resampler refused speed "
+              "PitchChange resampler refused speed "
               "ratio");
           return RageSoundReader::ERROR;
         }
         float fActualSpeedRatio = m_pResample->GetRate();
         if (!std::isfinite(fActualSpeedRatio) || fActualSpeedRatio <= 0.0f) {
           SetError(
-              "SRC_AUDIT_FIX SRC-2830: PitchChange resampler rejected speed "
+              "PitchChange resampler rejected speed "
               "ratio");
           return RageSoundReader::ERROR;
         }
@@ -271,7 +271,7 @@ bool RageSoundReader_PitchChange::SetProperty(
 
 bool RageSoundReader_PitchChange::SetSpeedRatio(float fRatio) {
   if (!IsUsableRatio(fRatio)) {
-    SetError("SRC_AUDIT_FIX SRC-2830: PitchChange rejected unsafe speed ratio");
+    SetError("PitchChange rejected unsafe speed ratio");
     return false;
   }
   std::lock_guard<std::mutex> lock(m_StateMutex);
@@ -282,7 +282,7 @@ bool RageSoundReader_PitchChange::SetSpeedRatio(float fRatio) {
 
 bool RageSoundReader_PitchChange::SetPitchRatio(float fRatio) {
   if (!IsUsableRatio(fRatio)) {
-    SetError("SRC_AUDIT_FIX SRC-2830: PitchChange rejected unsafe pitch ratio");
+    SetError("PitchChange rejected unsafe pitch ratio");
     return false;
   }
   std::lock_guard<std::mutex> lock(m_StateMutex);
@@ -319,9 +319,7 @@ void RageSoundReader_PitchChange::ClearError() const {
 }
 
 void RageSoundReader_PitchChange::SetError(const std::string& sError) const {
-  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
-    LogReviewSrcDiagnostics("%s", sError.c_str());
-  }
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

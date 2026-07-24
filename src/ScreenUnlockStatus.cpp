@@ -48,7 +48,7 @@ struct UnlockStatusMetrics {
 
 void WarnScreenUnlockStatus(const char* message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenUnlockStatus: %s", message);
+    LOG->Warn("ScreenUnlockStatus: %s", message);
   }
 }
 

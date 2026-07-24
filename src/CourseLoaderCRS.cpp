@@ -390,7 +390,7 @@ bool CourseLoaderCRS::LoadEditFromFile(
   pCourse->m_sPath = sEditFilePath;
   if (!LoadFromMsd(sEditFilePath, msd, *pCourse, true)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-114: ignored invalid edit course '%s'",
+        "ignored invalid edit course '%s'",
         sEditFilePath.c_str());
     delete pCourse;
     return false;

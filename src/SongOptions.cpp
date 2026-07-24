@@ -233,7 +233,7 @@ void SongOptions::FromString(const std::string& sMultipleMods) {
         continue;
       }
       LOG->Trace(
-          "SRC_AUDIT_FIX: Ignoring invalid SongOptions mod '%s'%s%s.",
+          "Ignoring invalid SongOptions mod '%s'%s%s.",
           s.c_str(), sThrowAway.empty() ? "" : ": ", sThrowAway.c_str());
     }
   }

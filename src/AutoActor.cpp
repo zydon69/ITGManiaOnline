@@ -14,7 +14,7 @@
 #include "global.h"
 
 namespace {
-void WarnAutoActorAuditFix(const char* message) {
+void WarnAutoActorSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -41,8 +41,8 @@ std::unique_ptr<Actor> CloneActorOrFallback(const Actor* actor) {
 
   std::unique_ptr<Actor> copy(actor->Copy());
   if (copy == nullptr) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-769: AutoActor copy produced null actor.");
+    WarnAutoActorSafety(
+        "AutoActor copy produced null actor.");
     return MakeFallbackActor();
   }
   return copy;
@@ -62,7 +62,7 @@ void DetachFromParent(Actor* actor) {
 
   if (LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2645: AutoActor detached actor from non-frame "
+        "AutoActor detached actor from non-frame "
         "parent actor=%p actorName='%s' actorType='%s' parent=%p "
         "parentName='%s' parentType='%s'.",
         static_cast<void*>(actor),
@@ -115,14 +115,14 @@ AutoActor& AutoActor::operator=(AutoActor&& cpy) noexcept {
 
 void AutoActor::Adopt(std::unique_ptr<Actor> pActor) {
   if (pActor == nullptr) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-2647: AutoActor replaced null adopted actor.");
+    WarnAutoActorSafety(
+        "AutoActor replaced null adopted actor.");
     pActor = MakeFallbackActor();
   }
 
   if (pActor.get() == m_pActor.get()) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-3129: AutoActor ignored duplicate ownership "
+    WarnAutoActorSafety(
+        "AutoActor ignored duplicate ownership "
         "adoption.");
     pActor.release();
     return;
@@ -150,8 +150,8 @@ void AutoActor::Load(const std::string& sPath) {
 void AutoActor::LoadB(
     const std::string& sMetricsGroup, const std::string& sElement) {
   if (THEME == nullptr || !THEME->IsThemeLoaded()) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-2644: AutoActor refused LoadB without loaded THEME.");
+    WarnAutoActorSafety(
+        "AutoActor refused LoadB without loaded THEME.");
     LoadFallback();
     return;
   }
@@ -159,14 +159,14 @@ void AutoActor::LoadB(
   bool b =
       THEME->GetPathInfo(pi, EC_BGANIMATIONS, sMetricsGroup, sElement, true);
   if (!b) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-2644: AutoActor replaced missing theme actor.");
+    WarnAutoActorSafety(
+        "AutoActor replaced missing theme actor.");
     LoadFallback();
     return;
   }
   if (LUA == nullptr) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-770: AutoActor loaded theme actor without Lua "
+    WarnAutoActorSafety(
+        "AutoActor loaded theme actor without Lua "
         "thread variables.");
     Load(pi.sResolvedPath);
     return;
@@ -179,8 +179,8 @@ void AutoActor::LoadB(
 void AutoActor::LoadActorFromNode(const XNode* pNode, Actor* pParent) {
   std::unique_ptr<Actor> actor(ActorUtil::LoadFromNode(pNode, pParent));
   if (actor == nullptr) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-771: AutoActor replaced null node actor.");
+    WarnAutoActorSafety(
+        "AutoActor replaced null node actor.");
     actor = MakeFallbackActor();
   }
   Adopt(std::move(actor));
@@ -189,22 +189,22 @@ void AutoActor::LoadActorFromNode(const XNode* pNode, Actor* pParent) {
 void AutoActor::LoadAndSetName(
     const std::string& sScreenName, const std::string& sActorName) {
   if (THEME == nullptr || !THEME->IsThemeLoaded()) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-2644: AutoActor refused named load without loaded THEME.");
+    WarnAutoActorSafety(
+        "AutoActor refused named load without loaded THEME.");
     LoadFallback();
   } else {
     std::string path = THEME->GetPathG(sScreenName, sActorName, true);
     if (path.empty()) {
-      WarnAutoActorAuditFix(
-          "SRC_AUDIT_FIX SRC-2644: AutoActor replaced missing named actor.");
+      WarnAutoActorSafety(
+          "AutoActor replaced missing named actor.");
       LoadFallback();
     } else {
       Load(path);
     }
   }
   if (m_pActor == nullptr) {
-    WarnAutoActorAuditFix(
-        "SRC_AUDIT_FIX SRC-770: AutoActor replaced null named actor.");
+    WarnAutoActorSafety(
+        "AutoActor replaced null named actor.");
     m_pActor = MakeFallbackActor();
   }
   m_pActor->SetName(sActorName);

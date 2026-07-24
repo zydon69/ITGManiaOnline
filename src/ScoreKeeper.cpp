@@ -23,7 +23,7 @@ bool ScoreKeeper::HasScoringState(const char* context) const {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX: %s ignored callback with incomplete scoring state: "
+      "%s ignored callback with incomplete scoring state: "
       "PlayerState=%p PlayerStageStats=%p.",
       context == nullptr ? "ScoreKeeper" : context,
       static_cast<void*>(m_pPlayerState),
@@ -36,7 +36,7 @@ void ScoreKeeper::GetScoreOfLastTapInRow(
   int iNum = 0;
   if (iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeper ignored invalid row %i while reading row "
+        "ScoreKeeper ignored invalid row %i while reading row "
         "score.",
         iRow);
     tnsOut = TNS_None;
@@ -66,7 +66,7 @@ ScoreKeeper* ScoreKeeper::MakeScoreKeeper(
     PlayerStageStats* pPlayerStageStats) {
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: MakeScoreKeeper creating '%s' with incomplete scoring "
+        "MakeScoreKeeper creating '%s' with incomplete scoring "
         "state: PlayerState=%p PlayerStageStats=%p.",
         sClassName.c_str(), static_cast<void*>(pPlayerState),
         static_cast<void*>(pPlayerStageStats));
@@ -80,7 +80,7 @@ ScoreKeeper* ScoreKeeper::MakeScoreKeeper(
     return new ScoreKeeperShared(pPlayerState, pPlayerStageStats);
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: Invalid ScoreKeeper named '%s'; using "
+      "Invalid ScoreKeeper named '%s'; using "
       "ScoreKeeperNormal.",
       sClassName.c_str());
   return new ScoreKeeperNormal(pPlayerState, pPlayerStageStats);

@@ -18,13 +18,13 @@
 REGISTER_ACTOR_CLASS(ScoreDisplayAliveTime);
 
 namespace {
-void WarnScoreDisplayAliveTimeAuditFix(const char* message) {
+void WarnScoreDisplayAliveTimeSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceScoreDisplayAliveTimeAuditFix(const char* message) {
+void TraceScoreDisplayAliveTimeSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -48,8 +48,8 @@ ScoreDisplayAliveTime::~ScoreDisplayAliveTime() {}
 
 void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnScoreDisplayAliveTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-1099: ScoreDisplayAliveTime ignored null XML "
+    WarnScoreDisplayAliveTimeSafety(
+        "ScoreDisplayAliveTime ignored null XML "
         "node.");
     return;
   }
@@ -74,21 +74,21 @@ void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
       }
     }
     if (b == b2) {
-      WarnScoreDisplayAliveTimeAuditFix(
-          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime requires exactly one "
+      WarnScoreDisplayAliveTimeSafety(
+          "ScoreDisplayAliveTime requires exactly one "
           "of PlayerNumber or MultiPlayer.");
       m_PlayerNumber = PLAYER_INVALID;
       m_MultiPlayer = MultiPlayer_Invalid;
     }
     if (b && !IsValidPlayerNumber(m_PlayerNumber)) {
-      WarnScoreDisplayAliveTimeAuditFix(
-          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
+      WarnScoreDisplayAliveTimeSafety(
+          "ScoreDisplayAliveTime ignored invalid "
           "PlayerNumber.");
       m_PlayerNumber = PLAYER_INVALID;
     }
     if (b2 && !IsValidMultiPlayer(m_MultiPlayer)) {
-      WarnScoreDisplayAliveTimeAuditFix(
-          "SRC_AUDIT_FIX SRC-237: ScoreDisplayAliveTime ignored invalid "
+      WarnScoreDisplayAliveTimeSafety(
+          "ScoreDisplayAliveTime ignored invalid "
           "MultiPlayer.");
       m_MultiPlayer = MultiPlayer_Invalid;
     }
@@ -96,8 +96,8 @@ void ScoreDisplayAliveTime::LoadFromNode(const XNode* pNode) {
       LUA->Release(L);
     }
   } else {
-    WarnScoreDisplayAliveTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-1099: ScoreDisplayAliveTime loaded without LUA.");
+    WarnScoreDisplayAliveTimeSafety(
+        "ScoreDisplayAliveTime loaded without LUA.");
   }
 }
 
@@ -113,8 +113,8 @@ void ScoreDisplayAliveTime::HandleMessage(const Message& msg) {
 
 void ScoreDisplayAliveTime::UpdateNumber() {
   if (GAMESTATE == nullptr || STATSMAN == nullptr) {
-    TraceScoreDisplayAliveTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-1101: ScoreDisplayAliveTime skipped update without "
+    TraceScoreDisplayAliveTimeSafety(
+        "ScoreDisplayAliveTime skipped update without "
         "game/stat manager.");
     SetText(SecondsToMMSSMsMs(0));
     return;
@@ -135,8 +135,8 @@ void ScoreDisplayAliveTime::UpdateNumber() {
                     STATSMAN->m_CurStageStats.m_fGameplaySeconds;
   }
   if (!std::isfinite(fSecsIntoPlay) || fSecsIntoPlay < 0.0f) {
-    TraceScoreDisplayAliveTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-1101: ScoreDisplayAliveTime corrected invalid "
+    TraceScoreDisplayAliveTimeSafety(
+        "ScoreDisplayAliveTime corrected invalid "
         "seconds.");
     fSecsIntoPlay = 0.0f;
   }

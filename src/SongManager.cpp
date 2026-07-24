@@ -192,7 +192,7 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
   if (FILEMAN == nullptr || PROFILEMAN == nullptr || GAMESTATE == nullptr ||
       PREFSMAN == nullptr || MEMCARDMAN == nullptr || UNLOCKMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SongManager::Reload refused with an incomplete "
+        "SongManager::Reload refused with an incomplete "
         "manager graph.");
     return;
   }
@@ -217,7 +217,7 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
         const Profile* currentProfile = PROFILEMAN->GetProfile(pn);
         if (currentProfile == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: joined %s had no persistent profile during "
+              "joined %s had no persistent profile during "
               "song reload; player will remain unjoined.",
               PlayerNumberToString(pn).c_str());
         }
@@ -281,7 +281,7 @@ void SongManager::Reload(bool bAllowFastLoad, LoadingWindow* ld) {
     }
     if (!loadedProfile) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-619: profile reload failed for %s; leaving "
+          "profile reload failed for %s; leaving "
           "player unjoined.",
           PlayerNumberToString(pn).c_str());
       PROFILEMAN->UnloadProfile(pn);
@@ -543,7 +543,7 @@ void SongManager::LoadSongDir(
       songCount += arraySongDirs.size();
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: skipped invalid song group directory '%s' instead "
+          "skipped invalid song group directory '%s' instead "
           "of aborting song load.",
           (sDir + sGroupDirName).c_str());
     }
@@ -562,7 +562,7 @@ void SongManager::LoadSongDir(
   int threadCount = 1;
   if (detectedThreadCount > threadCount) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-613: using single-threaded song loading; detected "
+        "using single-threaded song loading; detected "
         "%d hardware threads, but Song::LoadFromSongDir touches global caches.",
         detectedThreadCount);
   }
@@ -807,13 +807,13 @@ int SongManager::LoadGroupSymLinks(
     MsdFile msdF;
     if (!msdF.ReadFile(includePath, false)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-616: skipped unreadable song include '%s': %s",
+          "skipped unreadable song include '%s': %s",
           includePath.c_str(), msdF.GetError().c_str());
       continue;
     }
     if (msdF.GetNumValues() < 1 || msdF.GetNumParams(0) < 2) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-616: skipped malformed song include '%s'.",
+          "skipped malformed song include '%s'.",
           includePath.c_str());
       continue;
     }
@@ -824,7 +824,7 @@ int SongManager::LoadGroupSymLinks(
     if (sSymDestination.empty() ||
         !IsSongPathInsideRoot(SpecialFiles::SONGS_DIR, sSymDestination)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-617: skipped song include '%s' with unsafe "
+          "skipped song include '%s' with unsafe "
           "destination '%s'.",
           includePath.c_str(), sSymDestination.c_str());
       continue;
@@ -835,7 +835,7 @@ int SongManager::LoadGroupSymLinks(
         index_entry.push_back(existingSong);
         ++loadedCount;
         LOG->Trace(
-            "SRC_AUDIT_FIX: reused canonical song '%s' for include group "
+            "reused canonical song '%s' for include group "
             "'%s'.",
             sSymDestination.c_str(), sGroupFolder.c_str());
       }
@@ -927,7 +927,7 @@ void SongManager::FreeSongs() {
       songsToDelete.push_back(song);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: skipped duplicate Song pointer %p during song "
+          "skipped duplicate Song pointer %p during song "
           "manager cleanup.",
           static_cast<void*>(song));
     }
@@ -977,21 +977,21 @@ void SongManager::FreeSongs() {
 
 void SongManager::UnlistSong(Song* song) {
   if (song == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-097: refused to unlist a null song.");
+    LOG->Warn("refused to unlist a null song.");
     return;
   }
 
   if (std::find(m_pDeletedSongs.begin(), m_pDeletedSongs.end(), song) !=
       m_pDeletedSongs.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-097: ignored duplicate unlist request for song %p "
+        "ignored duplicate unlist request for song %p "
         "'%s'.",
         static_cast<void*>(song), song->GetSongDir().c_str());
     return;
   }
   if (std::find(m_pSongs.begin(), m_pSongs.end(), song) == m_pSongs.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-097: refused to unlist foreign song %p '%s' not "
+        "refused to unlist foreign song %p '%s' not "
         "owned by SongManager.",
         static_cast<void*>(song), song->GetSongDir().c_str());
     return;
@@ -1066,7 +1066,7 @@ std::string SongManager::GetSongGroupBannerPath(std::string sSongGroup) const {
     if (sSongGroup == m_sSongGroupNames[i]) {
       if (i >= m_sSongGroupBannerPaths.size()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-096: song group/banner indexes diverged for "
+            "song group/banner indexes diverged for "
             "group '%s' at index %u (banners=%zu).",
             sSongGroup.c_str(), i, m_sSongGroupBannerPaths.size());
         return std::string();
@@ -1349,7 +1349,7 @@ std::vector<Song*> SongManager::GetSongsOfCurrentGame(
       GAMESTATE != nullptr ? GAMESTATE->GetCurrentStyle(PLAYER_INVALID) : nullptr;
   if (style == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-623: requested current-game songs without a current "
+        "requested current-game songs without a current "
         "style.");
     return filtered;
   }
@@ -1704,7 +1704,7 @@ void SongManager::InitRandomAttacks() {
         const MsdFile::value_t& sParams = msd.GetValue(i);
         if (iNumParams < 2) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-098: ignoring RandomAttacks entry %u with "
+              "ignoring RandomAttacks entry %u with "
               "%d parameter(s). Expected ATTACK:<modifiers>.",
               i, iNumParams);
           continue;
@@ -1770,7 +1770,7 @@ void SongManager::AddCourse(Course* pCourse) {
 
 void SongManager::DeleteCourse(Course* pCourse) {
   if (pCourse == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-109: refused to delete a null course.");
+    LOG->Warn("refused to delete a null course.");
     return;
   }
 
@@ -1778,7 +1778,7 @@ void SongManager::DeleteCourse(Course* pCourse) {
       find(m_pCourses.begin(), m_pCourses.end(), pCourse);
   if (iter == m_pCourses.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-109: refused to delete course '%s' because it is "
+        "refused to delete course '%s' because it is "
         "not loaded.",
         pCourse->m_sPath.c_str());
     return;
@@ -1887,19 +1887,19 @@ void SongManager::GetStepsLoadedFromProfile(
 
 void SongManager::DeleteSteps(Steps* pSteps) {
   if (pSteps == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-108: refused to delete null steps.");
+    LOG->Warn("refused to delete null steps.");
     return;
   }
   if (pSteps->m_pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-108: refused to delete steps without a parent "
+        "refused to delete steps without a parent "
         "song.");
     return;
   }
   if (std::find(m_pSongs.begin(), m_pSongs.end(), pSteps->m_pSong) ==
       m_pSongs.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-108: refused to delete steps whose parent song "
+        "refused to delete steps whose parent song "
         "is not owned by SongManager.");
     return;
   }
@@ -1948,7 +1948,7 @@ bool SongManager::GetExtraStageInfoFromCourse(
   Course course;
   if (!CourseLoaderCRS::LoadFromCRSFile(sCoursePath, course)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' could not be loaded.",
+        "extra stage course '%s' could not be loaded.",
         sCoursePath.c_str());
     return false;
   }
@@ -1959,7 +1959,7 @@ bool SongManager::GetExtraStageInfoFromCourse(
   Trail* pTrail = course.GetTrail(stype);
   if (pTrail == nullptr || pTrail->m_vEntries.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' has no trail for "
+        "extra stage course '%s' has no trail for "
         "steps type %s.",
         sCoursePath.c_str(), StepsTypeToString(stype).c_str());
     return false;
@@ -1968,7 +1968,7 @@ bool SongManager::GetExtraStageInfoFromCourse(
   if (pTrail->m_vEntries[0].pSong == nullptr ||
       pTrail->m_vEntries[0].pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-100: extra stage course '%s' has an incomplete "
+        "extra stage course '%s' has an incomplete "
         "first trail entry.",
         sCoursePath.c_str());
     return false;
@@ -2010,7 +2010,7 @@ void SongManager::GetExtraStageInfo(
   pStepsOut = nullptr;
 
   if (sd == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-101: extra stage requested without a style.");
+    LOG->Warn("extra stage requested without a style.");
     return;
   }
 
@@ -2018,7 +2018,7 @@ void SongManager::GetExtraStageInfo(
   if (sGroup == GROUP_ALL) {
     if (GAMESTATE->m_pCurSong == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-629: extra stage requested for GROUP_ALL without "
+          "extra stage requested for GROUP_ALL without "
           "a current song.");
       return;
     }
@@ -2027,7 +2027,7 @@ void SongManager::GetExtraStageInfo(
 
   if (sGroup.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-101: extra stage requested with an empty song "
+        "extra stage requested with an empty song "
         "group.");
     return;
   }
@@ -2094,7 +2094,7 @@ void SongManager::GetExtraStageInfo(
   if (pExtra1Song == nullptr || pExtra1Notes == nullptr ||
       pExtra2Song == nullptr || pExtra2Notes == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-101: could not find extra stage notes for group "
+        "could not find extra stage notes for group "
         "'%s' and steps type %s.",
         sGroup.c_str(), StepsTypeToString(sd->m_StepsType).c_str());
     return;
@@ -2344,7 +2344,7 @@ void SongManager::SetPreferredSongsFromTable(
   m_mapPreferredSectionToSongs.clear();
   if (UNLOCKMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: preferred song table ignored without UnlockManager.");
+        "preferred song table ignored without UnlockManager.");
     return;
   }
 
@@ -2399,7 +2399,7 @@ void SongManager::SetPreferredSongs(
   m_mapPreferredSectionToSongs.clear();
   if (UNLOCKMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: preferred song file ignored without UnlockManager.");
+        "preferred song file ignored without UnlockManager.");
     return;
   }
   std::vector<std::string> asLines;
@@ -2666,7 +2666,7 @@ void SongManager::LoadStepEditsFromProfileDir(
 
 	  if (skippedEditsByLimit > 0) {
 	    LOG->Warn(
-	        "SRC_AUDIT_FIX SRC-625: skipped %i old-style profile edits for %s "
+	        "skipped %i old-style profile edits for %s "
 	        "after reaching MAX_EDIT_STEPS_PER_PROFILE.",
 	        skippedEditsByLimit, ProfileSlotToString(slot).c_str());
 	    LuaHelpers::ReportScriptErrorFmt(
@@ -2720,7 +2720,7 @@ void SongManager::LoadStepEditsFromProfileDir(
 
 	      if (skippedEditsByLimit > 0) {
 	        LOG->Warn(
-	            "SRC_AUDIT_FIX SRC-625: skipped %i nested profile edits for %s "
+	            "skipped %i nested profile edits for %s "
 	            "after reaching MAX_EDIT_STEPS_PER_PROFILE.",
 	            skippedEditsByLimit, ProfileSlotToString(slot).c_str());
 	        LuaHelpers::ReportScriptErrorFmt(
@@ -2754,7 +2754,7 @@ void SongManager::LoadCourseEditsFromProfileDir(
 
   if ((int)vsFiles.size() > remainingCourses) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-111: clamping profile course edits for %s: "
+        "clamping profile course edits for %s: "
         "files=%i, already_loaded=%i, remaining=%i, loading=%i.",
         ProfileSlotToString(slot).c_str(), (int)vsFiles.size(),
         iNumCourseEditsLoaded, remainingCourses, size);
@@ -2787,7 +2787,7 @@ int SongManager::GetNumEditsLoadedFromProfile(ProfileSlot slot) const {
 
 bool SongManager::AddSongToList(Song* new_song) {
   if (new_song == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-618: refused to add a null song.");
+    LOG->Warn("refused to add a null song.");
     return false;
   }
   new_song->SetEnabled(true);
@@ -2800,7 +2800,7 @@ bool SongManager::AddSongToList(Song* new_song) {
   MakeLower(dir);
   if (m_SongsByDir.find(dir) != m_SongsByDir.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-618: refused duplicate song directory '%s'.",
+        "refused duplicate song directory '%s'.",
         new_song->GetSongDir().c_str());
     return false;
   }
@@ -3132,14 +3132,14 @@ class LunaSongManager : public Luna<SongManager> {
 	      pSong->PushSelf(L);
 	    } else {
 	      LOG->Warn(
-	          "SRC_AUDIT_FIX SRC-621: Lua GetExtraStageInfo returned no song.");
+	          "Lua GetExtraStageInfo returned no song.");
 	      lua_pushnil(L);
 	    }
 	    if (pSteps != nullptr) {
 	      pSteps->PushSelf(L);
 	    } else {
 	      LOG->Warn(
-	          "SRC_AUDIT_FIX SRC-621: Lua GetExtraStageInfo returned no steps.");
+	          "Lua GetExtraStageInfo returned no steps.");
 	      lua_pushnil(L);
 	    }
 

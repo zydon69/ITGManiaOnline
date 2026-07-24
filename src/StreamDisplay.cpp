@@ -22,7 +22,7 @@ static const char* StreamTypeNames[] = {
 XToString(StreamType);
 
 namespace {
-void WarnStreamDisplayAuditFix(const char* message) {
+void WarnStreamDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -32,7 +32,7 @@ float SanitizeStreamDisplayUnit(float value, const char* field) {
   if (!std::isfinite(value)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1069: StreamDisplay reset non-finite %s.", field);
+          "StreamDisplay reset non-finite %s.", field);
     }
     return 0.0f;
   }
@@ -44,7 +44,7 @@ float SanitizeStreamDisplayMetric(float value, float fallback, const char* name)
   if (!std::isfinite(value)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1068: StreamDisplay used fallback for %s.", name);
+          "StreamDisplay used fallback for %s.", name);
     }
     return fallback;
   }
@@ -73,8 +73,8 @@ void StreamDisplay::Load(
   std::string sMetricsGroup =
       _sMetricsGroup.empty() ? "StreamDisplay" : _sMetricsGroup;
   if (THEME == nullptr) {
-    WarnStreamDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1067: StreamDisplay refused load without THEME.");
+    WarnStreamDisplaySafety(
+        "StreamDisplay refused load without THEME.");
     return;
   }
 
@@ -91,13 +91,13 @@ void StreamDisplay::Load(
   int iNumPills =
       static_cast<int>(THEME->GetMetricF(sMetricsGroup, "NumPills"));
   if (!std::isfinite(fTextureCoordScaleX) || fTextureCoordScaleX <= 0.0f) {
-    WarnStreamDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1068: StreamDisplay used safe texture coord scale.");
+    WarnStreamDisplaySafety(
+        "StreamDisplay used safe texture coord scale.");
     fTextureCoordScaleX = 1.0f;
   }
   if (iNumPills <= 0) {
-    WarnStreamDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1068: StreamDisplay used one pill for invalid "
+    WarnStreamDisplaySafety(
+        "StreamDisplay used one pill for invalid "
         "NumPills.");
     iNumPills = 1;
   }
@@ -123,8 +123,8 @@ void StreamDisplay::Load(
 
 void StreamDisplay::Update(float fDeltaSecs) {
   if (!std::isfinite(fDeltaSecs) || fDeltaSecs < 0.0f) {
-    WarnStreamDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1070: StreamDisplay ignored invalid update delta.");
+    WarnStreamDisplaySafety(
+        "StreamDisplay ignored invalid update delta.");
     return;
   }
   ActorFrame::Update(fDeltaSecs);
@@ -182,8 +182,8 @@ void StreamDisplay::Update(float fDeltaSecs) {
 
     m_fTrailingPercent += m_fVelocity * fDeltaSecs;
     if (!std::isfinite(m_fTrailingPercent)) {
-      WarnStreamDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1070: StreamDisplay reset invalid trailing "
+      WarnStreamDisplaySafety(
+          "StreamDisplay reset invalid trailing "
           "percent.");
       m_fTrailingPercent = m_fPercent;
       m_fVelocity = 0.0f;

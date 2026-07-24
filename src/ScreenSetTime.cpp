@@ -61,7 +61,7 @@ SetTimeSelection SanitizeSelection(SetTimeSelection selection) {
 
   if (LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1696: ScreenSetTime reset invalid selection %d.",
+        "ScreenSetTime reset invalid selection %d.",
         static_cast<int>(selection));
   }
   return year;
@@ -81,7 +81,7 @@ float GetMetricFOr(
   if (!std::isfinite(value)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1703: ScreenSetTime ignored non-finite %s %.6f "
+          "ScreenSetTime ignored non-finite %s %.6f "
           "for %s.",
           metric.c_str(), value, context);
     }
@@ -135,7 +135,7 @@ bool LoadFontWithFallback(
 
   if (LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1693: ScreenSetTime could not load font for %s.",
+        "ScreenSetTime could not load font for %s.",
         element.c_str());
   }
   return false;
@@ -198,7 +198,7 @@ std::string FormatMonth(const tm& time) {
   if (time.tm_mon < 0 || time.tm_mon >= NUM_Month) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1694: ScreenSetTime clamped invalid month %d.",
+          "ScreenSetTime clamped invalid month %d.",
           time.tm_mon);
     }
     return "?";
@@ -257,7 +257,7 @@ bool ScreenSetTime::GetAdjustedLocalTime(tm& adjusted) const {
   time_t now;
   if (!SafeNow(now)) {
     if (LOG != nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-1694: ScreenSetTime could not read time().");
+      LOG->Warn("ScreenSetTime could not read time().");
     }
     return false;
   }
@@ -266,7 +266,7 @@ bool ScreenSetTime::GetAdjustedLocalTime(tm& adjusted) const {
   if (!SafeAddTime(now, m_TimeOffset, adjustedTime)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1695: ScreenSetTime refused overflowing time "
+          "ScreenSetTime refused overflowing time "
           "offset.");
     }
     return false;
@@ -275,7 +275,7 @@ bool ScreenSetTime::GetAdjustedLocalTime(tm& adjusted) const {
   if (!SafeLocalTime(adjustedTime, adjusted)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1694: ScreenSetTime could not convert adjusted "
+          "ScreenSetTime could not convert adjusted "
           "time.");
     }
     return false;
@@ -296,7 +296,7 @@ bool ScreenSetTime::SetAdjustedTime(const tm& adjusted) {
   if (adjustedTime == static_cast<time_t>(-1)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1695: ScreenSetTime mktime() rejected adjusted "
+          "ScreenSetTime mktime() rejected adjusted "
           "time.");
     }
     return false;
@@ -306,7 +306,7 @@ bool ScreenSetTime::SetAdjustedTime(const tm& adjusted) {
   if (!SafeSubtractTime(adjustedTime, now, newOffset)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3211: ScreenSetTime refused overflowing time "
+          "ScreenSetTime refused overflowing time "
           "offset subtraction.");
     }
     return false;
@@ -492,7 +492,7 @@ bool ScreenSetTime::CommitAdjustedTime() {
   if (HOOKS == nullptr || !HOOKS->SetTime(adjusted)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1698: ScreenSetTime could not set the system "
+          "ScreenSetTime could not set the system "
           "time.");
     }
     SetHelpText(TIME_SET_FAILED.GetValue());

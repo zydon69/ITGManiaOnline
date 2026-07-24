@@ -49,7 +49,7 @@ ThemeMetric<bool> SHOW_SECTIONS_IN_LENGTH_SORT(
 
 bool SongCriteria::Matches(const Song* pSong) const {
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-650: rejected null song in SongCriteria.");
+    LOG->Warn("rejected null song in SongCriteria.");
     return false;
   }
 
@@ -110,7 +110,7 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid "
+          "rejected song criteria with invalid "
           "selectable value %i.",
           m_Selectable);
       return false;
@@ -128,7 +128,7 @@ bool SongCriteria::Matches(const Song* pSong) const {
        GAMESTATE->GetNumStagesMultiplierForSong(pSong) > m_iMaxStagesForSong)) {
     if (GAMESTATE == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-650: rejected song '%s' because stage criteria "
+          "rejected song '%s' because stage criteria "
           "requires GAMESTATE.",
           pSong->GetSongDir().c_str());
     }
@@ -171,7 +171,7 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid "
+          "rejected song criteria with invalid "
           "tutorial value %i.",
           m_Tutorial);
       return false;
@@ -192,7 +192,7 @@ bool SongCriteria::Matches(const Song* pSong) const {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3082: rejected song criteria with invalid locked "
+          "rejected song criteria with invalid locked "
           "value %i.",
           m_Locked);
       return false;
@@ -207,7 +207,7 @@ void SongUtil::GetSteps(
     const std::string& sDescription, const std::string& sCredit,
     bool bIncludeAutoGen, unsigned uHash, int iMaxToGet) {
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetSteps() for null song.");
+    LOG->Warn("ignored GetSteps() for null song.");
     return;
   }
   if (!iMaxToGet) {
@@ -222,7 +222,7 @@ void SongUtil::GetSteps(
     Steps* pSteps = vpSteps[i];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          "skipped null Steps while scanning song '%s'.",
           pSong->GetSongDir().c_str());
       continue;
     }
@@ -279,7 +279,7 @@ Steps* SongUtil::GetStepsByDifficulty(
     const Song* pSong, StepsType st, Difficulty dc, bool bIncludeAutoGen) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-651: ignored GetStepsByDifficulty() for null song.");
+        "ignored GetStepsByDifficulty() for null song.");
     return nullptr;
   }
   const std::vector<Steps*>& vpSteps = (st == StepsType_Invalid)
@@ -290,7 +290,7 @@ Steps* SongUtil::GetStepsByDifficulty(
     Steps* pSteps = vpSteps[i];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          "skipped null Steps while scanning song '%s'.",
           pSong->GetSongDir().c_str());
       continue;
     }
@@ -311,7 +311,7 @@ Steps* SongUtil::GetStepsByDifficulty(
 Steps* SongUtil::GetStepsByMeter(
     const Song* pSong, StepsType st, int iMeterLow, int iMeterHigh) {
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetStepsByMeter() for null song.");
+    LOG->Warn("ignored GetStepsByMeter() for null song.");
     return nullptr;
   }
   const std::vector<Steps*>& vpSteps = (st == StepsType_Invalid)
@@ -322,7 +322,7 @@ Steps* SongUtil::GetStepsByMeter(
     Steps* pSteps = vpSteps[i];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          "skipped null Steps while scanning song '%s'.",
           pSong->GetSongDir().c_str());
       continue;
     }
@@ -365,12 +365,12 @@ Steps* SongUtil::GetStepsByCredit(
 Steps* SongUtil::GetClosestNotes(
     const Song* pSong, StepsType st, Difficulty dc, bool bIgnoreLocked) {
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-651: ignored GetClosestNotes() for null song.");
+    LOG->Warn("ignored GetClosestNotes() for null song.");
     return nullptr;
   }
   if (dc == Difficulty_Invalid) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-651: ignored GetClosestNotes() for invalid "
+        "ignored GetClosestNotes() for invalid "
         "difficulty on song '%s'.",
         pSong->GetSongDir().c_str());
     return nullptr;
@@ -386,7 +386,7 @@ Steps* SongUtil::GetClosestNotes(
     Steps* pSteps = vpSteps[i];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-651: skipped null Steps while scanning song '%s'.",
+          "skipped null Steps while scanning song '%s'.",
           pSong->GetSongDir().c_str());
       continue;
     }
@@ -413,7 +413,7 @@ Steps* SongUtil::GetClosestNotes(
 void SongUtil::AdjustDuplicateSteps(Song* pSong) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-652: ignored AdjustDuplicateSteps() for null song.");
+        "ignored AdjustDuplicateSteps() for null song.");
     return;
   }
   FOREACH_ENUM(StepsType, st) {
@@ -470,7 +470,7 @@ static std::string RemoveInitialWhitespace(std::string s) {
 void SongUtil::DeleteDuplicateSteps(Song* pSong, std::vector<Steps*>& vSteps) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-652: ignored DeleteDuplicateSteps() for null song.");
+        "ignored DeleteDuplicateSteps() for null song.");
     return;
   }
   /* vSteps have the same StepsType and Difficulty.  Delete them if they have
@@ -479,7 +479,7 @@ void SongUtil::DeleteDuplicateSteps(Song* pSong, std::vector<Steps*>& vSteps) {
     const Steps* s1 = vSteps[i];
     if (s1 == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-652: removed null Steps from duplicate scan for "
+          "removed null Steps from duplicate scan for "
           "song '%s'.",
           pSong->GetSongDir().c_str());
       vSteps.erase(vSteps.begin() + i);
@@ -491,7 +491,7 @@ void SongUtil::DeleteDuplicateSteps(Song* pSong, std::vector<Steps*>& vSteps) {
       const Steps* s2 = vSteps[j];
       if (s2 == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-652: removed null Steps from duplicate scan for "
+            "removed null Steps from duplicate scan for "
             "song '%s'.",
             pSong->GetSongDir().c_str());
         vSteps.erase(vSteps.begin() + j);
@@ -717,7 +717,7 @@ static bool CompAscending(
 static bool GetStepsTypeForGradeSort(PlayerNumber pn, StepsType& stOut) {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: grade sort requested without GAMESTATE; "
+        "grade sort requested without GAMESTATE; "
         "falling back to title sort.");
     return false;
   }
@@ -725,7 +725,7 @@ static bool GetStepsTypeForGradeSort(PlayerNumber pn, StepsType& stOut) {
   const Style* pStyle = GAMESTATE->GetCurrentStyle(pn);
   if (pStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: grade sort requested without current style for "
+        "grade sort requested without current style for "
         "player %i; falling back to title sort.",
         pn);
     return false;
@@ -740,7 +740,7 @@ static std::string GetGradeSectionName(
     const char* context) {
   if (pProfile == nullptr || st == StepsType_Invalid) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-657: %s section requested without profile or style; "
+        "%s section requested without profile or style; "
         "using no-data section.",
         context);
     return GradeToLocalizedString(Grade_NoData);
@@ -768,7 +768,7 @@ void SongUtil::SortSongPointerArrayByGrades(
 
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: machine grade sort requested without "
+        "machine grade sort requested without "
         "PROFILEMAN; falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -776,7 +776,7 @@ void SongUtil::SortSongPointerArrayByGrades(
   const Profile* pProfile = PROFILEMAN->GetMachineProfile();
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: machine grade sort requested without machine "
+        "machine grade sort requested without machine "
         "profile; falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -792,7 +792,7 @@ void SongUtil::SortSongPointerArrayByGrades(
   for (unsigned i = 0; i < vpSongsInOut.size(); ++i) {
     Song* pSong = vpSongsInOut[i];
     if (pSong == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-653: skipped null song in grade sort.");
+      LOG->Warn("skipped null song in grade sort.");
       vals.push_back(val(pSong, std::string()));
       continue;
     }
@@ -825,7 +825,7 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
 
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: profile grade sort requested without "
+        "profile grade sort requested without "
         "PROFILEMAN; falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -833,7 +833,7 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
   const Profile* pProfile = PROFILEMAN->GetProfile(pn);
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-653: profile grade sort requested without profile "
+        "profile grade sort requested without profile "
         "for player %i; falling back to title sort.",
         pn);
     SortSongPointerArrayByTitle(vpSongsInOut);
@@ -849,7 +849,7 @@ void SongUtil::SortSongPointerArrayByProfileGrades(
     Song* pSong = vpSongsInOut[i];
     if (pSong == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-653: skipped null song in profile grade sort.");
+          "skipped null song in profile grade sort.");
       vals.push_back(val(pSong, std::string()));
       continue;
     }
@@ -930,11 +930,11 @@ int SongUtil::CompareSongPointersByGroup(
     return false;
   }
   if (pSong1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    LOG->Warn("null song sorted after valid songs.");
     return false;
   }
   if (pSong2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    LOG->Warn("null song sorted after valid songs.");
     return true;
   }
   std::string s1 = "";
@@ -974,11 +974,11 @@ static int CompareSongPointersByGroupAndTitle(
     return false;
   }
   if (pSong1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    LOG->Warn("null song sorted after valid songs.");
     return false;
   }
   if (pSong2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-655: null song sorted after valid songs.");
+    LOG->Warn("null song sorted after valid songs.");
     return true;
   }
   std::string s1 = "";
@@ -1064,7 +1064,7 @@ void SongUtil::SortSongPointerArrayByNumPlays(
     std::vector<Song*>& vpSongsInOut, ProfileSlot slot, bool bDescending) {
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3083: song play-count sort requested without "
+        "song play-count sort requested without "
         "PROFILEMAN; falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -1081,7 +1081,7 @@ void SongUtil::SortSongPointerArrayByNumPlays(
     bool bDescending) {
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3083: song play-count sort requested without "
+        "song play-count sort requested without "
         "profile; falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -1110,7 +1110,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_PREFERRED:
       if (SONGMAN == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3084: preferred section requested without "
+            "preferred section requested without "
             "SONGMAN.");
         return std::string();
       }
@@ -1151,7 +1151,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
         const int iBPMGroupSize = SORT_BPM_DIVISION;
         if (iBPMGroupSize <= 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-656: invalid SortBPMDivision %i; using "
+              "invalid SortBPMDivision %i; using "
               "not-available section.",
               iBPMGroupSize);
           return SORT_NOT_AVAILABLE.GetValue();
@@ -1161,7 +1161,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
         const float fMaxBPM = bpms.GetMax();
         if (!std::isfinite(fMaxBPM) || fMaxBPM < 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-656: invalid max BPM %.3f for '%s'; using "
+              "invalid max BPM %.3f for '%s'; using "
               "not-available section.",
               fMaxBPM, pSong->GetSongDir().c_str());
           return SORT_NOT_AVAILABLE.GetValue();
@@ -1178,7 +1178,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
         const int iSortLengthSize = SORT_LENGTH_DIVISION;
         if (iSortLengthSize <= 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-656: invalid SortLengthDivision %i; using "
+              "invalid SortLengthDivision %i; using "
               "not-available section.",
               iSortLengthSize);
           return SORT_NOT_AVAILABLE.GetValue();
@@ -1186,7 +1186,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
         if (!std::isfinite(pSong->m_fMusicLengthSeconds) ||
             pSong->m_fMusicLengthSeconds < 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-656: invalid music length %.3f for '%s'; using "
+              "invalid music length %.3f for '%s'; using "
               "not-available section.",
               pSong->m_fMusicLengthSeconds, pSong->GetSongDir().c_str());
           return SORT_NOT_AVAILABLE.GetValue();
@@ -1209,7 +1209,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_RECENT_P2:
       if (THEME == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3084: localized sort section requested without "
+            "localized sort section requested without "
             "THEME.");
         return SortOrderToString(so);
       }
@@ -1260,7 +1260,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
       Difficulty dc;
       if (!SongUtil::GetStepsTypeAndDifficultyFromSortOrder(so, st, dc)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-658: unable to resolve sort order %i for "
+            "unable to resolve sort order %i for "
             "section name; using not-available section.",
             so);
         return SORT_NOT_AVAILABLE.GetValue();
@@ -1283,7 +1283,7 @@ std::string SongUtil::GetSectionNameFromSongAndSort(
     case SORT_ENDLESS_COURSES:
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-658: invalid song section sort order %i; using "
+          "invalid song section sort order %i; using "
           "empty section.",
           so);
       return std::string();
@@ -1351,7 +1351,7 @@ void SongUtil::SortByMostRecentlyPlayedForMachine(
       PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetMachineProfile();
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-659: recent machine sort requested without profile; "
+        "recent machine sort requested without profile; "
         "falling back to title sort.");
     SortSongPointerArrayByTitle(vpSongsInOut);
     return;
@@ -1381,7 +1381,7 @@ void SongUtil::SortByMostRecentlyPlayedForProfile(
       PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetProfile(pn);
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-659: recent profile sort requested without profile "
+        "recent profile sort requested without profile "
         "for player %i; falling back to title sort.",
         pn);
     SortSongPointerArrayByTitle(vpSongsInOut);
@@ -1409,7 +1409,7 @@ bool SongUtil::IsEditDescriptionUnique(
     const Steps* pExclude) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-660: edit description uniqueness requested without "
+        "edit description uniqueness requested without "
         "song.");
     return false;
   }
@@ -1417,7 +1417,7 @@ bool SongUtil::IsEditDescriptionUnique(
   for (const Steps* pSteps : pSong->GetAllSteps()) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-660: skipped null steps while checking edit "
+          "skipped null steps while checking edit "
           "description uniqueness.");
       continue;
     }
@@ -1442,14 +1442,14 @@ bool SongUtil::IsChartNameUnique(
     const Steps* pExclude) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-660: chart name uniqueness requested without song.");
+        "chart name uniqueness requested without song.");
     return false;
   }
 
   for (const Steps* pSteps : pSong->GetAllSteps()) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-660: skipped null steps while checking chart name "
+          "skipped null steps while checking chart name "
           "uniqueness.");
       continue;
     }
@@ -1472,7 +1472,7 @@ std::string SongUtil::MakeUniqueEditDescription(
       Left(sPreferredDescription, MAX_STEPS_DESCRIPTION_LENGTH);
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-660: unique edit description requested without song; "
+        "unique edit description requested without song; "
         "returning clamped preferred description.");
     return sClampedDescription;
   }
@@ -1497,7 +1497,7 @@ std::string SongUtil::MakeUniqueEditDescription(
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-660: exhausted edit description suffixes for '%s'; "
+      "exhausted edit description suffixes for '%s'; "
       "returning clamped preferred description.",
       pSong->GetSongDir().c_str());
   return sClampedDescription;
@@ -1527,7 +1527,7 @@ static LocalizedString NO_CURRENT_EDIT_SELECTED(
 static Steps* GetCurrentPlayerOneStepsForValidation(const char* context) {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-661: %s validation requested without GAMESTATE.",
+        "%s validation requested without GAMESTATE.",
         context);
     return nullptr;
   }
@@ -1535,7 +1535,7 @@ static Steps* GetCurrentPlayerOneStepsForValidation(const char* context) {
   Steps* pSteps = GAMESTATE->m_pCurSteps[PLAYER_1];
   if (pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-661: %s validation requested without current steps.",
+        "%s validation requested without current steps.",
         context);
   }
   return pSteps;
@@ -1551,7 +1551,7 @@ bool SongUtil::ValidateCurrentEditStepsDescription(
   Song* pSong = pSteps->m_pSong;
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-661: edit description validation requested without "
+        "edit description validation requested without "
         "parent song.");
     sErrorOut = NO_CURRENT_STEPS_SELECTED;
     return false;
@@ -1559,7 +1559,7 @@ bool SongUtil::ValidateCurrentEditStepsDescription(
 
   if (!pSteps->IsAnEdit()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-661: edit description validation requested for "
+        "edit description validation requested for "
         "non-edit steps.");
     sErrorOut = NO_CURRENT_EDIT_SELECTED;
     return false;
@@ -1648,7 +1648,7 @@ bool SongUtil::ValidateCurrentStepsChartName(
   // TODO next commit: borrow code from EditStepsDescription.
   if (GAMESTATE == nullptr || GAMESTATE->m_pCurSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-661: chart name validation requested without "
+        "chart name validation requested without "
         "current song.");
     error = NO_CURRENT_STEPS_SELECTED;
     return false;
@@ -1724,7 +1724,7 @@ bool SongUtil::ValidateCurrentSongPreview(
   }
   if (!IsSongRelativeAssetPathSafe(answer)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-662: rejected unsafe song preview path '%s'.",
+        "rejected unsafe song preview path '%s'.",
         answer.c_str());
     error = FILE_PATH_MUST_BE_RELATIVE_TO_SONG;
     return false;
@@ -1733,7 +1733,7 @@ bool SongUtil::ValidateCurrentSongPreview(
   Song* song = GAMESTATE == nullptr ? nullptr : GAMESTATE->m_pCurSong;
   if (song == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-662: preview validation requested without current "
+        "preview validation requested without current "
         "song.");
     error = NO_CURRENT_STEPS_SELECTED;
     return false;
@@ -1762,7 +1762,7 @@ bool SongUtil::ValidateCurrentStepsMusic(
   }
   if (!IsSongRelativeAssetPathSafe(answer)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-662: rejected unsafe steps music path '%s'.",
+        "rejected unsafe steps music path '%s'.",
         answer.c_str());
     error = FILE_PATH_MUST_BE_RELATIVE_TO_SONG;
     return false;
@@ -1791,7 +1791,7 @@ bool SongUtil::ValidateCurrentStepsMusic(
 void SongUtil::GetAllSongGenres(std::vector<std::string>& vsOut) {
   if (SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3085: song genres requested without SONGMAN.");
+        "song genres requested without SONGMAN.");
     return;
   }
   std::set<std::string> genres;
@@ -1820,13 +1820,13 @@ void SongUtil::GetPlayableStepsTypes(
     const Song* pSong, std::set<StepsType>& vOut) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-663: playable steps types requested without song.");
+        "playable steps types requested without song.");
     return;
   }
   if (GAMESTATE == nullptr || GAMEMAN == nullptr ||
       GAMESTATE->m_pCurGame == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-663: playable steps types requested without "
+        "playable steps types requested without "
         "GAMESTATE, GAMEMAN, or current game.");
     return;
   }
@@ -1849,7 +1849,7 @@ void SongUtil::GetPlayableStepsTypes(
       const Style* pStyle = vpPossibleStyles[i];
       if (pStyle == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-663: skipped null style while filtering playable "
+            "skipped null style while filtering playable "
             "steps types.");
         vpPossibleStyles.erase(vpPossibleStyles.begin() + i);
         continue;
@@ -1864,7 +1864,7 @@ void SongUtil::GetPlayableStepsTypes(
           break;
         default:
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-663: skipped style with invalid type %i.",
+              "skipped style with invalid type %i.",
               pStyle->m_StyleType);
           vpPossibleStyles.erase(vpPossibleStyles.begin() + i);
           break;
@@ -1876,7 +1876,7 @@ void SongUtil::GetPlayableStepsTypes(
   for (const Style* s : vpPossibleStyles) {
     if (s == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-663: skipped null style while collecting playable "
+          "skipped null style while collecting playable "
           "steps types.");
       continue;
     }
@@ -1908,7 +1908,7 @@ void SongUtil::GetPlayableStepsTypes(
 
 void SongUtil::GetPlayableSteps(const Song* pSong, std::vector<Steps*>& vOut) {
   if (pSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-663: playable steps requested without song.");
+    LOG->Warn("playable steps requested without song.");
     return;
   }
 
@@ -1927,7 +1927,7 @@ void SongUtil::GetPlayableSteps(const Song* pSong, std::vector<Steps*>& vOut) {
 bool SongUtil::IsStepsTypePlayable(Song* pSong, StepsType st) {
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-663: steps type playability requested without song.");
+        "steps type playability requested without song.");
     return false;
   }
   std::set<StepsType> vStepsType;
@@ -1938,7 +1938,7 @@ bool SongUtil::IsStepsTypePlayable(Song* pSong, StepsType st) {
 bool SongUtil::IsStepsPlayable(Song* pSong, Steps* pSteps) {
   if (pSong == nullptr || pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-663: steps playability requested without song or "
+        "steps playability requested without song or "
         "steps.");
     return false;
   }
@@ -1949,7 +1949,7 @@ bool SongUtil::IsStepsPlayable(Song* pSong, Steps* pSteps) {
 
 bool SongUtil::IsSongPlayable(Song* s) {
   if (s == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-663: song playability requested without song.");
+    LOG->Warn("song playability requested without song.");
     return false;
   }
   const std::vector<Steps*>& steps = s->GetAllSteps();
@@ -1998,7 +1998,7 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
 
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-664: sort order %i requested without GAMESTATE.",
+        "sort order %i requested without GAMESTATE.",
         so);
     return false;
   }
@@ -2007,7 +2007,7 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
       GAMESTATE->GetCurrentStyle(GAMESTATE->GetMasterPlayerNumber());
   if (pCurrentStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-664: sort order %i requested without current style.",
+        "sort order %i requested without current style.",
         so);
     return false;
   }
@@ -2027,7 +2027,7 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
       stOut = pCurrentStyle->m_StepsType;  // in case we don't find any matches below
       if (GAMEMAN == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-664: double meter sort requested without "
+            "double meter sort requested without "
             "GAMEMAN; using current style.");
         break;
       }
@@ -2036,7 +2036,7 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
       for (const Style* i : vpStyles) {
         if (i == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-664: skipped null style while resolving double "
+              "skipped null style while resolving double "
               "meter sort.");
           continue;
         }
@@ -2055,7 +2055,7 @@ bool SongUtil::GetStepsTypeAndDifficultyFromSortOrder(
     }
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-664: unexpected sort order %i after difficulty "
+          "unexpected sort order %i after difficulty "
           "mapping.",
           so);
       return false;
@@ -2085,7 +2085,7 @@ void SongID::FromSong(const Song* p) {
 
 Song* SongID::ToSong() const {
   if (SONGMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-665: SongID lookup requested without SONGMAN.");
+    LOG->Warn("SongID lookup requested without SONGMAN.");
     return nullptr;
   }
 
@@ -2111,12 +2111,12 @@ XNode* SongID::CreateNode() const {
 void SongID::LoadFromNode(const XNode* pNode) {
   sDir.clear();
   if (pNode == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-665: ignored null SongID XML node.");
+    LOG->Warn("ignored null SongID XML node.");
     return;
   }
   if (pNode->GetName() != "Song") {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-665: ignored SongID XML node named '%s'.",
+        "ignored SongID XML node named '%s'.",
         pNode->GetName().c_str());
     return;
   }

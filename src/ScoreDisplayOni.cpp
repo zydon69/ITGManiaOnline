@@ -14,13 +14,13 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayOniAuditFix(const char* message) {
+void WarnScoreDisplayOniSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceScoreDisplayOniAuditFix(const char* message) {
+void TraceScoreDisplayOniSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -39,8 +39,8 @@ ScoreDisplayOni::ScoreDisplayOni() {
   if (THEME != nullptr) {
     m_sprFrame.Load(THEME->GetPathG("ScoreDisplayOni", "frame"));
   } else {
-    WarnScoreDisplayOniAuditFix(
-        "SRC_AUDIT_FIX SRC-1110: ScoreDisplayOni constructed without THEME.");
+    WarnScoreDisplayOniSafety(
+        "ScoreDisplayOni constructed without THEME.");
   }
   this->AddChild(&m_sprFrame);
 
@@ -66,8 +66,8 @@ void ScoreDisplayOni::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
   if (m_pPlayerState == nullptr) {
-    TraceScoreDisplayOniAuditFix(
-        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni skipped update without "
+    TraceScoreDisplayOniSafety(
+        "ScoreDisplayOni skipped update without "
         "PlayerState.");
     m_text.SetText(SecondsToMMSSMsMs(0));
     return;
@@ -81,12 +81,12 @@ void ScoreDisplayOni::Update(float fDelta) {
       GAMESTATE->IsPlayerEnabled(pn)) {
     fSecsIntoPlay = STATSMAN->m_CurStageStats.m_player[pn].m_fAliveSeconds;
   } else if (!IsValidPlayerNumber(pn)) {
-    TraceScoreDisplayOniAuditFix(
-        "SRC_AUDIT_FIX SRC-241: ScoreDisplayOni ignored invalid player.");
+    TraceScoreDisplayOniSafety(
+        "ScoreDisplayOni ignored invalid player.");
   }
   if (!std::isfinite(fSecsIntoPlay) || fSecsIntoPlay < 0.0f) {
-    TraceScoreDisplayOniAuditFix(
-        "SRC_AUDIT_FIX SRC-1111: ScoreDisplayOni corrected invalid seconds.");
+    TraceScoreDisplayOniSafety(
+        "ScoreDisplayOni corrected invalid seconds.");
     fSecsIntoPlay = 0.0f;
   }
 

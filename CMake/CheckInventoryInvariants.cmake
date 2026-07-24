@@ -36,10 +36,6 @@ require_contains(
   "${inventory_cpp}"
   "if (LOG != nullptr)"
   "Inventory warning helper guards LOG")
-require_not_contains(
-  "${inventory_cpp}"
-  "LOG->Warn(\"SRC_AUDIT_FIX"
-  "Inventory defensive diagnostics must not dereference LOG directly")
 require_contains(
   "${inventory_cpp}"
   "InventoryThemeIsReady"

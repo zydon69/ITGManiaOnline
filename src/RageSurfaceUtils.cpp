@@ -763,8 +763,8 @@ struct SurfaceHeader {
 bool RageSurfaceUtils::SaveSurface(const RageSurface* img, std::string file) {
   if (img == nullptr || img->pixels == nullptr || img->w <= 0 || img->h <= 0 ||
       img->pitch <= 0 || img->format == nullptr) {
-    LogReviewSrcDiagnostics(
-        "SRC-3408 refused to save invalid surface to '%s'", file.c_str());
+    LogRuntimeValidationDiagnostics(
+        "refused to save invalid surface to '%s'", file.c_str());
     return false;
   }
   RageFile f;
@@ -832,8 +832,8 @@ RageSurface* RageSurfaceUtils::LoadSurface(std::string file) {
   constexpr uint64_t kMaxCachedSurfaceBytes = 256ULL * 1024ULL * 1024ULL;
   if (h.width <= 0 || h.height <= 0 || h.pitch <= 0 ||
       (h.bpp != 8 && h.bpp != 16 && h.bpp != 24 && h.bpp != 32)) {
-    LogReviewSrcDiagnostics(
-        "SRC-3407 rejected invalid cached surface header '%s'", file.c_str());
+    LogRuntimeValidationDiagnostics(
+        "rejected invalid cached surface header '%s'", file.c_str());
     return nullptr;
   }
   const uint64_t minimumPitch =
@@ -843,8 +843,8 @@ RageSurface* RageSurfaceUtils::LoadSurface(std::string file) {
   if (minimumPitch != static_cast<unsigned>(h.pitch) ||
       expectedSize > kMaxCachedSurfaceBytes ||
       expectedSize > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-    LogReviewSrcDiagnostics(
-        "SRC-3407 rejected oversized or inconsistent cached surface '%s'",
+    LogRuntimeValidationDiagnostics(
+        "rejected oversized or inconsistent cached surface '%s'",
         file.c_str());
     return nullptr;
   }

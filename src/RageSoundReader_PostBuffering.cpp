@@ -107,12 +107,12 @@ int RageSoundReader_PostBuffering::Read(float* pBuf, int iFrames) {
             std::numeric_limits<size_t>::max() /
                 static_cast<size_t>(channels)) {
       SetError(
-          "SRC_AUDIT_FIX SRC-2821: PostBuffering sample count overflow");
+          "PostBuffering sample count overflow");
       return RageSoundReader::ERROR;
     }
     const size_t iSamples = static_cast<size_t>(iFrames) * channels;
     if (!RageSoundUtil::Attenuate(pBuf, iSamples, fVolume)) {
-      SetError("SRC_AUDIT_FIX SRC-2913: PostBuffering attenuation failed");
+      SetError("PostBuffering attenuation failed");
       return RageSoundReader::ERROR;
     }
   }
@@ -151,9 +151,7 @@ void RageSoundReader_PostBuffering::ClearError() const {
 }
 
 void RageSoundReader_PostBuffering::SetError(const std::string& sError) const {
-  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
-    LogReviewSrcDiagnostics("%s", sError.c_str());
-  }
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

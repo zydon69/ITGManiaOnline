@@ -119,7 +119,7 @@ static LocalizedString INVALID_MEMORY_CARD_PROFILE_DIR(
 
 void WarnServiceAction(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenServiceAction: %s", message.c_str());
+    LOG->Warn("ScreenServiceAction: %s", message.c_str());
   }
 }
 

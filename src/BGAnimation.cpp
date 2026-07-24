@@ -56,7 +56,7 @@ static bool CompareLayerNames(const std::string& s1, const std::string& s2) {
   const bool bParsed2 = ParseLayerNumber(s2, i2);
   if (!bParsed1 || !bParsed2) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-701: BGAnimation saw malformed layer names '%s' "
+        "BGAnimation saw malformed layer names '%s' "
         "and '%s'.",
         s1.c_str(), s2.c_str());
     if (bParsed1 != bParsed2) {
@@ -81,14 +81,14 @@ void BGAnimation::AddLayersFromAniDir(
     std::vector<std::string>& importStack) {
   if (pNode == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-702: BGAnimation ignored a null animation node for "
+        "BGAnimation ignored a null animation node for "
         "'%s'.",
         _sAniDir.c_str());
     return;
   }
   if (importStack.size() >= MAX_BG_ANIMATION_IMPORT_DEPTH) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3096: BGAnimation stopped imports at depth %zu "
+        "BGAnimation stopped imports at depth %zu "
         "while loading '%s'.",
         importStack.size(), _sAniDir.c_str());
     return;
@@ -97,7 +97,7 @@ void BGAnimation::AddLayersFromAniDir(
   if (std::find(importStack.begin(), importStack.end(), sAniDir) !=
       importStack.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-703: BGAnimation skipped circular import at '%s'.",
+        "BGAnimation skipped circular import at '%s'.",
         sAniDir.c_str());
     return;
   }
@@ -117,7 +117,7 @@ void BGAnimation::AddLayersFromAniDir(
       const XNode* pKey = pNode->GetChild(sLayer);
       if (pKey == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-702: BGAnimation layer '%s' disappeared while "
+            "BGAnimation layer '%s' disappeared while "
             "loading '%s'.",
             sLayer.c_str(), sAniDir.c_str());
         continue;
@@ -141,7 +141,7 @@ void BGAnimation::AddLayersFromAniDir(
 
         if (sImportDir.compare(0, sAniDir.size(), sAniDir) != 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-703: BGAnimation rejected import '%s' from "
+              "BGAnimation rejected import '%s' from "
               "'%s' because it escapes the animation directory.",
               sRawImportDir.c_str(), sAniDir.c_str());
           continue;
@@ -149,7 +149,7 @@ void BGAnimation::AddLayersFromAniDir(
 
         if (!IsADirectory(sImportDir)) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-703: BGAnimation import '%s' is not a "
+              "BGAnimation import '%s' is not a "
               "directory.",
               sImportDir.c_str());
           continue;
@@ -160,7 +160,7 @@ void BGAnimation::AddLayersFromAniDir(
         IniFile ini2;
         if (!ini2.ReadFile(sPathToIni)) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-703: BGAnimation import '%s' could not read "
+              "BGAnimation import '%s' could not read "
               "BGAnimation.ini.",
               sImportDir.c_str());
           continue;
@@ -173,7 +173,7 @@ void BGAnimation::AddLayersFromAniDir(
         bgLayer->LoadFromNode(pKey);
         if (bgLayer->GetNumChildren() == 0) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-3101: BGAnimation skipped empty layer '%s' "
+              "BGAnimation skipped empty layer '%s' "
               "while loading '%s'.",
               sLayer.c_str(), sAniDir.c_str());
           continue;
@@ -198,7 +198,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
 
   if (!IsADirectory(sAniDir)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-704: BGAnimation directory '%s' does not exist.",
+        "BGAnimation directory '%s' does not exist.",
         sAniDir.c_str());
     return;
   }
@@ -211,7 +211,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
       IniFile ini;
       if (!ini.ReadFile(sPathToIni)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-704: BGAnimation could not read '%s'.",
+            "BGAnimation could not read '%s'.",
             sPathToIni.c_str());
         return;
       }
@@ -259,7 +259,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
       pLayer->LoadFromAniLayerFile(asImagePaths[i]);
       if (pLayer->GetNumChildren() == 0) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-704: BGAnimation skipped empty legacy layer "
+            "BGAnimation skipped empty legacy layer "
             "'%s'.",
             asImagePaths[i].c_str());
         delete pLayer;
@@ -272,7 +272,7 @@ void BGAnimation::LoadFromAniDir(const std::string& _sAniDir) {
 
 void BGAnimation::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-702: BGAnimation ignored null node.");
+    LOG->Warn("BGAnimation ignored null node.");
     return;
   }
   std::string sDir;
@@ -289,7 +289,7 @@ void BGAnimation::LoadFromNode(const XNode* pNode) {
   if (pNode->GetAttrValue("LengthSeconds", fLengthSeconds)) {
     if (!std::isfinite(fLengthSeconds) || fLengthSeconds < 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-705: BGAnimation ignored invalid LengthSeconds "
+          "BGAnimation ignored invalid LengthSeconds "
           "%.6f.",
           fLengthSeconds);
       return;

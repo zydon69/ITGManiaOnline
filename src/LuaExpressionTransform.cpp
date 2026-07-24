@@ -14,7 +14,7 @@
 namespace {
 constexpr size_t kMaxTransformCacheEntries = 65536;
 
-void WarnLuaExpressionTransformAuditFix(const char* message) {
+void WarnLuaExpressionTransformSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -25,8 +25,8 @@ LuaExpressionTransform::LuaExpressionTransform() { m_iNumSubdivisions = 1; }
 
 void LuaExpressionTransform::SetFromReference(const LuaReference& ref) {
   if (LUA == nullptr && ref.IsSet() && !ref.IsNil()) {
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-2668: LuaExpressionTransform skipped non-nil "
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform skipped non-nil "
         "reference without Lua manager.");
     m_exprTransformFunction.SetFromNil();
     ClearCache();
@@ -43,8 +43,8 @@ bool LuaExpressionTransform::TransformItemDirect(
     return true;
   }
   if (LUA == nullptr) {
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped invalid "
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform skipped invalid "
         "function.");
     return false;
   }
@@ -62,8 +62,8 @@ bool LuaExpressionTransform::TransformItemDirect(
   if (!lua_isfunction(L, -1)) {
     lua_pop(L, 1);
     LUA->Release(L);
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-784: LuaExpressionTransform skipped non-function.");
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform skipped non-function.");
     return false;
   }
   a.PushSelf(L);
@@ -76,8 +76,8 @@ bool LuaExpressionTransform::TransformItemDirect(
   if (!bSuccess) {
     a.DestTweenState() = originalTweenState;
     a.SetVisible(bOriginalVisible);
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-2669: LuaExpressionTransform restored failed "
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform restored failed "
         "direct transform.");
     return false;
   }
@@ -106,16 +106,16 @@ bool LuaExpressionTransform::GetTransformCached(
   Actor a;
   if (!TransformItemDirect(
           a, fPositionOffsetFromCenter, iItemIndex, iNumItems)) {
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-2665: LuaExpressionTransform skipped failed cache "
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform skipped failed cache "
         "entry.");
     return false;
   }
   tweenStateOut = a.DestTweenState();
   if (m_mapPositionToTweenStateCache.size() >= kMaxTransformCacheEntries) {
     m_mapPositionToTweenStateCache.clear();
-    WarnLuaExpressionTransformAuditFix(
-        "SRC_AUDIT_FIX SRC-3132: LuaExpressionTransform bounded its cache.");
+    WarnLuaExpressionTransformSafety(
+        "LuaExpressionTransform bounded its cache.");
   }
   m_mapPositionToTweenStateCache.emplace(key, tweenStateOut);
   return true;

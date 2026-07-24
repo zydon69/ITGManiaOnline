@@ -19,13 +19,13 @@ const int MinComboSizeToShow = 5;
 REGISTER_ACTOR_CLASS(ComboGraph);
 
 namespace {
-void WarnComboGraphAuditFix(const char* message) {
+void WarnComboGraphSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceComboGraphAuditFix(const char* message) {
+void TraceComboGraphSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -35,7 +35,7 @@ float SanitizeComboGraphDimension(float value, const char* name) {
   if (!std::isfinite(value) || value <= 0.0f) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1076: ComboGraph used fallback for invalid %s.",
+          "ComboGraph used fallback for invalid %s.",
           name);
     }
     return 1.0f;
@@ -115,8 +115,8 @@ ComboGraph::ComboGraph(const ComboGraph& cpy)
       AddChild(m_pComboNumber);
     } else {
       RageUtil::SafeDelete(pActor);
-      WarnComboGraphAuditFix(
-          "SRC_AUDIT_FIX SRC-1094: ComboGraph skipped invalid copied combo "
+      WarnComboGraphSafety(
+          "ComboGraph skipped invalid copied combo "
           "number template.");
     }
   }
@@ -160,14 +160,14 @@ void ComboGraph::Load(std::string sMetricsGroup) {
   ClearTemplateActors();
 
   if (sMetricsGroup.empty()) {
-    WarnComboGraphAuditFix(
-        "SRC_AUDIT_FIX SRC-1076: ComboGraph fell back from empty metrics "
+    WarnComboGraphSafety(
+        "ComboGraph fell back from empty metrics "
         "group.");
     sMetricsGroup = "ComboGraph";
   }
   if (THEME == nullptr) {
-    WarnComboGraphAuditFix(
-        "SRC_AUDIT_FIX SRC-1076: ComboGraph refused load without THEME.");
+    WarnComboGraphSafety(
+        "ComboGraph refused load without THEME.");
     return;
   }
 
@@ -225,14 +225,14 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
   const float fFirstSecond = 0;
   const float fLastSecond = s.GetTotalPossibleStepsSeconds();
   if (!std::isfinite(fLastSecond) || fLastSecond <= fFirstSecond) {
-    WarnComboGraphAuditFix(
-        "SRC_AUDIT_FIX SRC-264: ComboGraph ignored invalid total seconds.");
+    WarnComboGraphSafety(
+        "ComboGraph ignored invalid total seconds.");
     return;
   }
   if (m_pNormalCombo == nullptr || m_pMaxCombo == nullptr ||
       m_pComboNumber == nullptr) {
-    WarnComboGraphAuditFix(
-        "SRC_AUDIT_FIX SRC-263: ComboGraph missing required templates.");
+    WarnComboGraphSafety(
+        "ComboGraph missing required templates.");
     return;
   }
 
@@ -262,8 +262,8 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     float fClampedEnd = 0.0f;
     if (!GetClampedComboRange(
             combo, fFirstSecond, fLastSecond, fClampedStart, fClampedEnd)) {
-      TraceComboGraphAuditFix(
-          "SRC_AUDIT_FIX SRC-264: ComboGraph skipped invalid combo timing.");
+      TraceComboGraphSafety(
+          "ComboGraph skipped invalid combo timing.");
       continue;
     }
 
@@ -274,8 +274,8 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
     }
     Actor* pSprite = bIsMax ? m_pMaxCombo->Copy() : m_pNormalCombo->Copy();
     if (pSprite == nullptr) {
-      WarnComboGraphAuditFix(
-          "SRC_AUDIT_FIX SRC-1079: ComboGraph skipped null copied combo "
+      WarnComboGraphSafety(
+          "ComboGraph skipped null copied combo "
           "template.");
       continue;
     }
@@ -317,8 +317,8 @@ void ComboGraph::Set(const StageStats& s, const PlayerStageStats& pss) {
 
     BitmapText* pText = m_pComboNumber->Copy();
     if (pText == nullptr) {
-      WarnComboGraphAuditFix(
-          "SRC_AUDIT_FIX SRC-1079: ComboGraph skipped null copied combo "
+      WarnComboGraphSafety(
+          "ComboGraph skipped null copied combo "
           "number.");
       continue;
     }

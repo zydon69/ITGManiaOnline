@@ -44,7 +44,7 @@ static bool IsValidNoteTrackCount(int iNumTracks, const char* context) {
   }
 
   LOG->Trace(
-      "SRC_AUDIT_FIX %s ignored invalid track count %i.",
+      "%s ignored invalid track count %i.",
       context, iNumTracks);
   return false;
 }
@@ -104,14 +104,14 @@ static bool CheckedScaledRow(
     float scale, int row, int* out, const char* context) {
   if (!std::isfinite(scale) || scale <= 0.f || out == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX %s ignored invalid scale %f.", context, scale);
+        "%s ignored invalid scale %f.", context, scale);
     return false;
   }
   const double scaled = double(scale) * row;
   if (!std::isfinite(scaled) || scaled < 0.0 ||
       scaled > double(MAX_NOTE_ROW)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX %s refused scaled row %f from row %i scale %f.",
+        "%s refused scaled row %f from row %i scale %f.",
         context, scaled, row, scale);
     return false;
   }
@@ -124,7 +124,7 @@ static bool CheckedHoldEndRow(
   if (endRowOut == nullptr || startRow < 0 || startRow > MAX_NOTE_ROW ||
       duration <= 0 || duration > MAX_NOTE_ROW - startRow) {
     LOG->Trace(
-        "SRC_AUDIT_FIX %s refused invalid hold start=%i duration=%i.",
+        "%s refused invalid hold start=%i duration=%i.",
         context, startRow, duration);
     return false;
   }
@@ -190,7 +190,7 @@ static void GetMeasureRowRange(
   }
 
   LOG->Trace(
-      "SRC_AUDIT_FIX GetMeasureRowRange used fallback for measure %i after "
+      "GetMeasureRowRange used fallback for measure %i after "
       "time signature scan ended at row %i.",
       iMeasureIndex, firstRow);
   iMeasureStartRow = iMeasureIndex * ROWS_PER_MEASURE;
@@ -807,7 +807,7 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
 
   if (!IsValidStepsType(stepsType)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData ignored invalid "
+        "SplitCompositeOrStackedNoteData ignored invalid "
         "StepsType %i.",
         stepsType);
     return false;
@@ -820,7 +820,7 @@ bool NoteDataUtil::SplitCompositeOrStackedNoteData(
 
   if (in.GetNumTracks() < NUM_PLAYERS) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SplitCompositeOrStackedNoteData cannot split %i tracks "
+        "SplitCompositeOrStackedNoteData cannot split %i tracks "
         "for couple StepsType %i.",
         in.GetNumTracks(), stepsType);
     return true;
@@ -1158,7 +1158,7 @@ void LightTransformHelper(
   for (int track : aiTracks) {
     if (track < 0 || track >= out.GetNumTracks()) {
       LOG->Trace(
-          "SRC_AUDIT_FIX LightTransformHelper ignored invalid output track "
+          "LightTransformHelper ignored invalid output track "
           "%i for %i-track lights data.",
           track, out.GetNumTracks());
       continue;
@@ -1242,7 +1242,7 @@ void NoteDataUtil::LoadTransformedLightsFromTwo(
     const NoteData& marquee, const NoteData& bass, NoteData& out) {
   if (marquee.GetNumTracks() < 4 || bass.GetNumTracks() < 1) {
     LOG->Trace(
-        "SRC_AUDIT_FIX LoadTransformedLightsFromTwo ignored invalid source "
+        "LoadTransformedLightsFromTwo ignored invalid source "
         "track counts marquee=%i bass=%i.",
         marquee.GetNumTracks(), bass.GetNumTracks());
     out.Init();
@@ -1518,7 +1518,7 @@ void NoteDataUtil::CalculateRadarValues(
               song != nullptr ? song->GetDisplayFullTitle()
                               : "(no current song)";
           LOG->Trace(
-              "SRC_AUDIT_FIX: NoteDataUtil::CalculateRadarValues used "
+              "NoteDataUtil::CalculateRadarValues used "
               "judgable fallback without timing data; row=%i tracks=%i "
               "song_seconds=%f song=\"%s\". This should only happen while "
               "calculating radar values for synthetic or partially-loaded "
@@ -1832,7 +1832,7 @@ static void GetTrackMapping(
     StepsType st, NoteDataUtil::TrackMapping tt, int NumTracks,
     int* iTakeFromTrack) {
   if (iTakeFromTrack == nullptr) {
-    LOG->Trace("SRC_AUDIT_FIX GetTrackMapping ignored null mapping output.");
+    LOG->Trace("GetTrackMapping ignored null mapping output.");
     return;
   }
   // Identity transform for cases not handled below.
@@ -2056,7 +2056,7 @@ static void GetTrackMapping(
           const int to = iTrack[t];
           if (to < 0 || to >= MAX_NOTE_TRACKS) {
             LOG->Trace(
-                "SRC_AUDIT_FIX GetTrackMapping ignored invalid inverse track "
+                "GetTrackMapping ignored invalid inverse track "
                 "%i.",
                 to);
             continue;
@@ -2168,7 +2168,7 @@ static void GetTrackMapping(
 
       if (NumTracks < 2) {
         LOG->Trace(
-            "SRC_AUDIT_FIX GetTrackMapping skipped shuffle for %i-track "
+            "GetTrackMapping skipped shuffle for %i-track "
             "chart.",
             NumTracks);
         break;
@@ -2202,7 +2202,7 @@ static void GetTrackMapping(
       }
       if (!changed) {
         LOG->Trace(
-            "SRC_AUDIT_FIX GetTrackMapping kept identity shuffle after "
+            "GetTrackMapping kept identity shuffle after "
             "exhausting attempts for %i tracks.",
             NumTracks);
       }
@@ -2487,7 +2487,7 @@ static void GetTrackMapping(
       break;
     default:
       LOG->Trace(
-          "SRC_AUDIT_FIX GetTrackMapping kept identity for invalid mapping %i.",
+          "GetTrackMapping kept identity for invalid mapping %i.",
           int(tt));
       break;
   }
@@ -2495,7 +2495,7 @@ static void GetTrackMapping(
   for (int t = 0; t < NumTracks; ++t) {
     if (iTakeFromTrack[t] < 0 || iTakeFromTrack[t] >= NumTracks) {
       LOG->Trace(
-          "SRC_AUDIT_FIX GetTrackMapping corrected invalid mapping "
+          "GetTrackMapping corrected invalid mapping "
           "dest=%i src=%i for %i tracks.",
           t, iTakeFromTrack[t], NumTracks);
       iTakeFromTrack[t] = t;
@@ -2572,7 +2572,7 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
       switch (tn1.type) {
         case TapNoteType_HoldTail:
           LOG->Trace(
-              "SRC_AUDIT_FIX HyperShuffleNotes removed unexpected HoldTail "
+              "HyperShuffleNotes removed unexpected HoldTail "
               "at row %d track %d.",
               r, track);
           inout.SetTapNote(track, r, TAP_EMPTY);
@@ -2608,7 +2608,7 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
         case TapNoteType_Invalid:
         default:
           LOG->Trace(
-              "SRC_AUDIT_FIX HyperShuffleNotes ignored invalid tap type %i "
+              "HyperShuffleNotes ignored invalid tap type %i "
               "at row %d track %d.",
               int(tn1.type), r, track);
           inout.SetTapNote(track, r, TAP_EMPTY);
@@ -2631,7 +2631,7 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
     for (size_t i = 0; i < viTargetTracks.size(); i++) {
       if (i >= vtnTargetTaps.size()) {
         LOG->Trace(
-            "SRC_AUDIT_FIX HyperShuffleNotes stopped row %d because taps "
+            "HyperShuffleNotes stopped row %d because taps "
             "and target tracks desynced.",
             r);
         break;
@@ -2644,7 +2644,7 @@ static void HyperShuffleNotes(NoteData& inout, int iStartIndex, int iEndIndex) {
       if (current_tn.type == TapNoteType_HoldHead) {
         if (viHoldEndRows[targetTrack] != -1) {
           LOG->Trace(
-              "SRC_AUDIT_FIX HyperShuffleNotes refused hold over active hold "
+              "HyperShuffleNotes refused hold over active hold "
               "at row %d track %d.",
               r, targetTrack);
           inout.SetTapNote(targetTrack, r, TAP_EMPTY);
@@ -2798,7 +2798,7 @@ void NoteDataUtil::Backwards(NoteData& inout) {
         const int newEndRow = max_row - iRowEarlier;
         if (newStartRow < 0 || newEndRow <= newStartRow) {
           LOG->Trace(
-              "SRC_AUDIT_FIX Backwards skipped invalid transformed hold "
+              "Backwards skipped invalid transformed hold "
               "track=%i row=%i duration=%i max_row=%i.",
               t, iRowEarlier, tnEarlier.iDuration, max_row);
           continue;
@@ -2946,7 +2946,7 @@ void NoteDataUtil::InsertIntelligentTaps(
       iInsertOffsetRows < 0 || iInsertOffsetRows > iWindowSizeRows ||
       iWindowSizeRows > iWindowStrideRows) {
     LOG->Trace(
-        "SRC_AUDIT_FIX InsertIntelligentTaps ignored invalid window "
+        "InsertIntelligentTaps ignored invalid window "
         "size=%i offset=%i stride=%i.",
         iWindowSizeRows, iInsertOffsetRows, iWindowStrideRows);
     return;
@@ -3007,7 +3007,7 @@ void NoteDataUtil::InsertIntelligentTaps(
     if (!inout.GetTapFirstNonEmptyTrack(iRowLater, iTrackOfNoteLater) ||
         iTrackOfNoteEarlier < 0 || iTrackOfNoteLater < 0) {
       LOG->Trace(
-          "SRC_AUDIT_FIX InsertIntelligentTaps skipped row %i with missing "
+          "InsertIntelligentTaps skipped row %i with missing "
           "surrounding tracks.",
           i);
       continue;
@@ -3269,7 +3269,7 @@ void NoteDataUtil::ConvertTapsToHolds(
     NoteData& inout, int iSimultaneousHolds, int iStartIndex, int iEndIndex) {
   if (iSimultaneousHolds <= 0) {
     LOG->Trace(
-        "SRC_AUDIT_FIX ConvertTapsToHolds ignored invalid simultaneous "
+        "ConvertTapsToHolds ignored invalid simultaneous "
         "holds %i.",
         iSimultaneousHolds);
     return;
@@ -3392,7 +3392,7 @@ void NoteDataUtil::SnapToNearestNoteType(
   if (!IsValidNoteTypeForSnap(nt1) ||
       (nt2 != NoteType_Invalid && !IsValidNoteTypeForSnap(nt2))) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SnapToNearestNoteType ignored invalid note types %i/%i.",
+        "SnapToNearestNoteType ignored invalid note types %i/%i.",
         int(nt1), int(nt2));
     return;
   }
@@ -3411,7 +3411,7 @@ void NoteDataUtil::SnapToNearestNoteType(
     const int iSnapRows2 = BeatToNoteRow(fSnapInterval2);
     if (iSnapRows1 <= 0 || iSnapRows2 <= 0) {
       LOG->Trace(
-          "SRC_AUDIT_FIX SnapToNearestNoteType stopped on invalid snap rows "
+          "SnapToNearestNoteType stopped on invalid snap rows "
           "%i/%i.",
           iSnapRows1, iSnapRows2);
       return;
@@ -3588,7 +3588,7 @@ void NoteDataUtil::SwapUpDown(NoteData& inout, StepsType st) {
 
 void NoteDataUtil::ArbitraryRemap(NoteData& inout, int* mapping) {
   if (mapping == nullptr) {
-    LOG->Trace("SRC_AUDIT_FIX ArbitraryRemap ignored null mapping.");
+    LOG->Trace("ArbitraryRemap ignored null mapping.");
     return;
   }
   if (!IsValidNoteTrackCount(inout.GetNumTracks(), "ArbitraryRemap")) {
@@ -3597,7 +3597,7 @@ void NoteDataUtil::ArbitraryRemap(NoteData& inout, int* mapping) {
   for (int t = 0; t < inout.GetNumTracks(); ++t) {
     if (mapping[t] < 0 || mapping[t] >= inout.GetNumTracks()) {
       LOG->Trace(
-          "SRC_AUDIT_FIX ArbitraryRemap ignored invalid mapping dest=%i "
+          "ArbitraryRemap ignored invalid mapping dest=%i "
           "src=%i for %i tracks.",
           t, mapping[t], inout.GetNumTracks());
       return;
@@ -3703,7 +3703,7 @@ void NoteDataUtil::TransformNoteData(
     StepsType st, Song* pSong) {
   if (pSong == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TransformNoteData ignored attack transforms without "
+        "TransformNoteData ignored attack transforms without "
         "a song.");
     return;
   }
@@ -3850,7 +3850,7 @@ void NoteDataUtil::TransformNoteData(
 void NoteDataUtil::AddTapAttacks(NoteData& nd, Song* pSong) {
   // throw an attack in every 30 seconds
   if (pSong == nullptr || !IsValidNoteTrackCount(nd.GetNumTracks(), "AddTapAttacks")) {
-    LOG->Trace("SRC_AUDIT_FIX AddTapAttacks ignored invalid song or note data.");
+    LOG->Trace("AddTapAttacks ignored invalid song or note data.");
     return;
   }
 
@@ -3875,7 +3875,7 @@ void NoteDataUtil::AddTapAttacks(NoteData& nd, Song* pSong) {
 
 void NoteDataUtil::Scale(NoteData& nd, float fScale) {
   if (!std::isfinite(fScale) || fScale <= 0.f) {
-    LOG->Trace("SRC_AUDIT_FIX Scale ignored invalid scale %f.", fScale);
+    LOG->Trace("Scale ignored invalid scale %f.", fScale);
     return;
   }
 
@@ -3904,7 +3904,7 @@ void NoteDataUtil::Scale(NoteData& nd, float fScale) {
         tn.iDuration = iNewEndRow - iNewRow;
         if (tn.iDuration <= 0) {
           LOG->Trace(
-              "SRC_AUDIT_FIX Scale skipped invalid scaled hold at row %i.",
+              "Scale skipped invalid scaled hold at row %i.",
               iter->first);
           continue;
         }
@@ -3938,7 +3938,7 @@ static bool GetScaledRow(
   if (!std::isfinite(scaledRow) || scaledRow < 0.0 ||
       scaledRow > double(MAX_NOTE_ROW)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX ScaleRegion refused transformed row %f from row %i.",
+        "ScaleRegion refused transformed row %f from row %i.",
         scaledRow, iRow);
     return false;
   }
@@ -3951,7 +3951,7 @@ void NoteDataUtil::ScaleRegion(
   if (!std::isfinite(fScale) || fScale <= 0.f || iStartIndex < 0 ||
       iStartIndex >= iEndIndex) {
     LOG->Trace(
-        "SRC_AUDIT_FIX ScaleRegion ignored invalid scale=%f start=%i end=%i.",
+        "ScaleRegion ignored invalid scale=%f start=%i end=%i.",
         fScale, iStartIndex, iEndIndex);
     return;
   }
@@ -3977,7 +3977,7 @@ void NoteDataUtil::ScaleRegion(
                 fScale, iStartIndex, iEndIndex, iOldEndRow, &iNewEndRow) ||
             iNewEndRow <= iNewRow) {
           LOG->Trace(
-              "SRC_AUDIT_FIX ScaleRegion skipped invalid scaled hold at row %i.",
+              "ScaleRegion skipped invalid scaled hold at row %i.",
               iter->first);
           continue;
         }
@@ -3995,7 +3995,7 @@ void NoteDataUtil::InsertRows(NoteData& nd, int iStartIndex, int iRowsToAdd) {
   if (iStartIndex < 0 || iStartIndex > MAX_NOTE_ROW || iRowsToAdd < 0 ||
       iRowsToAdd > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
-        "SRC_AUDIT_FIX InsertRows ignored invalid start=%i rows=%i.",
+        "InsertRows ignored invalid start=%i rows=%i.",
         iStartIndex, iRowsToAdd);
     return;
   }
@@ -4013,7 +4013,7 @@ void NoteDataUtil::DeleteRows(
   if (iStartIndex < 0 || iStartIndex > MAX_NOTE_ROW || iRowsToDelete < 0 ||
       iRowsToDelete > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
-        "SRC_AUDIT_FIX DeleteRows ignored invalid start=%i rows=%i.",
+        "DeleteRows ignored invalid start=%i rows=%i.",
         iStartIndex, iRowsToDelete);
     return;
   }
@@ -4171,7 +4171,7 @@ unsigned int NoteDataUtil::GetTotalHoldTicks(
     NoteData* nd, const TimingData* td) {
   if (nd == nullptr || td == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX GetTotalHoldTicks returned 0 for null note/timing "
+        "GetTotalHoldTicks returned 0 for null note/timing "
         "data.");
     return 0;
   }
@@ -4196,7 +4196,7 @@ unsigned int NoteDataUtil::GetTotalHoldTicks(
   for (int i = segments.size() - 1; i >= 0; i--) {
     TickcountSegment* ts = ToTickcount(segments[i]);
     if (ts == nullptr) {
-      LOG->Trace("SRC_AUDIT_FIX GetTotalHoldTicks ignored non-tick segment.");
+      LOG->Trace("GetTotalHoldTicks ignored non-tick segment.");
       continue;
     }
     if (ts->GetTicks() > 0) {

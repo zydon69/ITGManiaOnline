@@ -20,7 +20,7 @@ int GetNumGradeTiersUsed() {
   const int iClamped = std::min(std::max(iThemeTiers, 1), (int)Grade_Failed);
   if (iThemeTiers != iClamped) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Clamped invalid NumGradeTiersUsed %i to %i.",
+        "Clamped invalid NumGradeTiersUsed %i to %i.",
         iThemeTiers, iClamped);
   }
   return iClamped;

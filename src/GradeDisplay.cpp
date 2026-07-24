@@ -16,7 +16,7 @@
 REGISTER_ACTOR_CLASS(GradeDisplay);
 
 namespace {
-void WarnGradeDisplayAuditFix(const char* message) {
+void WarnGradeDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -59,14 +59,14 @@ void GradeDisplay::Load(std::string sMetricsGroup) {
   ResetLoadedActors();
 
   if (sMetricsGroup.empty()) {
-    WarnGradeDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1128: GradeDisplay fell back from empty metrics "
+    WarnGradeDisplaySafety(
+        "GradeDisplay fell back from empty metrics "
         "group.");
     sMetricsGroup = "GradeDisplay";
   }
   if (THEME == nullptr) {
-    WarnGradeDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1128: GradeDisplay refused load without THEME.");
+    WarnGradeDisplaySafety(
+        "GradeDisplay refused load without THEME.");
     return;
   }
 
@@ -79,8 +79,8 @@ void GradeDisplay::Load(std::string sMetricsGroup) {
       spr->SetVisible(false);
       this->AddChild(spr);
     } else {
-      WarnGradeDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1130: GradeDisplay skipped unloaded grade actor.");
+      WarnGradeDisplaySafety(
+          "GradeDisplay skipped unloaded grade actor.");
     }
     i++;
   }
@@ -88,8 +88,8 @@ void GradeDisplay::Load(std::string sMetricsGroup) {
 
 void GradeDisplay::SetGrade(Grade grade) {
   if (!IsPossibleGradeForDisplay(grade)) {
-    WarnGradeDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1129: GradeDisplay ignored invalid grade.");
+    WarnGradeDisplaySafety(
+        "GradeDisplay ignored invalid grade.");
     grade = Grade_Invalid;
   }
   size_t i = 0;
@@ -102,8 +102,8 @@ void GradeDisplay::SetGrade(Grade grade) {
       if (m_vSpr[i].IsLoaded()) {
         m_vSpr[i]->SetVisible(g == grade);
       } else {
-        WarnGradeDisplayAuditFix(
-            "SRC_AUDIT_FIX SRC-1130: GradeDisplay skipped null grade actor.");
+        WarnGradeDisplaySafety(
+            "GradeDisplay skipped null grade actor.");
       }
       i++;
     }

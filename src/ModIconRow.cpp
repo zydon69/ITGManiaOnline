@@ -90,7 +90,7 @@ void ModIconRow::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
   m_sMetricsGroup = sMetricsGroup;
   m_pn = IsValidModIconRowPlayer(pn) ? pn : PlayerNumber_Invalid;
   if (m_pn == PlayerNumber_Invalid) {
-    WarnModIconRow("SRC_AUDIT_FIX SRC-1199: ModIconRow ignored invalid player.");
+    WarnModIconRow("ModIconRow ignored invalid player.");
   }
 
   float spacingX = 0.0f;
@@ -108,7 +108,7 @@ void ModIconRow::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
     numOptionIcons = SanitizeNumModIcons(NUM_OPTION_ICONS.GetValue());
     optionIconMetricsGroup = OPTION_ICON_METRICS_GROUP.GetValue();
   } else {
-    WarnModIconRow("SRC_AUDIT_FIX SRC-1200: ModIconRow loaded without THEME.");
+    WarnModIconRow("ModIconRow loaded without THEME.");
   }
 
   for (int i = 0; i < numOptionIcons; i++) {

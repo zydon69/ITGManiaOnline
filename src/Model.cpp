@@ -567,7 +567,7 @@ void Model::LoadMaterialsFromMilkshapeAscii(const std::string& _sPath) {
           if (!IsAFile(sTexturePath)) {
             if (LOG != nullptr) {
               LOG->Warn(
-                  "SRC_AUDIT_FIX SRC-791: \"%s\" references missing texture "
+                  "\"%s\" references missing texture "
                   "\"%s\"; using blank diffuse texture.",
                   sPath.c_str(), sTexturePath.c_str());
             }
@@ -593,7 +593,7 @@ void Model::LoadMaterialsFromMilkshapeAscii(const std::string& _sPath) {
           if (!IsAFile(sTexturePath)) {
             if (LOG != nullptr) {
               LOG->Warn(
-                  "SRC_AUDIT_FIX SRC-791: \"%s\" references missing texture "
+                  "\"%s\" references missing texture "
                   "\"%s\"; using blank alpha texture.",
                   sPath.c_str(), sTexturePath.c_str());
             }

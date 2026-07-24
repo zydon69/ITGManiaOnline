@@ -63,7 +63,7 @@ bool NoteData::IsValidTrack(int iTrack) const {
 NoteData::TrackMap& NoteData::GetTrackMap(int iTrack) {
   if (!IsValidTrack(iTrack)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData ignored invalid track %i for %i-track "
+        "NoteData ignored invalid track %i for %i-track "
         "NoteData.",
         iTrack, GetNumTracks());
     return InvalidTrackMap();
@@ -74,7 +74,7 @@ NoteData::TrackMap& NoteData::GetTrackMap(int iTrack) {
 const NoteData::TrackMap& NoteData::GetTrackMap(int iTrack) const {
   if (!IsValidTrack(iTrack)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData ignored invalid track %i for %i-track "
+        "NoteData ignored invalid track %i for %i-track "
         "NoteData.",
         iTrack, GetNumTracks());
     return InvalidConstTrackMap();
@@ -98,7 +98,7 @@ static bool IsJudgableAtRowWithTiming(
       const std::string songTitle =
           song != nullptr ? song->GetDisplayFullTitle() : "(no current song)";
       LOG->Trace(
-          "SRC_AUDIT_FIX: NoteData::IsJudgableAtRowWithCurrentTiming used "
+          "NoteData::IsJudgableAtRowWithCurrentTiming used "
           "judgable fallback without processed timing data; row=%i song=\"%s\". "
           "This should only happen while inspecting NoteData outside a fully "
           "prepared gameplay timing context.",
@@ -120,7 +120,7 @@ void NoteData::Init() {
 void NoteData::SetNumTracks(int iNewNumTracks) {
   if (iNewNumTracks <= 0 || iNewNumTracks > MAX_NOTE_TRACKS) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2944: corrected invalid track count %i to the valid "
+        "corrected invalid track count %i to the valid "
         "range.",
         iNewNumTracks);
     iNewNumTracks = std::clamp(iNewNumTracks, 1, MAX_NOTE_TRACKS);
@@ -418,7 +418,7 @@ void NoteData::AddHoldNote(int iTrack, int iStartRow, int iEndRow, TapNote tn) {
   if (!IsValidTrack(iTrack) || iStartRow < 0 || iEndRow <= iStartRow ||
       iEndRow > MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData ignored invalid hold track=%i start=%i "
+        "NoteData ignored invalid hold track=%i start=%i "
         "end=%i.",
         iTrack, iStartRow, iEndRow);
     return;
@@ -438,7 +438,7 @@ void NoteData::AddHoldNote(int iTrack, int iStartRow, int iEndRow, TapNote tn) {
       if (tnOther.iDuration <= 0 ||
           iOtherRow > MAX_NOTE_ROW - tnOther.iDuration) {
         LOG->Trace(
-            "SRC_AUDIT_FIX SRC-2946: ignored malformed overlapping hold at row "
+            "ignored malformed overlapping hold at row "
             "%i with duration %i.",
             iOtherRow, tnOther.iDuration);
         continue;
@@ -885,7 +885,7 @@ bool NoteData::IsPlayer1(const int track, const TapNote& tn) const {
     static bool loggedOddTracks = false;
     if (!loggedOddTracks) {
       LOG->Trace(
-          "SRC_AUDIT_FIX NoteData is splitting an odd %i-track non-composite "
+          "NoteData is splitting an odd %i-track non-composite "
           "chart for two-player stats.",
           GetNumTracks());
       loggedOddTracks = true;
@@ -1084,7 +1084,7 @@ void NoteData::LoadTransformed(
   if (iNewNumTracks < 1 || iNewNumTracks > MAX_NOTE_TRACKS ||
       iOriginalTrackToTakeFrom == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2945: ignored transformed NoteData with invalid "
+        "ignored transformed NoteData with invalid "
         "track count %i or null mapping.",
         iNewNumTracks);
     return;
@@ -1101,7 +1101,7 @@ void NoteData::LoadTransformed(
     }
     if (iOriginalTrack < 0 || iOriginalTrack >= in.GetNumTracks()) {
       LOG->Trace(
-          "SRC_AUDIT_FIX NoteData skipped invalid transformed source track "
+          "NoteData skipped invalid transformed source track "
           "%i for destination track %i.",
           iOriginalTrack, t);
       continue;
@@ -1116,7 +1116,7 @@ void NoteData::MoveTapNoteTrack(int dest, int src) {
   }
   if (!IsValidTrack(dest) || !IsValidTrack(src)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData ignored invalid track move src=%i dest=%i.",
+        "NoteData ignored invalid track move src=%i dest=%i.",
         src, dest);
     return;
   }
@@ -1127,7 +1127,7 @@ void NoteData::MoveTapNoteTrack(int dest, int src) {
 void NoteData::SetTapNote(int track, int row, const TapNote& t) {
   if (!IsValidTrack(track) || row < 0 || row > MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX NoteData ignored invalid SetTapNote track=%i row=%i.",
+        "NoteData ignored invalid SetTapNote track=%i row=%i.",
         track, row);
     return;
   }
@@ -1390,7 +1390,7 @@ XNode* NoteData::CreateNode() const {
 
 void NoteData::LoadFromNode(const XNode* pNode) {
   LOG->Trace(
-      "SRC_AUDIT_FIX NoteData ignored LoadFromNode%s because XML "
+      "NoteData ignored LoadFromNode%s because XML "
       "deserialization is not implemented.",
       pNode == nullptr ? " with null node" : "");
 }
@@ -1614,8 +1614,8 @@ void NoteData::_all_tracks_iterator<ND, iter, TN>::Revalidate(
         if (track_id < 0 ||
             track_id > static_cast<int>(m_PrevCurrentRows.size())) {
           LOG->Trace(
-              "SRC_AUDIT_FIX NoteData ignored invalid added track id %i "
-              "during iterator revalidation.",
+              "NoteData ignored invalid added track id %i "
+              "during iterator safety.",
               track_id);
           continue;
         }
@@ -1632,8 +1632,8 @@ void NoteData::_all_tracks_iterator<ND, iter, TN>::Revalidate(
         if (track_id < 0 ||
             track_id >= static_cast<int>(m_PrevCurrentRows.size())) {
           LOG->Trace(
-              "SRC_AUDIT_FIX NoteData ignored invalid removed track id %i "
-              "during iterator revalidation.",
+              "NoteData ignored invalid removed track id %i "
+              "during iterator safety.",
               track_id);
           continue;
         }

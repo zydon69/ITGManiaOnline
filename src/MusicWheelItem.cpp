@@ -135,7 +135,7 @@ MusicWheelItem::MusicWheelItem(std::string sType)
   GRADES_SHOW_MACHINE.Load(sType, "GradesShowMachine");
   if (THEME == nullptr) {
     WarnMusicWheelItem(
-        "SRC_AUDIT_FIX SRC-1280: MusicWheelItem loaded without theme "
+        "MusicWheelItem loaded without theme "
         "manager.");
     return;
   }
@@ -187,7 +187,7 @@ MusicWheelItem::MusicWheelItem(std::string sType)
     if (!m_pText[i]->LoadFromFont(
             THEME->GetPathF(sType, MusicWheelItemTypeToString(i)))) {
       WarnMusicWheelItem(
-          "SRC_AUDIT_FIX SRC-1282: MusicWheelItem failed to load item text "
+          "MusicWheelItem failed to load item text "
           "font.");
     }
     ActorUtil::SetXY(m_pText[i], "MusicWheelItem");
@@ -200,7 +200,7 @@ MusicWheelItem::MusicWheelItem(std::string sType)
   ActorUtil::LoadAllCommands(m_pTextSectionCount, "MusicWheelItem");
   if (!m_pTextSectionCount->LoadFromFont(THEME->GetPathF(sType, "SectionCount"))) {
     WarnMusicWheelItem(
-        "SRC_AUDIT_FIX SRC-1282: MusicWheelItem failed to load section count "
+        "MusicWheelItem failed to load section count "
         "font.");
   }
   ActorUtil::SetXY(m_pTextSectionCount, "MusicWheelItem");
@@ -290,7 +290,7 @@ void MusicWheelItem::LoadFromWheelItemData(
       dynamic_cast<const MusicWheelItemData*>(pData);
   if (pWID == nullptr) {
     WarnMusicWheelItem(
-        "SRC_AUDIT_FIX SRC-1286: MusicWheelItem ignored non-music wheel item "
+        "MusicWheelItem ignored non-music wheel item "
         "data.");
     return;
   }
@@ -320,7 +320,7 @@ void MusicWheelItem::LoadFromWheelItemData(
 
   if (!IsValidWheelItemDataType(pWID->m_Type)) {
     WarnMusicWheelItem(
-        "SRC_AUDIT_FIX SRC-1288: MusicWheelItem ignored invalid wheel item "
+        "MusicWheelItem ignored invalid wheel item "
         "type.");
     return;
   }
@@ -451,7 +451,7 @@ void MusicWheelItem::LoadFromWheelItemData(
 
   if (!IsValidMusicWheelItemType(type)) {
     WarnMusicWheelItem(
-        "SRC_AUDIT_FIX SRC-1294: MusicWheelItem skipped invalid visual type.");
+        "MusicWheelItem skipped invalid visual type.");
     return;
   }
 

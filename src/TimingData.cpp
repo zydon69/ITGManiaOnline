@@ -103,7 +103,7 @@ std::vector<TimingSegment*>& TimingData::GetTimingSegments(
   static std::vector<TimingSegment*> invalidSegments;
   if (!IsValidTimingSegmentType(tst)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored invalid timing segment type %i.",
+        "TimingData ignored invalid timing segment type %i.",
         static_cast<int>(tst));
     return invalidSegments;
   }
@@ -396,7 +396,7 @@ float TimingData::GetPreviousSegmentBeatAtRow(
 int TimingData::GetSegmentIndexAtRow(TimingSegmentType tst, int iRow) const {
   if (!IsValidTimingSegmentType(tst)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored invalid segment index lookup type "
+        "TimingData ignored invalid segment index lookup type "
         "%i.",
         static_cast<int>(tst));
     return INVALID_INDEX;
@@ -544,7 +544,7 @@ const TimingSegment* TimingData::GetSegmentAtRow(
     int iNoteRow, TimingSegmentType tst) const {
   if (!IsValidTimingSegmentType(tst)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored segment lookup for invalid type %i "
+        "TimingData ignored segment lookup for invalid type %i "
         "at row %i.",
         static_cast<int>(tst), iNoteRow);
     return nullptr;
@@ -600,7 +600,7 @@ static void EraseSegment(
 // so we must deep-copy it (with ::Copy) for new allocations.
 void TimingData::AddSegment(const TimingSegment* seg) {
   if (seg == nullptr) {
-    LOG->Trace("SRC_AUDIT_FIX TimingData ignored null timing segment.");
+    LOG->Trace("TimingData ignored null timing segment.");
     return;
   }
 
@@ -613,7 +613,7 @@ void TimingData::AddSegment(const TimingSegment* seg) {
   TimingSegmentType tst = seg->GetType();
   if (!IsValidTimingSegmentType(tst)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored segment with invalid type %i.",
+        "TimingData ignored segment with invalid type %i.",
         static_cast<int>(tst));
     return;
   }
@@ -837,7 +837,7 @@ void TimingData::GetBeatInternal(
   float bps = GetBPMAtRow(start.last_row) / 60.0f;
   if (!std::isfinite(bps) || bps <= 0.0f) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData corrected invalid BPS %f while converting "
+        "TimingData corrected invalid BPS %f while converting "
         "elapsed time.",
         bps);
     bps = 1.0f;
@@ -865,7 +865,7 @@ void TimingData::GetBeatInternal(
         bps = ToBPM(bpms[start.bpm])->GetBPS();
         if (!std::isfinite(bps) || bps <= 0.0f) {
           LOG->Trace(
-              "SRC_AUDIT_FIX TimingData corrected invalid BPS %f at BPM "
+              "TimingData corrected invalid BPS %f at BPM "
               "segment %u.",
               bps, start.bpm);
           bps = 1.0f;
@@ -948,7 +948,7 @@ float TimingData::GetElapsedTimeInternal(
     GetBeatStarts& start, float beat, unsigned int max_segment) const {
   if (std::isnan(beat)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2939: ignored NaN beat in elapsed-time conversion.");
+        "ignored NaN beat in elapsed-time conversion.");
     return start.last_time;
   }
 
@@ -962,7 +962,7 @@ float TimingData::GetElapsedTimeInternal(
   float bps = GetBPMAtRow(start.last_row) / 60.0f;
   if (!std::isfinite(bps) || bps <= 0.0f) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData corrected invalid BPS %f while converting "
+        "TimingData corrected invalid BPS %f while converting "
         "beat time.",
         bps);
     bps = 1.0f;
@@ -990,7 +990,7 @@ float TimingData::GetElapsedTimeInternal(
         bps = ToBPM(bpms[start.bpm])->GetBPS();
         if (!std::isfinite(bps) || bps <= 0.0f) {
           LOG->Trace(
-              "SRC_AUDIT_FIX TimingData corrected invalid BPS %f at BPM "
+              "TimingData corrected invalid BPS %f at BPM "
               "segment %u.",
               bps, start.bpm);
           bps = 1.0f;
@@ -1086,7 +1086,7 @@ void TimingData::ScaleRegion(
   if (!std::isfinite(fScale) || fScale <= 0.0f || iStartIndex < 0 ||
       iStartIndex >= iEndIndex || iEndIndex > MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored invalid ScaleRegion scale=%f "
+        "TimingData ignored invalid ScaleRegion scale=%f "
         "start=%i end=%i.",
         fScale, iStartIndex, iEndIndex);
     return;
@@ -1099,7 +1099,7 @@ void TimingData::ScaleRegion(
   if (!std::isfinite(scaledLength) || scaledLength < 1.0 ||
       scaledLength > MAX_NOTE_ROW - iStartIndex) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored ScaleRegion producing invalid length "
+        "TimingData ignored ScaleRegion producing invalid length "
         "%.3f.",
         scaledLength);
     return;
@@ -1115,7 +1115,7 @@ void TimingData::ScaleRegion(
   if (bAdjustBPM) {
     if (m_avpTimingSegments[SEGMENT_BPM].empty()) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TimingData skipped BPM adjustment for ScaleRegion "
+          "TimingData skipped BPM adjustment for ScaleRegion "
           "without BPM segments.");
       return;
     }
@@ -1146,7 +1146,7 @@ void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
   if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW || iRowsToAdd <= 0 ||
       iRowsToAdd > MAX_NOTE_ROW - iStartRow) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored invalid InsertRows start=%i rows=%i.",
+        "TimingData ignored invalid InsertRows start=%i rows=%i.",
         iStartRow, iRowsToAdd);
     return;
   }
@@ -1170,7 +1170,7 @@ void TimingData::InsertRows(int iStartRow, int iRowsToAdd) {
     std::vector<TimingSegment*>& bpms = m_avpTimingSegments[SEGMENT_BPM];
     if (bpms.empty()) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TimingData skipped InsertRows BPM reset because no "
+          "TimingData skipped InsertRows BPM reset because no "
           "BPM segments exist.");
       return;
     }
@@ -1183,7 +1183,7 @@ void TimingData::DeleteRows(int iStartRow, int iRowsToDelete) {
   if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW || iRowsToDelete <= 0 ||
       iRowsToDelete > MAX_NOTE_ROW - iStartRow) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored invalid DeleteRows start=%i rows=%i.",
+        "TimingData ignored invalid DeleteRows start=%i rows=%i.",
         iStartRow, iRowsToDelete);
     return;
   }
@@ -1338,7 +1338,7 @@ void TimingData::TidyUpData(bool allowEmpty) {
 void TimingData::SortSegments(TimingSegmentType tst) {
   if (!IsValidTimingSegmentType(tst)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TimingData ignored SortSegments for invalid type %i.",
+        "TimingData ignored SortSegments for invalid type %i.",
         static_cast<int>(tst));
     return;
   }
@@ -1376,7 +1376,7 @@ void TimingData::NoteRowToMeasureAndBeat(
       GetTimingSegments(SEGMENT_TIME_SIG);
   if (tSigs.empty()) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-2942: using 4/4 fallback for measure conversion "
+        "using 4/4 fallback for measure conversion "
         "without time signatures.");
     if (iNoteRow <= 0) {
       return;
@@ -1396,7 +1396,7 @@ void TimingData::NoteRowToMeasureAndBeat(
     int iRowsPerMeasureThisSegment = curSig->GetNoteRowsPerMeasure();
     if (iRowsPerMeasureThisSegment <= 0) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TimingData ignored invalid time signature %i/%i at "
+          "TimingData ignored invalid time signature %i/%i at "
           "row %i.",
           curSig->GetNum(), curSig->GetDen(), curSig->GetRow());
       iRowsPerMeasureThisSegment = ROWS_PER_BEAT * 4;
@@ -1424,7 +1424,7 @@ void TimingData::NoteRowToMeasureAndBeat(
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-2942: failed to resolve measure for row %i; returning "
+      "failed to resolve measure for row %i; returning "
       "the accumulated safe fallback.",
       iNoteRow);
 }

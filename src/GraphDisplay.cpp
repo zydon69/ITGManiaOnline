@@ -27,13 +27,13 @@ REGISTER_ACTOR_CLASS(GraphDisplay);
 enum { VALUE_RESOLUTION = 100 };
 
 namespace {
-void WarnGraphDisplayAuditFix(const char* message) {
+void WarnGraphDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceGraphDisplayAuditFix(const char* message) {
+void TraceGraphDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -59,8 +59,8 @@ class GraphLine : public Actor {
   enum { iCircleVertices = iSubdivisions + 2 };
   void DrawPrimitives() {
     if (DISPLAY == nullptr || m_pTempState == nullptr) {
-      TraceGraphDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1074: GraphLine skipped draw without display "
+      TraceGraphDisplaySafety(
+          "GraphLine skipped draw without display "
           "state.");
       return;
     }
@@ -115,8 +115,8 @@ class GraphLine : public Actor {
     m_pCircles.clear();
     m_Quads.clear();
     if (m_LineStrip == nullptr || iSize <= 0) {
-      TraceGraphDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-257: GraphLine received empty line strip.");
+      TraceGraphDisplaySafety(
+          "GraphLine received empty line strip.");
       return;
     }
 
@@ -128,8 +128,8 @@ class GraphLine : public Actor {
       }
     }
     if (validLineStrip.empty()) {
-      TraceGraphDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1074: GraphLine received no finite vertices.");
+      TraceGraphDisplaySafety(
+          "GraphLine received no finite vertices.");
       return;
     }
 
@@ -154,8 +154,8 @@ class GraphLine : public Actor {
       float adj = p2.p.y - p1.p.y;
       float hyp = std::pow(opp * opp + adj * adj, 0.5f);
       if (!std::isfinite(hyp) || hyp <= 0.0001f) {
-        TraceGraphDisplayAuditFix(
-            "SRC_AUDIT_FIX SRC-258: GraphLine skipped invalid segment.");
+        TraceGraphDisplaySafety(
+            "GraphLine skipped invalid segment.");
         continue;
       }
 
@@ -199,7 +199,7 @@ class GraphBody : public Actor {
     if (m_pTexture == nullptr) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-259: GraphBody could not load texture '%s'.",
+            "GraphBody could not load texture '%s'.",
             sFile.c_str());
       }
     }
@@ -319,8 +319,8 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
 
   float fTotalStepSeconds = ss.GetTotalPossibleStepsSeconds();
   if (!std::isfinite(fTotalStepSeconds) || fTotalStepSeconds <= 0.0f) {
-    TraceGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped invalid total seconds.");
+    TraceGraphDisplaySafety(
+        "GraphDisplay skipped invalid total seconds.");
     fTotalStepSeconds = 1.0f;
   }
 
@@ -328,8 +328,8 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
   pss.GetLifeRecord(m_Values.data(), VALUE_RESOLUTION, fTotalStepSeconds);
   for (float& value : m_Values) {
     if (!std::isfinite(value)) {
-      TraceGraphDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-260: GraphDisplay corrected non-finite life "
+      TraceGraphDisplaySafety(
+          "GraphDisplay corrected non-finite life "
           "value.");
       value = 0.0f;
     }
@@ -346,36 +346,36 @@ void GraphDisplay::Set(const StageStats& ss, const PlayerStageStats& pss) {
     std::for_each(
         possibleSongs.begin(), possibleSongs.end() - 1, [&](Song* song) {
           if (!m_sprSongBoundary.IsLoaded()) {
-            TraceGraphDisplayAuditFix(
-                "SRC_AUDIT_FIX SRC-1075: GraphDisplay skipped unloaded song "
+            TraceGraphDisplaySafety(
+                "GraphDisplay skipped unloaded song "
                 "boundary actor.");
             return;
           }
           if (song == nullptr) {
-            TraceGraphDisplayAuditFix(
-                "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped null song "
+            TraceGraphDisplaySafety(
+                "GraphDisplay skipped null song "
                 "boundary.");
             return;
           }
           const float songSeconds = song->GetStepsSeconds();
           if (!std::isfinite(songSeconds) || songSeconds < 0.0f) {
-            TraceGraphDisplayAuditFix(
-                "SRC_AUDIT_FIX SRC-261: GraphDisplay skipped invalid song "
+            TraceGraphDisplaySafety(
+                "GraphDisplay skipped invalid song "
                 "seconds.");
             return;
           }
           fSec += static_cast<double>(songSeconds);
           if (!std::isfinite(fSec) || fSec > fTotalStepSeconds) {
-            TraceGraphDisplayAuditFix(
-                "SRC_AUDIT_FIX SRC-2972: GraphDisplay clamped cumulative song "
+            TraceGraphDisplaySafety(
+                "GraphDisplay clamped cumulative song "
                 "boundary timing.");
             fSec = fTotalStepSeconds;
           }
 
           Actor* p = m_sprSongBoundary->Copy();
           if (p == nullptr) {
-            WarnGraphDisplayAuditFix(
-                "SRC_AUDIT_FIX SRC-2972: GraphDisplay skipped null boundary "
+            WarnGraphDisplaySafety(
+                "GraphDisplay skipped null boundary "
                 "copy.");
             return;
           }
@@ -423,23 +423,23 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
   ClearGraphActors();
 
   if (sMetricsGroup.empty()) {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1071: GraphDisplay fell back from empty metrics "
+    WarnGraphDisplaySafety(
+        "GraphDisplay fell back from empty metrics "
         "group.");
     sMetricsGroup = "GraphDisplay";
   }
 
   if (THEME == nullptr) {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1071: GraphDisplay refused load without THEME.");
+    WarnGraphDisplaySafety(
+        "GraphDisplay refused load without THEME.");
     return;
   }
 
   m_size.x = THEME->GetMetricI(sMetricsGroup, "BodyWidth");
   m_size.y = THEME->GetMetricI(sMetricsGroup, "BodyHeight");
   if (m_size.x <= 0 || m_size.y <= 0) {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1072: GraphDisplay corrected invalid body size.");
+    WarnGraphDisplaySafety(
+        "GraphDisplay corrected invalid body size.");
     m_size.x = std::max(m_size.x, 1.0f);
     m_size.y = std::max(m_size.y, 1.0f);
   }
@@ -450,8 +450,8 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
     m_sprBacking->ZoomToHeight(m_size.y);
     this->AddChild(m_sprBacking);
   } else {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-2973: GraphDisplay loaded without backing actor.");
+    WarnGraphDisplaySafety(
+        "GraphDisplay loaded without backing actor.");
   }
 
   m_pGraphBody = new GraphBody(THEME->GetPathG(sMetricsGroup, "Body", true));
@@ -469,8 +469,8 @@ void GraphDisplay::Load(std::string sMetricsGroup) {
     m_sprBarely->SetVisible(false);
     this->AddChild(m_sprBarely);
   } else {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-2973: GraphDisplay loaded without barely actor.");
+    WarnGraphDisplaySafety(
+        "GraphDisplay loaded without barely actor.");
   }
 }
 
@@ -478,15 +478,15 @@ void GraphDisplay::UpdateVerts() {
   if (m_pGraphBody == nullptr || m_pGraphLine == nullptr ||
       m_pGraphBody->m_pTexture == nullptr ||
       m_Values.size() != VALUE_RESOLUTION) {
-    TraceGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-262: GraphDisplay skipped vertex update before "
+    TraceGraphDisplaySafety(
+        "GraphDisplay skipped vertex update before "
         "complete load.");
     return;
   }
   if (!std::isfinite(m_size.x) || !std::isfinite(m_size.y) || m_size.x <= 0 ||
       m_size.y <= 0) {
-    WarnGraphDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1073: GraphDisplay skipped invalid graph size.");
+    WarnGraphDisplaySafety(
+        "GraphDisplay skipped invalid graph size.");
     return;
   }
 
@@ -509,8 +509,8 @@ void GraphDisplay::UpdateVerts() {
 
     const RectF* pRect = m_pGraphBody->m_pTexture->GetTextureCoordRect(0);
     if (pRect == nullptr) {
-      WarnGraphDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1073: GraphDisplay skipped null texture rect.");
+      WarnGraphDisplaySafety(
+          "GraphDisplay skipped null texture rect.");
       return;
     }
 

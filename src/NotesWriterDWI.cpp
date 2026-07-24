@@ -263,7 +263,7 @@ static bool WriteDWINotesField(
       default:
         LOG->UserLog(
             "Song file", sPath,
-            "SRC_AUDIT_FIX cannot export DWI chart with unsupported note type "
+            "cannot export DWI chart with unsupported note type "
             "%d.",
             nt);
         return false;
@@ -336,7 +336,7 @@ static bool WriteDWINotesField(
         default:
           LOG->UserLog(
               "Song file", sPath,
-              "SRC_AUDIT_FIX cannot export unsupported DWI StepsType %i.",
+              "cannot export unsupported DWI StepsType %i.",
               out.m_StepsType);
           return false;
       }
@@ -376,7 +376,7 @@ static bool WriteDWINotesField(
       default:
         LOG->UserLog(
             "Song file", sPath,
-            "SRC_AUDIT_FIX cannot close DWI chart block with unsupported note "
+            "cannot close DWI chart block with unsupported note "
             "type %i.",
             nt);
         return false;
@@ -453,7 +453,7 @@ static bool WriteDWINotesTag(
     default:
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX cannot export DWI chart with invalid difficulty %i.",
+          "cannot export DWI chart with invalid difficulty %i.",
           d);
       return false;
   }
@@ -488,7 +488,7 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
   if (bpms.empty()) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX cannot export DWI without a BPM segment.");
+        "cannot export DWI without a BPM segment.");
     return false;
   }
 
@@ -497,7 +497,7 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
       firstBPM->GetBPM() <= 0.0f) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX cannot export DWI with invalid initial BPM row %i, BPM "
+        "cannot export DWI with invalid initial BPM row %i, BPM "
         "%f.",
         firstBPM->GetRow(), firstBPM->GetBPM());
     return false;
@@ -569,7 +569,7 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
           fs->GetPause() <= 0.0f) {
         LOG->UserLog(
             "Song file", sPath,
-            "SRC_AUDIT_FIX skipped invalid DWI stop at row %i, seconds %f.",
+            "skipped invalid DWI stop at row %i, seconds %f.",
             fs->GetRow(), fs->GetPause());
         continue;
       }
@@ -600,7 +600,7 @@ bool NotesWriterDWI::Write(std::string sPath, const Song& out) {
           bs->GetBPM() <= 0.0f) {
         LOG->UserLog(
             "Song file", sPath,
-            "SRC_AUDIT_FIX skipped invalid DWI BPM change at row %i, BPM %f.",
+            "skipped invalid DWI BPM change at row %i, BPM %f.",
             bs->GetRow(), bs->GetBPM());
         continue;
       }

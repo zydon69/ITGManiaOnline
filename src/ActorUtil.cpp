@@ -31,7 +31,7 @@
 static std::map<std::string, CreateActorFn>* g_pmapRegistrees = nullptr;
 
 namespace {
-void WarnActorUtilAuditFix(const char* message) {
+void WarnActorUtilSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -51,8 +51,8 @@ static bool IsRegistered(const std::string& sClassName) {
 
 void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
   if (sClassName.empty() || pfn == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-3124: ActorUtil rejected an invalid registry "
+    WarnActorUtilSafety(
+        "ActorUtil rejected an invalid registry "
         "entry.");
     return;
   }
@@ -63,8 +63,8 @@ void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
   std::map<std::string, CreateActorFn>::iterator iter =
       g_pmapRegistrees->find(sClassName);
   if (iter != g_pmapRegistrees->end()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-3124: ActorUtil ignored duplicate actor class.");
+    WarnActorUtilSafety(
+        "ActorUtil ignored duplicate actor class.");
     return;
   }
 
@@ -77,8 +77,8 @@ void ActorUtil::Register(const std::string& sClassName, CreateActorFn pfn) {
 bool ActorUtil::ResolvePath(
     std::string& sPath, const std::string& sName, bool optional) {
   if (FILEMAN == nullptr || sPath.empty()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-3125: ActorUtil refused path resolution without "
+    WarnActorUtilSafety(
+        "ActorUtil refused path resolution without "
         "FILEMAN or a path.");
     return false;
   }
@@ -110,8 +110,8 @@ retry_resolution:
           break;
         case Dialog::retry:
           if (++retryCount > kMaxResolveRetries) {
-            WarnActorUtilAuditFix(
-                "SRC_AUDIT_FIX SRC-761: ActorUtil stopped repeated path "
+            WarnActorUtilSafety(
+                "ActorUtil stopped repeated path "
                 "resolution retries.");
             return false;
           }
@@ -120,8 +120,8 @@ retry_resolution:
         case Dialog::ignore:
           return false;
         default:
-          WarnActorUtilAuditFix(
-              "SRC_AUDIT_FIX SRC-761: ActorUtil ignored invalid path dialog "
+          WarnActorUtilSafety(
+              "ActorUtil ignored invalid path dialog "
               "response.");
           return false;
       }
@@ -132,8 +132,8 @@ retry_resolution:
     }
 
     if (asPaths.empty()) {
-      WarnActorUtilAuditFix(
-          "SRC_AUDIT_FIX SRC-3125: ActorUtil path candidates were removed "
+      WarnActorUtilSafety(
+          "ActorUtil path candidates were removed "
           "by language filtering.");
       return false;
     }
@@ -150,8 +150,8 @@ retry_resolution:
           break;
         case Dialog::retry:
           if (++retryCount > kMaxResolveRetries) {
-            WarnActorUtilAuditFix(
-                "SRC_AUDIT_FIX SRC-761: ActorUtil stopped repeated path "
+            WarnActorUtilSafety(
+                "ActorUtil stopped repeated path "
                 "resolution retries.");
             return false;
           }
@@ -161,8 +161,8 @@ retry_resolution:
           asPaths.erase(asPaths.begin() + 1, asPaths.end());
           break;
         default:
-          WarnActorUtilAuditFix(
-              "SRC_AUDIT_FIX SRC-761: ActorUtil ignored invalid path dialog "
+          WarnActorUtilSafety(
+              "ActorUtil ignored invalid path dialog "
               "response.");
           return false;
       }
@@ -182,8 +182,8 @@ retry_resolution:
 
   sPath = DerefRedir(sPath);
   if (sPath.empty()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-3125: ActorUtil rejected an empty redirect "
+    WarnActorUtilSafety(
+        "ActorUtil rejected an empty redirect "
         "target.");
     return false;
   }
@@ -193,8 +193,8 @@ retry_resolution:
 namespace {
 std::string GetLegacyActorClass(XNode* pActor) {
   if (pActor == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-762: ActorUtil ignored null legacy actor node.");
+    WarnActorUtilSafety(
+        "ActorUtil ignored null legacy actor node.");
     return "Actor";
   }
   if (PREFSMAN == nullptr || !PREFSMAN->m_bQuirksMode) {
@@ -258,8 +258,8 @@ std::string GetLegacyActorClass(XNode* pActor) {
 
 Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
   if (_pNode == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-763: ActorUtil replaced null XML node with Actor.");
+    WarnActorUtilSafety(
+        "ActorUtil replaced null XML node with Actor.");
     return MakeFallbackActor();
   }
 
@@ -323,14 +323,14 @@ Actor* ActorUtil::LoadFromNode(const XNode* _pNode, Actor* pParentActor) {
 
   const CreateActorFn& pfn = iter->second;
   if (pfn == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-763: ActorUtil rejected null actor factory.");
+    WarnActorUtilSafety(
+        "ActorUtil rejected null actor factory.");
     return MakeFallbackActor();
   }
   std::unique_ptr<Actor> actor(pfn());
   if (actor == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-763: ActorUtil replaced null factory result.");
+    WarnActorUtilSafety(
+        "ActorUtil replaced null factory result.");
     return MakeFallbackActor();
   }
 
@@ -349,8 +349,8 @@ XNode* LoadXNodeFromLuaShowErrors(const std::string& sFile) {
     return nullptr;
   }
   if (LUA == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-764: ActorUtil skipped Lua actor without LUA.");
+    WarnActorUtilSafety(
+        "ActorUtil skipped Lua actor without LUA.");
     return nullptr;
   }
 
@@ -379,8 +379,8 @@ XNode* LoadXNodeFromLuaShowErrors(const std::string& sFile) {
  * If not, display an error, return false, and leave nothing on the stack. */
 bool ActorUtil::LoadTableFromStackShowErrors(Lua* L) {
   if (L == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-764: ActorUtil refused null Lua stack.");
+    WarnActorUtilSafety(
+        "ActorUtil refused null Lua stack.");
     return false;
   }
   if (lua_gettop(L) < 1 || !lua_isfunction(L, -1)) {
@@ -488,16 +488,16 @@ Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
 
       IniFile ini;
       if (!ini.ReadFile(sPath)) {
-        WarnActorUtilAuditFix(
-            "SRC_AUDIT_FIX SRC-765: ActorUtil ignored unreadable sprite file.");
+        WarnActorUtilSafety(
+            "ActorUtil ignored unreadable sprite file.");
         return MakeFallbackActor();
       }
       XmlFileUtil::AnnotateXNodeTree(&ini, sPath);
 
       XNode* spriteNode = ini.GetChild("Sprite");
       if (spriteNode == nullptr) {
-        WarnActorUtilAuditFix(
-            "SRC_AUDIT_FIX SRC-765: ActorUtil ignored sprite without Sprite "
+        WarnActorUtilSafety(
+            "ActorUtil ignored sprite without Sprite "
             "node.");
         return MakeFallbackActor();
       }
@@ -526,8 +526,8 @@ Actor* ActorUtil::MakeActor(const std::string& sPath_, Actor* pParentActor) {
 
 std::string ActorUtil::GetSourcePath(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-766: ActorUtil requested source path for null node.");
+    WarnActorUtilSafety(
+        "ActorUtil requested source path for null node.");
     return "";
   }
   std::string sRet;
@@ -556,8 +556,8 @@ bool ActorUtil::GetAttrPath(
     const XNode* pNode, const std::string& sName, std::string& sOut,
     bool optional) {
   if (pNode == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-766: ActorUtil refused attr path on null node.");
+    WarnActorUtilSafety(
+        "ActorUtil refused attr path on null node.");
     return false;
   }
   if (!pNode->GetAttrValue(sName, sOut)) {
@@ -582,8 +582,8 @@ bool ActorUtil::GetAttrPath(
 apActorCommands ActorUtil::ParseActorCommands(
     const std::string& sCommands, const std::string& sName) {
   if (LUA == nullptr) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-764: ActorUtil created nil command without LUA.");
+    WarnActorUtilSafety(
+        "ActorUtil created nil command without LUA.");
     LuaReference* pRet = new LuaReference;
     pRet->SetFromNil();
     return apActorCommands(pRet);
@@ -599,8 +599,8 @@ apActorCommands ActorUtil::ParseActorCommands(
 
 void ActorUtil::SetXY(Actor& actor, const std::string& sMetricsGroup) {
   if (actor.GetName().empty() || THEME == nullptr || !THEME->IsThemeLoaded()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped SetXY without name or a "
+    WarnActorUtilSafety(
+        "ActorUtil skipped SetXY without name or a "
         "loaded theme.");
     return;
   }
@@ -628,8 +628,8 @@ void ActorUtil::LoadCommandFromName(
     Actor& actor, const std::string& sMetricsGroup,
     const std::string& sCommandName, const std::string& sName) {
   if (THEME == nullptr || !THEME->IsThemeLoaded()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped command load without THEME.");
+    WarnActorUtilSafety(
+        "ActorUtil skipped command load without THEME.");
     return;
   }
   actor.AddCommand(
@@ -645,8 +645,8 @@ void ActorUtil::LoadAllCommands(
 void ActorUtil::LoadAllCommandsFromName(
     Actor& actor, const std::string& sMetricsGroup, const std::string& sName) {
   if (THEME == nullptr || !THEME->IsThemeLoaded()) {
-    WarnActorUtilAuditFix(
-        "SRC_AUDIT_FIX SRC-767: ActorUtil skipped all command load without "
+    WarnActorUtilSafety(
+        "ActorUtil skipped all command load without "
         "THEME.");
     return;
   }

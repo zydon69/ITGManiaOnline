@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,9 @@ from typing import Iterable
 
 
 DEFAULT_LOCAL_THEME = Path("Themes/Simply Love")
-DEFAULT_ARROW_THEME = Path("/Users/zydon/Sites/feetness/Arrow Cloud Theme 20260525")
+DEFAULT_ARROW_THEME = Path(
+    os.environ.get("ARROW_CLOUD_THEME", "../Arrow Cloud Theme")
+)
 
 HARD_EX_KEYS = ("W010", "W110", "W2", "W3", "W4", "W5", "Miss", "Held", "LetGo", "HitMine")
 

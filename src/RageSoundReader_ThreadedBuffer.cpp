@@ -103,20 +103,20 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
   if (pSource == nullptr || m_iSampleRate <= 0 || iSourceChannels == 0 ||
       iSourceChannels > MAX_THREADED_BUFFER_CHANNELS ||
       m_iChannels <= 0) {
-    SetError("SRC_AUDIT_FIX SRC-2860: invalid threaded-buffer source "
+    SetError("invalid threaded-buffer source "
              "topology");
     return;
   }
 
   if (g_iStreamingBufferFrames >
       std::numeric_limits<unsigned>::max() / iSourceChannels) {
-    SetError("SRC_AUDIT_FIX SRC-2852: threaded-buffer capacity overflow");
+    SetError("threaded-buffer capacity overflow");
     return;
   }
   const unsigned iSampleCapacity =
       static_cast<unsigned>(g_iStreamingBufferFrames) * iSourceChannels;
   if (iSampleCapacity > std::numeric_limits<unsigned>::max() - iSourceChannels) {
-    SetError("SRC_AUDIT_FIX SRC-2852: threaded-buffer reserve overflow");
+    SetError("threaded-buffer reserve overflow");
     return;
   }
 
@@ -124,7 +124,7 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
     m_DataBuffer.reserve(static_cast<unsigned>(iSampleCapacity), m_iChannels);
     m_StreamPosition.push_back(Mapping());
   } catch (const std::bad_alloc&) {
-    SetError("SRC_AUDIT_FIX SRC-2858: failed to allocate threaded audio "
+    SetError("failed to allocate threaded audio "
              "buffer");
     return;
   }
@@ -155,7 +155,7 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
   bool bWasEnabled = false;
   if (!const_cast<RageSoundReader_ThreadedBuffer&>(cpy)
            .DisableBufferingForSourceAccess(&bWasEnabled)) {
-    SetError("SRC_AUDIT_FIX SRC-2855: source was still busy while copying "
+    SetError("source was still busy while copying "
              "threaded buffer");
     return;
   }
@@ -174,7 +174,7 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
     m_iChannels = 0;
     m_StreamPosition.clear();
     m_bEOF = true;
-    SetError("SRC_AUDIT_FIX SRC-2855: failed to allocate threaded-buffer "
+    SetError("failed to allocate threaded-buffer "
              "copy");
     return;
   }
@@ -182,7 +182,7 @@ RageSoundReader_ThreadedBuffer::RageSoundReader_ThreadedBuffer(
   if (!IsTopologyUsable()) {
     m_pSource = nullptr;
     m_bEOF = true;
-    SetError("SRC_AUDIT_FIX SRC-2855: copied threaded buffer has no usable "
+    SetError("copied threaded buffer has no usable "
              "source");
     return;
   }
@@ -219,7 +219,7 @@ RageSoundReader_ThreadedBuffer::~RageSoundReader_ThreadedBuffer() {
 
   bool bWasEnabled = false;
   if (!DisableBufferingForSourceAccess(&bWasEnabled)) {
-    SetError("SRC_AUDIT_FIX SRC-2854: threaded-buffer source did not become "
+    SetError("threaded-buffer source did not become "
              "idle before destruction");
   }
 
@@ -272,7 +272,7 @@ bool RageSoundReader_ThreadedBuffer::DisableBufferingForSourceAccess(
         *pWasEnabled = bWasEnabled;
       }
       m_Event.Unlock();
-      SetError("SRC_AUDIT_FIX SRC-2853: timed out waiting for threaded "
+      SetError("timed out waiting for threaded "
                "audio source access");
       return false;
     }
@@ -303,8 +303,8 @@ int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
     m_DataBuffer.clear();
 
     if (iFrame < 0) {
-      LogReviewSrcDiagnostics(
-          "SRC_AUDIT_FIX SRC-2859: ThreadedBuffer accepted lead-in "
+      LogRuntimeValidationDiagnostics(
+          "ThreadedBuffer accepted lead-in "
           "SetPosition frame=%d",
           iFrame);
     }
@@ -315,7 +315,7 @@ int RageSoundReader_ThreadedBuffer::SetPosition(int iFrame) {
       m_StreamPosition.push_back(Mapping());
     } catch (const std::bad_alloc&) {
       m_bEOF = true;
-      SetError("SRC_AUDIT_FIX SRC-2858: failed to rebuild threaded-buffer "
+      SetError("failed to rebuild threaded-buffer "
                "position map");
       return RageSoundReader::ERROR;
     }
@@ -501,7 +501,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
               static_cast<unsigned>(iSamplesPerFrame) ||
       g_iReadBlockSizeFrames * static_cast<unsigned>(iSamplesPerFrame) >
           m_DataBuffer.num_writable()) {
-    SetError("SRC_AUDIT_FIX SRC-2858: invalid threaded-buffer write state");
+    SetError("invalid threaded-buffer write state");
     return RageSoundReader::ERROR;
   }
 
@@ -528,7 +528,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
 
   if (iGotFrames > 0) {
     if (iGotFrames > GetEmptyFrames()) {
-      SetError("SRC_AUDIT_FIX SRC-2858: source returned more audio than the "
+      SetError("source returned more audio than the "
                "threaded buffer can store");
       return RageSoundReader::ERROR;
     }
@@ -538,7 +538,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
     if (!CheckedAddFrames(currentMapping.iPositionOfFirstFrame,
                           currentMapping.iFramesBuffered,
                           &iExpectedNextSourceFrame)) {
-      SetError("SRC_AUDIT_FIX SRC-3323: threaded-buffer source mapping "
+      SetError("threaded-buffer source mapping "
                "overflow");
       return RageSoundReader::ERROR;
     }
@@ -547,7 +547,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
       try {
         m_StreamPosition.push_back(Mapping());
       } catch (const std::bad_alloc&) {
-        SetError("SRC_AUDIT_FIX SRC-2858: failed to extend threaded-buffer "
+        SetError("failed to extend threaded-buffer "
                  "position map");
         return RageSoundReader::ERROR;
       }
@@ -557,7 +557,7 @@ int RageSoundReader_ThreadedBuffer::FillBlock() {
 
     if (m_StreamPosition.back().iFramesBuffered >
         std::numeric_limits<int>::max() - iGotFrames) {
-      SetError("SRC_AUDIT_FIX SRC-2859: threaded-buffer mapping overflow");
+      SetError("threaded-buffer mapping overflow");
       return RageSoundReader::ERROR;
     }
 
@@ -600,8 +600,8 @@ int RageSoundReader_ThreadedBuffer::Read(float* pBuffer, int iFrames) {
     }
     if (collapsedMappings != 0) {
       if (collapsedMappings > 1) {
-        LogReviewSrcDiagnostics(
-            "SRC_AUDIT_FIX SRC-2933: collapsed %zu consumed threaded audio "
+        LogRuntimeValidationDiagnostics(
+            "collapsed %zu consumed threaded audio "
             "mappings source=%s remaining=%zu",
             collapsedMappings, GetSourcePath().c_str(),
             m_StreamPosition.size());
@@ -626,7 +626,7 @@ int RageSoundReader_ThreadedBuffer::Read(float* pBuffer, int iFrames) {
     if (!CheckedAddFrames(
             pos.iPositionOfFirstFrame, iFramesToRead, &iNewSourceFrame)) {
       m_Event.Unlock();
-      SetError("SRC_AUDIT_FIX SRC-3323: threaded-buffer read position "
+      SetError("threaded-buffer read position "
                "overflow");
       return RageSoundReader::ERROR;
     }
@@ -658,9 +658,7 @@ void RageSoundReader_ThreadedBuffer::ClearError() const {
 }
 
 void RageSoundReader_ThreadedBuffer::SetError(const std::string& sError) const {
-  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
-    LogReviewSrcDiagnostics("%s", sError.c_str());
-  }
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

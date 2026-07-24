@@ -57,7 +57,7 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
 
   if (!IsValidMemoryCardDisplayPlayer(pn)) {
     WarnMemoryCardDisplay(
-        "SRC_AUDIT_FIX SRC-1207: MemoryCardDisplay ignored invalid player.");
+        "MemoryCardDisplay ignored invalid player.");
     m_PlayerNumber = PLAYER_INVALID;
     return;
   }
@@ -72,7 +72,7 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
           "MemoryCardDisplay", ssprintf("%s p%d", sState.c_str(), pn + 1)));
     } else {
       WarnMemoryCardDisplay(
-          "SRC_AUDIT_FIX SRC-1208: MemoryCardDisplay loaded without THEME.");
+          "MemoryCardDisplay loaded without THEME.");
     }
     m_spr[i].SetVisible(false);
     this->AddChild(&m_spr[i]);
@@ -82,12 +82,12 @@ void MemoryCardDisplay::Load(PlayerNumber pn) {
 void MemoryCardDisplay::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
     WarnMemoryCardDisplay(
-        "SRC_AUDIT_FIX SRC-1207: MemoryCardDisplay ignored null XML node.");
+        "MemoryCardDisplay ignored null XML node.");
     return;
   }
   if (LUA == nullptr) {
     WarnMemoryCardDisplay(
-        "SRC_AUDIT_FIX SRC-1209: MemoryCardDisplay ignored XML without LUA.");
+        "MemoryCardDisplay ignored XML without LUA.");
     return;
   }
 

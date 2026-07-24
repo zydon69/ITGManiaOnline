@@ -57,7 +57,7 @@ float ClampPositiveDimension(float value, const char* name) {
 
   if (!IsFiniteBitmapTextValue(value) || value < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-740: BitmapText clamped invalid %s %.6f to 0.",
+        "BitmapText clamped invalid %s %.6f to 0.",
         name, value);
     return 0.0f;
   }
@@ -68,7 +68,7 @@ float ClampPositiveDimension(float value, const char* name) {
 void EnsureRainbowColorsAvailable() {
   if (RAINBOW_COLORS.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-739: BitmapText installed fallback rainbow color "
+        "BitmapText installed fallback rainbow color "
         "because no rainbow colors are configured.");
     RAINBOW_COLORS.push_back(RageColor(1, 1, 1, 1));
   }
@@ -235,7 +235,7 @@ void BitmapText::BMT_TweenState::MakeWeightedAverage(
 
 void BitmapText::LoadFromNode(const XNode* node) {
   if (node == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-737: BitmapText ignored null XML node.");
+    LOG->Warn("BitmapText ignored null XML node.");
     return;
   }
 
@@ -270,7 +270,7 @@ void BitmapText::LoadFromNode(const XNode* node) {
 
   if (!LoadFromFont(font)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-737: BitmapText could not load font '%s'.",
+        "BitmapText could not load font '%s'.",
         font.c_str());
     return;
   }
@@ -294,7 +294,7 @@ bool BitmapText::LoadFromFont(const std::string& sFontFilePath) {
 
   if (FONT == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-736: BitmapText cannot load font '%s' without "
+        "BitmapText cannot load font '%s' without "
         "FONT manager.",
         sFontFilePath.c_str());
     return false;
@@ -329,7 +329,7 @@ bool BitmapText::LoadFromTextureAndChars(
 
   if (FONT == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-736: BitmapText cannot load texture font '%s' "
+        "BitmapText cannot load texture font '%s' "
         "without FONT manager.",
         sTexturePath.c_str());
     return false;
@@ -406,7 +406,7 @@ void BitmapText::BuildChars() {
       const glyph& g = m_pFont->GetGlyph(sLine[j]);
       if (g.m_pPage == nullptr || g.GetFontPageTextures() == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3116: BitmapText skipped glyph U+%04X because "
+            "BitmapText skipped glyph U+%04X because "
             "its font page is missing.",
             static_cast<unsigned>(sLine[j]));
         iX += m_pFont->IsRightToLeft() ? -g.m_iHadvance : g.m_iHadvance;
@@ -483,7 +483,7 @@ void BitmapText::DrawChars(bool bUseStrokeTexture) {
   if (m_vpFontPageTextures.size() >
       static_cast<size_t>(std::numeric_limits<int>::max())) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3116: BitmapText refused to draw %zu glyphs.",
+        "BitmapText refused to draw %zu glyphs.",
         m_vpFontPageTextures.size());
     return;
   }
@@ -625,7 +625,7 @@ void BitmapText::SetText(
     int iWrapWidthPixels) {
   if (m_pFont == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-737: BitmapText ignored SetText before font load.");
+        "BitmapText ignored SetText before font load.");
     return;
   }
 
@@ -639,7 +639,7 @@ void BitmapText::SetText(
 
   if (iWrapWidthPixels < -1) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3117: BitmapText clamped wrap width %d to -1.",
+        "BitmapText clamped wrap width %d to -1.",
         iWrapWidthPixels);
     iWrapWidthPixels = -1;
   }
@@ -746,7 +746,7 @@ void BitmapText::SetUppercase(bool b) {
 void BitmapText::SetDistortion(float f) {
   if (!IsFiniteBitmapTextValue(f)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-742: BitmapText clamped non-finite distortion "
+        "BitmapText clamped non-finite distortion "
         "%.6f to 0.",
         f);
     f = 0.0f;
@@ -820,7 +820,7 @@ bool BitmapText::StringWillUseAlternate(
     const std::string& sText, const std::string& sAlternateText) const {
   if (m_pFont == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-737: BitmapText cannot check alternate text "
+        "BitmapText cannot check alternate text "
         "without a font.");
     return false;
   }
@@ -1051,13 +1051,13 @@ void BitmapText::SetHorizAlign(float f) {
 void BitmapText::SetWrapWidthPixels(int iWrapWidthPixels) {
   if (m_pFont == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-737: BitmapText ignored wrap width before font "
+        "BitmapText ignored wrap width before font "
         "load.");
     return;
   }
   if (iWrapWidthPixels < -1) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3117: BitmapText clamped wrap width %d to -1.",
+        "BitmapText clamped wrap width %d to -1.",
         iWrapWidthPixels);
     iWrapWidthPixels = -1;
   }
@@ -1081,7 +1081,7 @@ void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
   const size_t printableGlyphs = m_aVertices.size() / 4;
   if (iPos > printableGlyphs) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-741: BitmapText ignored attribute at out-of-range "
+        "BitmapText ignored attribute at out-of-range "
         "position %zu for %zu glyphs.",
         iPos, printableGlyphs);
     return;
@@ -1130,7 +1130,7 @@ void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
   // to remove or fix them up.
   if (static_cast<size_t>(iLines) > iPos) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-741: BitmapText ignored attribute with invalid "
+        "BitmapText ignored attribute with invalid "
         "line-adjusted position.");
     return;
   }
@@ -1313,7 +1313,7 @@ class LunaBitmapText : public Luna<BitmapText> {
     int pos = IArg(1);
     if (pos < 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-741: BitmapText ignored Lua attribute with "
+          "BitmapText ignored Lua attribute with "
           "negative position %d.",
           pos);
       COMMON_RETURN_SELF;

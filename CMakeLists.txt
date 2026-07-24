@@ -51,240 +51,240 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckStepParityInvariants.cmake)
   add_test(
-    NAME src_revalidation_batch_001_invariants
+    NAME source_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSrcRevalidationBatch001Invariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSourceSafetyInvariants.cmake)
   add_test(
-    NAME writer_revalidation_invariants
+    NAME writer_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckWriterRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckWriterSafetyInvariants.cmake)
   add_test(
-    NAME sm_ssc_revalidation_invariants
+    NAME sm_ssc_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSMSSCRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSMSSCSafetyInvariants.cmake)
   add_test(
-    NAME song_steps_revalidation_invariants
+    NAME song_steps_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongStepsRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongStepsSafetyInvariants.cmake)
   add_test(
-    NAME song_manager_revalidation_invariants
+    NAME song_manager_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongManagerRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongManagerSafetyInvariants.cmake)
   add_test(
-    NAME course_revalidation_invariants
+    NAME course_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckCourseRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckCourseSafetyInvariants.cmake)
   add_test(
-    NAME song_course_util_revalidation_invariants
+    NAME song_course_util_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongCourseUtilRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSongCourseUtilSafetyInvariants.cmake)
   add_test(
-    NAME background_revalidation_invariants
+    NAME background_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBackgroundRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBackgroundSafetyInvariants.cmake)
   add_test(
-    NAME bg_animation_revalidation_invariants
+    NAME bg_animation_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBGAnimationRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBGAnimationSafetyInvariants.cmake)
   add_test(
-    NAME visual_asset_revalidation_invariants
+    NAME visual_asset_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckVisualAssetRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckVisualAssetSafetyInvariants.cmake)
   add_test(
-    NAME text_actor_revalidation_invariants
+    NAME text_actor_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextActorRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextActorSafetyInvariants.cmake)
   add_test(
-    NAME actor_core_revalidation_invariants
+    NAME actor_core_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorCoreRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorCoreSafetyInvariants.cmake)
   add_test(
-    NAME actor_scroller_model_revalidation_invariants
+    NAME actor_scroller_model_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorScrollerModelRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckActorScrollerModelSafetyInvariants.cmake)
   add_test(
-    NAME model_font_revalidation_invariants
+    NAME model_font_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckModelFontRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckModelFontSafetyInvariants.cmake)
   add_test(
-    NAME texture_movie_revalidation_invariants
+    NAME texture_movie_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextureMovieRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextureMovieSafetyInvariants.cmake)
   add_test(
-    NAME ffmpeg_revalidation_invariants
+    NAME ffmpeg_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckFFMpegRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckFFMpegSafetyInvariants.cmake)
   add_test(
-    NAME sound_manager_revalidation_invariants
+    NAME sound_manager_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundManagerRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundManagerSafetyInvariants.cmake)
   add_test(
-    NAME sound_readers_revalidation_invariants
+    NAME sound_readers_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundReadersRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundReadersSafetyInvariants.cmake)
   add_test(
-    NAME sound_decoder_revalidation_invariants
+    NAME sound_decoder_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundDecoderRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundDecoderSafetyInvariants.cmake)
   add_test(
-    NAME sound_composition_revalidation_invariants
+    NAME sound_composition_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundCompositionRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundCompositionSafetyInvariants.cmake)
   add_test(
-    NAME sound_driver_revalidation_invariants
+    NAME sound_driver_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundDriverRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundDriverSafetyInvariants.cmake)
   add_test(
-    NAME sound_backend_revalidation_invariants
+    NAME sound_backend_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundBackendRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSoundBackendSafetyInvariants.cmake)
   add_test(
-    NAME windows_sound_backend_revalidation_invariants
+    NAME windows_sound_backend_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckWindowsSoundBackendRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckWindowsSoundBackendSafetyInvariants.cmake)
   add_test(
-    NAME screen_options_revalidation_invariants
+    NAME screen_options_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScreenOptionsRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScreenOptionsSafetyInvariants.cmake)
   add_test(
-    NAME splash_stats_revalidation_invariants
+    NAME splash_stats_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSplashStatsRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSplashStatsSafetyInvariants.cmake)
   add_test(
-    NAME sync_overlay_revalidation_invariants
+    NAME sync_overlay_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSyncOverlayRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSyncOverlaySafetyInvariants.cmake)
   add_test(
-    NAME system_layer_revalidation_invariants
+    NAME system_layer_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSystemLayerRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckSystemLayerSafetyInvariants.cmake)
   add_test(
-    NAME debug_overlay_revalidation_invariants
+    NAME debug_overlay_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckDebugOverlayRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckDebugOverlaySafetyInvariants.cmake)
   add_test(
-    NAME test_screens_revalidation_invariants
+    NAME test_screens_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTestScreensRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTestScreensSafetyInvariants.cmake)
   add_test(
-    NAME text_entry_revalidation_invariants
+    NAME text_entry_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextEntryRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTextEntrySafetyInvariants.cmake)
   add_test(
-    NAME screen_core_revalidation_invariants
+    NAME screen_core_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScreenCoreRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScreenCoreSafetyInvariants.cmake)
   add_test(
-    NAME bookkeeping_revalidation_invariants
+    NAME bookkeeping_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBookkeepingRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckBookkeepingSafetyInvariants.cmake)
   add_test(
-    NAME jukebox_revalidation_invariants
+    NAME jukebox_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckJukeboxRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckJukeboxSafetyInvariants.cmake)
   add_test(
-    NAME ending_lesson_revalidation_invariants
+    NAME ending_lesson_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckEndingLessonRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckEndingLessonSafetyInvariants.cmake)
   add_test(
-    NAME timing_core_revalidation_invariants
+    NAME timing_core_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTimingCoreRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckTimingCoreSafetyInvariants.cmake)
   add_test(
-    NAME note_data_radar_revalidation_invariants
+    NAME note_data_radar_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteDataRadarRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteDataRadarSafetyInvariants.cmake)
   add_test(
-    NAME note_data_util_revalidation_invariants
+    NAME note_data_util_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteDataUtilRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckNoteDataUtilSafetyInvariants.cmake)
   add_test(
-    NAME scoring_revalidation_invariants
+    NAME scoring_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScoringRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckScoringSafetyInvariants.cmake)
   add_test(
-    NAME stage_stats_grade_revalidation_invariants
+    NAME stage_stats_grade_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckStageStatsGradeRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckStageStatsGradeSafetyInvariants.cmake)
   add_test(
-    NAME high_score_revalidation_invariants
+    NAME high_score_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckHighScoreRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckHighScoreSafetyInvariants.cmake)
   add_test(
-    NAME profile_revalidation_invariants
+    NAME profile_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckProfileRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckProfileSafetyInvariants.cmake)
   add_test(
-    NAME life_meter_score_display_revalidation_invariants
+    NAME life_meter_score_display_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckLifeMeterScoreDisplayRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckLifeMeterScoreDisplaySafetyInvariants.cmake)
   add_test(
-    NAME evaluation_widgets_revalidation_invariants
+    NAME evaluation_widgets_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckEvaluationWidgetsRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckEvaluationWidgetsSafetyInvariants.cmake)
   add_test(
-    NAME game_state_revalidation_invariants
+    NAME game_state_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckGameStateRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckGameStateSafetyInvariants.cmake)
   add_test(
     NAME active_attack_list_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckActiveAttackListInvariants.cmake)
   add_test(
-    NAME player_options_revalidation_invariants
+    NAME player_options_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckPlayerOptionsRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckPlayerOptionsSafetyInvariants.cmake)
   add_test(
-    NAME player_revalidation_invariants
+    NAME player_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckPlayerRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckPlayerSafetyInvariants.cmake)
   add_test(
     NAME announcer_manager_invariants
     COMMAND ${CMAKE_COMMAND}
@@ -306,20 +306,20 @@ if(BUILD_TESTING)
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckInventoryInvariants.cmake)
   add_test(
-    NAME game_loop_revalidation_invariants
+    NAME game_loop_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckGameLoopRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckGameLoopSafetyInvariants.cmake)
   add_test(
-    NAME memory_card_revalidation_invariants
+    NAME memory_card_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckMemoryCardRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckMemoryCardSafetyInvariants.cmake)
   add_test(
-    NAME profile_ui_revalidation_invariants
+    NAME profile_ui_safety_invariants
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-            -P ${CMAKE_SOURCE_DIR}/CMake/CheckProfileUiRevalidationInvariants.cmake)
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckProfileUiSafetyInvariants.cmake)
   add_test(
     NAME auto_actor_invariants
     COMMAND ${CMAKE_COMMAND}

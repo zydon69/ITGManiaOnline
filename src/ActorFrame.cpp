@@ -149,13 +149,13 @@ ActorFrame::ActorFrame(const ActorFrame& cpy) : Actor(cpy) {
     copiedChildren.reserve(cpy.m_SubActors.size());
     for (unsigned i = 0; i < cpy.m_SubActors.size(); ++i) {
       if (cpy.m_SubActors[i] == nullptr) {
-        LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame skipped null copied child.");
+        LOG->Warn("ActorFrame skipped null copied child.");
         continue;
       }
       std::unique_ptr<Actor> actor(cpy.m_SubActors[i]->Copy());
       if (actor == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3128: ActorFrame skipped child whose Copy() "
+            "ActorFrame skipped child whose Copy() "
             "returned null.");
         continue;
       }
@@ -179,7 +179,7 @@ void ActorFrame::InitState() {
 
 void ActorFrame::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-752: ActorFrame ignored null XML node.");
+    LOG->Warn("ActorFrame ignored null XML node.");
     return;
   }
   if (AutoLoadChildren()) {
@@ -191,13 +191,13 @@ void ActorFrame::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("UpdateRate", m_fUpdateRate);
   if (!std::isfinite(m_fUpdateRate) || m_fUpdateRate <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-752: ActorFrame replaced invalid update rate.");
+        "ActorFrame replaced invalid update rate.");
     m_fUpdateRate = 1.0f;
   }
   pNode->GetAttrValue("FOV", m_fFOV);
   if (m_fFOV != -1.0f &&
       (!std::isfinite(m_fFOV) || m_fFOV < 0.0f || m_fFOV >= 180.0f)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-3123: ActorFrame disabled invalid FOV.");
+    LOG->Warn("ActorFrame disabled invalid FOV.");
     m_fFOV = -1.0f;
   }
   pNode->GetAttrValue("VanishX", m_fVanishX);
@@ -229,12 +229,12 @@ void ActorFrame::LoadChildrenFromNode(const XNode* pNode) {
   // Shouldn't be calling this unless we're going to delete our children.
   if (!m_bDeleteChildren) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-752: ActorFrame refused child autoload without "
+        "ActorFrame refused child autoload without "
         "ownership.");
     return;
   }
   if (pNode == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-752: ActorFrame ignored null child node.");
+    LOG->Warn("ActorFrame ignored null child node.");
     return;
   }
 
@@ -264,7 +264,7 @@ void ActorFrame::LoadChildrenFromNode(const XNode* pNode) {
 
 void ActorFrame::AddChild(Actor* pActor) {
   if (pActor == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame ignored null child.");
+    LOG->Warn("ActorFrame ignored null child.");
     return;
   }
 #ifdef DEBUG
@@ -279,13 +279,13 @@ void ActorFrame::AddChild(Actor* pActor) {
 #endif
   if (ContainsChild(pActor)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-753: ActorFrame ignored duplicate child '%s'.",
+        "ActorFrame ignored duplicate child '%s'.",
         pActor->GetName().c_str());
     return;
   }
   if (pActor->GetParent() != nullptr && pActor->GetParent() != this) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3122: ActorFrame refused child '%s' already "
+        "ActorFrame refused child '%s' already "
         "attached to another parent.",
         pActor->GetName().c_str());
     return;
@@ -311,11 +311,11 @@ void ActorFrame::RemoveChild(Actor* pActor) {
 
 void ActorFrame::TransferChildren(ActorFrame* pTo) {
   if (pTo == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame refused null transfer target.");
+    LOG->Warn("ActorFrame refused null transfer target.");
     return;
   }
   if (pTo == this) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame refused self child transfer.");
+    LOG->Warn("ActorFrame refused self child transfer.");
     return;
   }
 
@@ -325,7 +325,7 @@ void ActorFrame::TransferChildren(ActorFrame* pTo) {
 
   for (Actor* child : children) {
     if (child == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-753: ActorFrame skipped null transferred child.");
+      LOG->Warn("ActorFrame skipped null transferred child.");
       continue;
     }
     if (pTo->ContainsChild(child)) {
@@ -360,7 +360,7 @@ void ActorFrame::MoveToTail(Actor* pActor) {
   std::vector<Actor*>::iterator iter =
       find(m_SubActors.begin(), m_SubActors.end(), pActor);
   if (iter == m_SubActors.end()) {  // didn't find
-    LOG->Warn("SRC_AUDIT_FIX SRC-757: ActorFrame ignored missing MoveToTail.");
+    LOG->Warn("ActorFrame ignored missing MoveToTail.");
     return;
   }
 
@@ -373,7 +373,7 @@ void ActorFrame::MoveToHead(Actor* pActor) {
   std::vector<Actor*>::iterator iter =
       find(m_SubActors.begin(), m_SubActors.end(), pActor);
   if (iter == m_SubActors.end()) {  // didn't find
-    LOG->Warn("SRC_AUDIT_FIX SRC-757: ActorFrame ignored missing MoveToHead.");
+    LOG->Warn("ActorFrame ignored missing MoveToHead.");
     return;
   }
 
@@ -421,7 +421,7 @@ void ActorFrame::DrawPrimitives() {
   if (unlikely(!m_DrawFunction.IsNil())) {
     if (LUA == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-755: ActorFrame skipped DrawFunction without Lua.");
+          "ActorFrame skipped DrawFunction without Lua.");
       return;
     }
     Lua* L = LUA->Get();
@@ -692,14 +692,14 @@ void ActorFrame::RunCommandsOnLeaves(
 void ActorFrame::UpdateInternal(float fDeltaTime) {
   //	LOG->Trace( "ActorFrame::Update( %f )", fDeltaTime );
   if (!std::isfinite(fDeltaTime)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-755: ActorFrame ignored non-finite delta.");
+    LOG->Warn("ActorFrame ignored non-finite delta.");
     return;
   }
 
   fDeltaTime *= m_fUpdateRate;
   if (!std::isfinite(fDeltaTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-752: ActorFrame ignored non-finite scaled delta.");
+        "ActorFrame ignored non-finite scaled delta.");
     return;
   }
 
@@ -724,7 +724,7 @@ void ActorFrame::UpdateInternal(float fDeltaTime) {
   if (unlikely(!m_UpdateFunction.IsNil())) {
     if (LUA == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-755: ActorFrame skipped UpdateFunction without "
+          "ActorFrame skipped UpdateFunction without "
           "Lua.");
       return;
     }

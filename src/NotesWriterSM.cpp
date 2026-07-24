@@ -73,7 +73,7 @@ class CheckedFileWriter {
     }
     m_failed = true;
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s write failed: %s", m_context,
+        "%s write failed: %s", m_context,
         m_file.GetError().c_str());
   }
 
@@ -98,7 +98,7 @@ static std::string SanitizeKeysoundForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-584 SRC-593: sanitized %s keysound filename "
+        "sanitized %s keysound filename "
         "containing MSD delimiters.",
         format);
   }
@@ -117,7 +117,7 @@ static std::string SanitizeAttackStringForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack string "
+        "sanitized %s attack string "
         "containing MSD tag delimiters.",
         format);
   }
@@ -136,7 +136,7 @@ static std::string SanitizeStepMetadataForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-586 SRC-595: sanitized %s step metadata "
+        "sanitized %s step metadata "
         "containing MSD delimiters.",
         format);
   }
@@ -155,7 +155,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s DisplayBPM type %i for "
+          "invalid %s DisplayBPM type %i for "
           "'%s'; falling back to actual.",
           format, song.m_DisplayBPMType, song.GetSongDir().c_str());
       return DISPLAY_BPM_ACTUAL;
@@ -164,7 +164,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
   if (!std::isfinite(minBPM) || !std::isfinite(maxBPM) || minBPM <= 0.0f ||
       maxBPM <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s specified DisplayBPM "
+        "invalid %s specified DisplayBPM "
         "%.6f:%.6f for '%s'; falling back to actual.",
         format, minBPM, maxBPM, song.GetSongDir().c_str());
     return DISPLAY_BPM_ACTUAL;
@@ -172,7 +172,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
 
   if (minBPM > maxBPM) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-587 SRC-596: swapped inverted %s DisplayBPM range "
+        "swapped inverted %s DisplayBPM range "
         "%.6f:%.6f for '%s'.",
         format, minBPM, maxBPM, song.GetSongDir().c_str());
     std::swap(minBPM, maxBPM);
@@ -186,7 +186,7 @@ static bool IsValidTimingRowForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment at "
+      "skipped %s %s timing segment at "
       "negative row %i.",
       format, segment, row);
   return false;
@@ -199,7 +199,7 @@ static bool IsFiniteTimingValueForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "skipped %s %s timing segment with "
       "non-finite %s %.6f.",
       format, segment, valueName, value);
   return false;
@@ -213,7 +213,7 @@ static bool IsPositiveTimingValueForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "skipped %s %s timing segment with "
       "non-positive %s %.6f.",
       format, segment, valueName, value);
   return false;
@@ -256,7 +256,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   switch (out.m_SelectionDisplay) {
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid SM selection display %i while writing '%s'; "
+          "Invalid SM selection display %i while writing '%s'; "
           "falling back to YES.",
           out.m_SelectionDisplay, out.GetSongDir().c_str());
       f.Write("YES");
@@ -308,7 +308,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
   }
   if (bpmLines.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SM writer provided fallback BPM for '%s' because "
+        "SM writer provided fallback BPM for '%s' because "
         "TimingData had no writable BPM segments.",
         out.GetSongDir().c_str());
     bpmLines.push_back("0.000000=60.000000");
@@ -337,7 +337,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
       float fBPM = out.m_SongTiming.GetBPMAtRow(iRow);
       if (!std::isfinite(fBPM) || fBPM <= 0.0f) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: SM writer skipped warp-to-stop conversion at beat "
+            "SM writer skipped warp-to-stop conversion at beat "
             "%.6f for '%s' because BPM %.6f is invalid.",
             ws->GetBeat(), out.GetSongDir().c_str(), fBPM);
         continue;
@@ -369,14 +369,14 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
     int iRow = ss->GetRow();
     if (iRow < 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped SM DELAY timing segment at "
+          "skipped SM DELAY timing segment at "
           "negative row %i.",
           iRow);
       continue;
     }
     if (iRow == 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SM writer clamped delay at row %i to beat 0 for '%s' "
+          "SM writer clamped delay at row %i to beat 0 for '%s' "
           "to avoid serializing a negative stop beat.",
           iRow, out.GetSongDir().c_str());
       iRow = 1;
@@ -400,7 +400,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, Song& out) {
     if (!std::isfinite(ap.first) || ap.first < 0.0f ||
         !std::isfinite(ap.second) || ap.second == 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped SM serialized stop with "
+          "skipped SM serialized stop with "
           "invalid beat/pause %.6f=%.6f.",
           ap.first, ap.second);
       continue;
@@ -529,7 +529,7 @@ bool NotesWriterSM::Write(
     std::string sPath, Song& out, const std::vector<Steps*>& vpStepsToSave) {
   if (vpStepsToSave.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-599: refusing to write playable SM '%s' without "
+        "refusing to write playable SM '%s' without "
         "steps.",
         sPath.c_str());
     return false;
@@ -537,7 +537,7 @@ bool NotesWriterSM::Write(
   for (const Steps* pSteps : vpStepsToSave) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-591: refusing to write SM '%s' with null steps.",
+          "refusing to write SM '%s' with null steps.",
           sPath.c_str());
       return false;
     }
@@ -562,12 +562,12 @@ bool NotesWriterSM::Write(
     RageFileBasic& f, Song& out, const std::vector<Steps*>& vpStepsToSave) {
   if (vpStepsToSave.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-599: refusing to write playable SM without steps.");
+        "refusing to write playable SM without steps.");
     return false;
   }
   for (const Steps* pSteps : vpStepsToSave) {
     if (pSteps == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-591: refusing to write SM with null steps.");
+      LOG->Warn("refusing to write SM with null steps.");
       return false;
     }
   }
@@ -593,7 +593,7 @@ void NotesWriterSM::GetEditFileContents(
   sOut = "";
   if (pSong == nullptr || pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-591: refusing to build SM edit contents with null "
+        "refusing to build SM edit contents with null "
         "song/steps.");
     return;
   }
@@ -613,7 +613,7 @@ std::string NotesWriterSM::GetEditFileName(
     const Song* pSong, const Steps* pSteps) {
   if (pSong == nullptr || pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-591: refusing to build SM edit filename with null "
+        "refusing to build SM edit filename with null "
         "song/steps.");
     return std::string();
   }
@@ -648,7 +648,7 @@ bool NotesWriterSM::WriteEditFileToMachine(
         "Invalid song, steps, profile manager, or file manager for SM edit "
         "save.";
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-591: refusing to write SM edit with null "
+        "refusing to write SM edit with null "
         "song/steps/profile manager/file manager.");
     return false;
   }
@@ -661,7 +661,7 @@ bool NotesWriterSM::WriteEditFileToMachine(
   if (sPath == sDir) {
     sErrorOut = "Could not derive SM edit filename.";
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-591: refusing to write SM edit without filename.");
+        "refusing to write SM edit without filename.");
     return false;
   }
 
@@ -699,7 +699,7 @@ bool NotesWriterSM::WriteEditFileToMachine(
           "Error removing old edit file '%s'.",
           pSteps->GetFilename().c_str());
       LOG->Warn(
-          "SRC_AUDIT_FIX: Failed to remove old SM edit file '%s' after writing "
+          "Failed to remove old SM edit file '%s' after writing "
           "'%s'.",
           pSteps->GetFilename().c_str(), sPath.c_str());
       return false;

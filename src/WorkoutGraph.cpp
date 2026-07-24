@@ -90,7 +90,7 @@ void WorkoutGraph::Load() {
   if (THEME != nullptr) {
     m_sprEmpty.Load(THEME->GetPathG("WorkoutGraph", "empty"));
   } else {
-    WarnWorkoutGraph("SRC_AUDIT_FIX SRC-1160: WorkoutGraph loaded without THEME.");
+    WarnWorkoutGraph("WorkoutGraph loaded without THEME.");
   }
   this->AddChild(&m_sprEmpty);
 }
@@ -98,7 +98,7 @@ void WorkoutGraph::Load() {
 void WorkoutGraph::LoadFromNode(const XNode* pNode) {
   ActorFrame::LoadFromNode(pNode);
   if (pNode == nullptr) {
-    WarnWorkoutGraph("SRC_AUDIT_FIX SRC-1161: WorkoutGraph ignored null XML node.");
+    WarnWorkoutGraph("WorkoutGraph ignored null XML node.");
     return;
   }
 
@@ -113,7 +113,7 @@ void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
 
   if (GAMESTATE == nullptr) {
     WarnWorkoutGraph(
-        "SRC_AUDIT_FIX SRC-1162: WorkoutGraph ignored update without GAMESTATE.");
+        "WorkoutGraph ignored update without GAMESTATE.");
     return;
   }
 
@@ -131,7 +131,7 @@ void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
   for (const TrailEntry& e : pTrail->m_vEntries) {
     if (e.pSteps == nullptr) {
       WarnWorkoutGraph(
-          "SRC_AUDIT_FIX SRC-1163: WorkoutGraph skipped trail entry without steps.");
+          "WorkoutGraph skipped trail entry without steps.");
       continue;
     }
     viMetersAll.push_back(SanitizeWorkoutMeter(e.pSteps->GetMeter()));
@@ -192,7 +192,7 @@ void WorkoutGraph::SetInternal(int iMinSongsPlayed) {
       p->Load(THEME->GetPathG("WorkoutGraph", "bar"));
     } else {
       WarnWorkoutGraph(
-          "SRC_AUDIT_FIX SRC-1160: WorkoutGraph skipped bar texture without THEME.");
+          "WorkoutGraph skipped bar texture without THEME.");
     }
     p->SetVertAlign(align_bottom);
     p->ZoomToWidth(fBlockSize);

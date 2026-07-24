@@ -56,14 +56,6 @@ require_contains(
   "${lua_expression_transform_cpp}"
   "a.SetVisible(bOriginalVisible);"
   "failed direct transforms restore visibility")
-require_contains(
-  "${lua_expression_transform_cpp}"
-  "SRC_AUDIT_FIX SRC-2669"
-  "failed direct transform restoration is logged")
-require_contains(
-  "${lua_expression_transform_cpp}"
-  "SRC_AUDIT_FIX SRC-2665"
-  "failed cache entries are skipped")
 require_not_contains(
   "${lua_expression_transform_cpp}"
   "return m_mapPositionToTweenStateCache[key] = a.DestTweenState();"
@@ -71,11 +63,7 @@ require_not_contains(
 require_not_contains(
   "${lua_expression_transform_cpp}"
   "NormalizeOffsetForCache(fPositionOffsetFromCenter)"
-  "SRC-2667 remains excluded from this one-entry reintroduction")
-require_contains(
-  "${lua_expression_transform_cpp}"
-  "SRC_AUDIT_FIX SRC-2668"
-  "non-nil Lua references are rejected when the Lua manager is unavailable")
+  "remains excluded from this one-entry reintroduction")
 require_contains(
   "${lua_expression_transform_cpp}"
   "m_exprTransformFunction.SetFromNil();"
@@ -83,11 +71,11 @@ require_contains(
 require_contains(
   "${lua_expression_transform_h}"
   "int iNumItems;"
-  "SRC-2666 includes item count in cache key")
+  "includes item count in cache key")
 require_contains(
   "${lua_expression_transform_h}"
   "return iNumItems < other.iNumItems;"
-  "SRC-2666 orders item count in cache key")
+  "orders item count in cache key")
 require_contains(
   "${wheel_base_cpp}"
   "m_exprItemTransformFunction.ClearCache();"

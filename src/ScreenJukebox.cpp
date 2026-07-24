@@ -60,7 +60,7 @@ float GetCourseModifiersProbability(const std::string& screenName) {
       THEME->GetMetricF(screenName, "ShowCourseModifiersProbability");
   if (!std::isfinite(probability)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1944: %s ShowCourseModifiersProbability is "
+        "%s ShowCourseModifiersProbability is "
         "non-finite; using 0.",
         screenName.c_str());
     return 0.0f;
@@ -102,7 +102,7 @@ REGISTER_SCREEN_CLASS(ScreenJukebox);
 void ScreenJukebox::SetSong() {
   if (GAMESTATE == nullptr || SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1944: ScreenJukebox cannot select a song without "
+        "ScreenJukebox cannot select a song without "
         "game state and song manager.");
     return;
   }
@@ -110,7 +110,7 @@ void ScreenJukebox::SetSong() {
   const Style* currentStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
   if (currentStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1941: ScreenJukebox has no current style.");
+        "ScreenJukebox has no current style.");
     return;
   }
 
@@ -140,7 +140,7 @@ void ScreenJukebox::SetSong() {
           vSongs.push_back(song);
         } else {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1939: theme course %s contains a fixed song "
+              "theme course %s contains a fixed song "
               "entry that could not be resolved.",
               pCourse->GetDisplayFullTitle().c_str());
         }
@@ -174,14 +174,14 @@ void ScreenJukebox::SetSong() {
 
   if (vDifficultiesToShow.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1940: %s has no valid DifficultiesToShow; falling "
+        "%s has no valid DifficultiesToShow; falling "
         "back to all difficulties.",
         m_sName.c_str());
     FillFallbackDifficulties(vDifficultiesToShow);
   }
   if (vDifficultiesToShow.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1940: ScreenJukebox cannot build a difficulty "
+        "ScreenJukebox cannot build a difficulty "
         "fallback.");
     return;
   }
@@ -192,7 +192,7 @@ void ScreenJukebox::SetSong() {
 
     if (pSong == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1939: ScreenJukebox skipped a null song candidate.");
+          "ScreenJukebox skipped a null song candidate.");
       continue;
     }
     if (!pSong->HasMusic()) {
@@ -236,7 +236,7 @@ void ScreenJukebox::SetSong() {
         Course* lCourse = apCourses[j];
         if (lCourse == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1942: ScreenJukebox skipped a null course "
+              "ScreenJukebox skipped a null course "
               "candidate.");
           continue;
         }
@@ -278,7 +278,7 @@ void ScreenJukebox::SetSong() {
         Course* lCourse = apPossibleCourses[iIndex];
         if (lCourse == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1942: ScreenJukebox selected a null modifier "
+              "ScreenJukebox selected a null modifier "
               "course.");
           return;
         }
@@ -286,7 +286,7 @@ void ScreenJukebox::SetSong() {
         Trail* trail = lCourse->GetTrail(stepsType);
         if (trail == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1943: ScreenJukebox skipped modifier course "
+              "ScreenJukebox skipped modifier course "
               "%s because it has no trail for %s.",
               lCourse->GetDisplayFullTitle().c_str(),
               StepsTypeToString(stepsType).c_str());
@@ -316,7 +316,7 @@ static LocalizedString NO_MATCHING_STEPS("ScreenJukebox", "NoMatchingSteps");
 void ScreenJukebox::Init() {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1944: ScreenJukebox cannot init without game state.");
+        "ScreenJukebox cannot init without game state.");
     AbortJukeboxScreen(this, NO_MATCHING_STEPS, SM_GoToPrevScreen);
     return;
   }
@@ -324,7 +324,7 @@ void ScreenJukebox::Init() {
   // ScreenJukeboxMenu must set this
   if (GAMESTATE->GetCurrentStyle(PLAYER_INVALID) == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1941: ScreenJukebox init has no current style.");
+        "ScreenJukebox init has no current style.");
     AbortJukeboxScreen(this, NO_MATCHING_STEPS, SM_GoToPrevScreen);
     return;
   }
@@ -389,7 +389,7 @@ void ScreenJukebox::Init() {
   FOREACH_EnabledPlayer(p) {
     if (GAMESTATE->m_pPlayerState[p] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1944: ScreenJukebox skipped missing player state "
+          "ScreenJukebox skipped missing player state "
           "for player %i.",
           static_cast<int>(p));
       continue;
@@ -433,7 +433,7 @@ bool ScreenJukebox::Input(const InputEventPlus& input) {
     case GAME_BUTTON_RIGHT:
       if (SCREENMAN == nullptr || SCREENMAN->GetTopScreen() == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-1945: ScreenJukebox ignored skip input with no "
+            "ScreenJukebox ignored skip input with no "
             "top screen.");
         return true;
       }
@@ -470,7 +470,7 @@ void ScreenJukebox::InitSongQueues() {
   // Pare down to just the song in the course that we want.
   if (GAMESTATE == nullptr || GAMESTATE->m_pCurSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1946: ScreenJukebox cannot prune queues without a "
+        "ScreenJukebox cannot prune queues without a "
         "current song.");
     return;
   }
@@ -485,7 +485,7 @@ void ScreenJukebox::InitSongQueues() {
 
   if (indexToKeep == m_apSongsQueue.size()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1946: current song is missing from the jukebox "
+        "current song is missing from the jukebox "
         "queue; rebuilding a single-song queue.");
     m_apSongsQueue.clear();
     m_apSongsQueue.push_back(GAMESTATE->m_pCurSong);
@@ -495,7 +495,7 @@ void ScreenJukebox::InitSongQueues() {
       Steps* steps = GAMESTATE->m_pCurSteps[pi->GetStepsAndTrailIndex()];
       if (steps == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-1946: rebuilt jukebox queue without steps for "
+            "rebuilt jukebox queue without steps for "
             "%s.",
             pi->GetName().c_str());
         continue;
@@ -514,7 +514,7 @@ void ScreenJukebox::InitSongQueues() {
           pi->m_vpStepsQueue.erase(pi->m_vpStepsQueue.begin() + i);
         } else {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1947: jukebox steps queue for %s was shorter "
+              "jukebox steps queue for %s was shorter "
               "than song queue at %i.",
             pi->GetName().c_str(), static_cast<int>(i));
         }
@@ -522,7 +522,7 @@ void ScreenJukebox::InitSongQueues() {
           pi->m_asModifiersQueue.erase(pi->m_asModifiersQueue.begin() + i);
         } else {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-1947: jukebox modifier queue for %s was "
+              "jukebox modifier queue for %s was "
               "shorter than song queue at %i.",
             pi->GetName().c_str(), static_cast<int>(i));
         }
@@ -532,20 +532,20 @@ void ScreenJukebox::InitSongQueues() {
 
   if (m_apSongsQueue.size() != 1) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1946: jukebox song queue has %zu entries after "
+        "jukebox song queue has %zu entries after "
         "pruning.",
         m_apSongsQueue.size());
   }
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     if (pi->m_vpStepsQueue.size() != 1) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1947: jukebox steps queue for %s has %zu entries "
+          "jukebox steps queue for %s has %zu entries "
           "after pruning.",
           pi->GetName().c_str(), pi->m_vpStepsQueue.size());
     }
     if (pi->m_asModifiersQueue.size() != 1) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1947: jukebox modifier queue for %s has %zu "
+          "jukebox modifier queue for %s has %zu "
           "entries after pruning.",
           pi->GetName().c_str(), pi->m_asModifiersQueue.size());
     }

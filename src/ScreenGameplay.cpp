@@ -419,12 +419,12 @@ static float FiniteNonNegativeOr(float value, float fallback) {
 static void IncrementGameplayCount(int& value, const char* field) {
   if (value < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: normalized negative gameplay counter %s=%i.", field,
+        "normalized negative gameplay counter %s=%i.", field,
         value);
     value = 0;
   }
   if (value == std::numeric_limits<int>::max()) {
-    LOG->Warn("SRC_AUDIT_FIX: saturated gameplay counter %s.", field);
+    LOG->Warn("saturated gameplay counter %s.", field);
     return;
   }
   ++value;
@@ -434,13 +434,13 @@ static void AccumulateGameplaySeconds(
     float& value, double delta, const char* field) {
   if (!std::isfinite(value) || value < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: normalized invalid gameplay duration %s=%.6f.", field,
+        "normalized invalid gameplay duration %s=%.6f.", field,
         value);
     value = 0.0f;
   }
   if (!std::isfinite(delta) || delta < 0.0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: rejected invalid gameplay duration delta %s=%.6f.",
+        "rejected invalid gameplay duration delta %s=%.6f.",
         field, delta);
     return;
   }
@@ -454,13 +454,13 @@ static void AccumulateSignedGameplaySeconds(
     float& value, double delta, const char* field) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: normalized non-finite gameplay value %s=%.6f.", field,
+        "normalized non-finite gameplay value %s=%.6f.", field,
         value);
     value = 0.0f;
   }
   if (!std::isfinite(delta)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: rejected non-finite gameplay delta %s=%.6f.", field,
+        "rejected non-finite gameplay delta %s=%.6f.", field,
         delta);
     return;
   }
@@ -544,7 +544,7 @@ static bool HasCoreGameplayManagers(const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX: %s missing core managers (GAMESTATE=%p PREFSMAN=%p "
+      "%s missing core managers (GAMESTATE=%p PREFSMAN=%p "
       "STATSMAN=%p).",
       context, static_cast<void*>(GAMESTATE), static_cast<void*>(PREFSMAN),
       static_cast<void*>(STATSMAN));
@@ -559,7 +559,7 @@ static bool HasRenderableGameplayManagers(const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX: %s missing render runtime (THEME=%p loaded=%d LUA=%p "
+      "%s missing render runtime (THEME=%p loaded=%d LUA=%p "
       "SCREENMAN=%p MESSAGEMAN=%p).",
       context, static_cast<void*>(THEME),
       THEME != nullptr && THEME->IsThemeLoaded() ? 1 : 0,
@@ -775,14 +775,14 @@ void PlayerInfo::Load(
 
   if (!IsMultiPlayer() && !IsValidGameplayPlayer(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerInfo::Load ignored invalid player %i.",
+        "PlayerInfo::Load ignored invalid player %i.",
         static_cast<int>(pn));
     m_bPlayerEnabled = false;
     return;
   }
   if (IsMultiPlayer() && !IsValidGameplayMultiPlayer(mp)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerInfo::Load ignored invalid multiplayer %i.",
+        "PlayerInfo::Load ignored invalid multiplayer %i.",
         static_cast<int>(mp));
     m_bPlayerEnabled = false;
     return;
@@ -792,7 +792,7 @@ void PlayerInfo::Load(
   PlayerStageStats* const pPlayerStageStats = GetPlayerStageStats();
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerInfo::Load ignored player with missing state: "
+        "PlayerInfo::Load ignored player with missing state: "
         "pn=%i mp=%i.",
         static_cast<int>(pn), static_cast<int>(mp));
     m_bPlayerEnabled = false;
@@ -823,7 +823,7 @@ void PlayerInfo::Load(
         break;
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX: PlayerInfo::Load ignored invalid PlayMode %i.",
+            "PlayerInfo::Load ignored invalid PlayMode %i.",
             static_cast<int>(mode));
         m_bPlayerEnabled = false;
         return;
@@ -891,7 +891,7 @@ void PlayerInfo::LoadDummyP1(int iDummyIndex, int iAddToDifficulty) {
   if (GAMESTATE && GAMESTATE->m_pPlayerState[PLAYER_1]) {
     m_PlayerStateDummy = *GAMESTATE->m_pPlayerState[PLAYER_1];
   } else {
-    LOG->Warn("SRC_AUDIT_FIX: Dummy PlayerInfo missing PLAYER_1 state.");
+    LOG->Warn("Dummy PlayerInfo missing PLAYER_1 state.");
     m_bPlayerEnabled = false;
   }
 }
@@ -914,7 +914,7 @@ PlayerInfo::~PlayerInfo() {
 void PlayerInfo::ShowOniGameOver() {
   if (!m_sprOniGameOver.IsLoaded()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Oni gameover actor is not loaded for %s.",
+        "Oni gameover actor is not loaded for %s.",
         GetName().c_str());
     return;
   }
@@ -971,7 +971,7 @@ bool PlayerInfo::IsEnabled() {
   if (m_bIsDummy) {
     return true;
   }
-  LOG->Warn("SRC_AUDIT_FIX: PlayerInfo::IsEnabled rejected invalid player.");
+  LOG->Warn("PlayerInfo::IsEnabled rejected invalid player.");
   return false;
 }
 
@@ -1046,7 +1046,7 @@ static PlayerState* GetPlayerStateOrWarn(PlayerInfo& pi, const char* context) {
   PlayerState* playerState = pi.GetPlayerState();
   if (playerState == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped %s because PlayerState is missing.", context,
+        "%s skipped %s because PlayerState is missing.", context,
         pi.GetName().c_str());
   }
   return playerState;
@@ -1057,7 +1057,7 @@ static PlayerStageStats* GetPlayerStageStatsOrWarn(
   PlayerStageStats* stageStats = pi.GetPlayerStageStats();
   if (stageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped %s because PlayerStageStats is missing.",
+        "%s skipped %s because PlayerStageStats is missing.",
         context, pi.GetName().c_str());
   }
   return stageStats;
@@ -1067,7 +1067,7 @@ static bool IsUsableStepsAndTrailIndex(PlayerInfo& pi, const char* context) {
   const PlayerNumber pn = pi.GetStepsAndTrailIndex();
   if (!IsValidGameplayPlayer(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped %s because steps/trail index %i is invalid.",
+        "%s skipped %s because steps/trail index %i is invalid.",
         context, pi.GetName().c_str(), static_cast<int>(pn));
     return false;
   }
@@ -1077,7 +1077,7 @@ static bool IsUsableStepsAndTrailIndex(PlayerInfo& pi, const char* context) {
 static void BroadcastGameplayMessage(const MessageID message) {
   if (MESSAGEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: dropped gameplay message id %d because MESSAGEMAN is "
+        "dropped gameplay message id %d because MESSAGEMAN is "
         "missing.",
         static_cast<int>(message));
     return;
@@ -1088,7 +1088,7 @@ static void BroadcastGameplayMessage(const MessageID message) {
 static void BroadcastGameplayMessage(const std::string& message) {
   if (MESSAGEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: dropped gameplay message '%s' because MESSAGEMAN is "
+        "dropped gameplay message '%s' because MESSAGEMAN is "
         "missing.",
         message.c_str());
     return;
@@ -1099,7 +1099,7 @@ static void BroadcastGameplayMessage(const std::string& message) {
 static void BroadcastGameplayMessage(Message& message) {
   if (MESSAGEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: dropped gameplay Message because MESSAGEMAN is "
+        "dropped gameplay Message because MESSAGEMAN is "
         "missing.");
     return;
   }
@@ -1122,14 +1122,14 @@ static bool ValidateGameplayQueues(
     const std::vector<Song*>& songs, std::vector<PlayerInfo>& playerInfos,
     const char* context) {
   if (songs.empty()) {
-    LOG->Warn("SRC_AUDIT_FIX: %s rejected empty song queue.", context);
+    LOG->Warn("%s rejected empty song queue.", context);
     return false;
   }
 
   for (size_t i = 0; i < songs.size(); ++i) {
     if (songs[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s rejected null song at queue index %zu.", context,
+          "%s rejected null song at queue index %zu.", context,
           i);
       return false;
     }
@@ -1140,7 +1140,7 @@ static bool ValidateGameplayQueues(
     if (pi->m_vpStepsQueue.size() != songs.size() ||
         pi->m_asModifiersQueue.size() != pi->m_vpStepsQueue.size()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s rejected queue mismatch for %s: songs=%zu "
+          "%s rejected queue mismatch for %s: songs=%zu "
           "steps=%zu modifiers=%zu.",
           context, pi->GetName().c_str(), songs.size(),
           pi->m_vpStepsQueue.size(), pi->m_asModifiersQueue.size());
@@ -1151,12 +1151,12 @@ static bool ValidateGameplayQueues(
     for (size_t i = 0; i < pi->m_vpStepsQueue.size(); ++i) {
       if (pi->m_vpStepsQueue[i] == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: %s rejected null steps for %s at queue index %zu.",
+            "%s rejected null steps for %s at queue index %zu.",
             context, pi->GetName().c_str(), i);
         valid = false;
       } else if (pi->m_vpStepsQueue[i]->m_pSong != songs[i]) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: %s rejected song/steps mismatch for %s at queue "
+            "%s rejected song/steps mismatch for %s at queue "
             "index %zu.",
             context, pi->GetName().c_str(), i);
         valid = false;
@@ -1268,7 +1268,7 @@ void ScreenGameplay::Init() {
 
     if (m_vPlayerInfo.empty() || iNumEnabledPlayers <= 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScreenGameplay::Init aborted with %zu player infos "
+          "ScreenGameplay::Init aborted with %zu player infos "
           "and %d enabled players.",
           m_vPlayerInfo.size(), iNumEnabledPlayers);
       PostScreenMessage(SM_GoToPrevScreen, 0);
@@ -1296,7 +1296,7 @@ void ScreenGameplay::Init() {
     if (!IsValidGameplayPlayer(master) ||
         static_cast<size_t>(master) >= m_vPlayerInfo.size()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Routine shared scorekeeper skipped for invalid "
+          "Routine shared scorekeeper skipped for invalid "
           "master player %i.",
           static_cast<int>(master));
     } else {
@@ -1309,7 +1309,7 @@ void ScreenGameplay::Init() {
             &STATSMAN->m_CurStageStats.m_RoutinePlayer);
         if (m_pRoutineSharedScoreKeeper == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Routine shared scorekeeper creation failed.");
+              "Routine shared scorekeeper creation failed.");
         } else {
           if (masterInfo.m_pSecondaryScoreKeeper != nullptr) {
             RageUtil::SafeDelete(masterInfo.m_pSecondaryScoreKeeper);
@@ -1358,7 +1358,7 @@ void ScreenGameplay::Init() {
   InitSongQueues();
   if (!ValidateGameplayQueues(
           m_apSongsQueue, m_vPlayerInfo, "ScreenGameplay::Init")) {
-    LOG->Warn("SRC_AUDIT_FIX: ScreenGameplay has no complete queues to play.");
+    LOG->Warn("ScreenGameplay has no complete queues to play.");
     PostScreenMessage(SM_GoToPrevScreen, 0);
     return;
   }
@@ -1371,7 +1371,7 @@ void ScreenGameplay::Init() {
       Steps* curSteps = pi->m_vpStepsQueue[i];
       if (curSteps == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Missing queued steps for gameplay player %d.",
+            "Missing queued steps for gameplay player %d.",
             player);
         continue;
       }
@@ -1395,7 +1395,7 @@ void ScreenGameplay::Init() {
           GAMESTATE->m_pCurSteps[human_pn] == nullptr ||
           GAMESTATE->GetCurrentGame() == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: CPU step/style sync skipped because the "
+            "CPU step/style sync skipped because the "
             "human player or current game is unavailable.");
         continue;
       }
@@ -1408,7 +1408,7 @@ void ScreenGameplay::Init() {
     FOREACH_EnabledPlayer(p) {
       if (GAMESTATE->m_pCurSteps[p].Get() == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Enabled player %i has no current steps.",
+            "Enabled player %i has no current steps.",
             static_cast<int>(p));
       }
     }
@@ -1489,7 +1489,7 @@ void ScreenGameplay::Init() {
     if (!IsValidGameplayPlayer(layoutPn) || pi->m_pPlayer == nullptr ||
         playerState == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Skipping notefield positioning for invalid %s.",
+          "Skipping notefield positioning for invalid %s.",
           pi->GetName().c_str());
       continue;
     }
@@ -1499,7 +1499,7 @@ void ScreenGameplay::Init() {
     const Style* style = GAMESTATE->GetCurrentStyle(layoutPn);
     if (style == nullptr || style->GetWidth(layoutPn) <= 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Skipping notefield positioning for %s with missing "
+          "Skipping notefield positioning for %s with missing "
           "style.",
           pi->GetName().c_str());
       continue;
@@ -1581,7 +1581,7 @@ void ScreenGameplay::Init() {
         if (!IsValidGameplayPlayer(master) ||
             static_cast<size_t>(master) >= m_vPlayerInfo.size()) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: shared life meter skipped for invalid master "
+              "shared life meter skipped for invalid master "
               "player %i.",
               static_cast<int>(master));
           break;
@@ -1645,7 +1645,7 @@ void ScreenGameplay::Init() {
             playerState->m_PlayerOptions.GetStage().m_LifeType);
         if (pi->m_pLifeMeter == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: LifeMeter creation failed for %s.",
+              "LifeMeter creation failed for %s.",
               pi->GetName().c_str());
           continue;
         }
@@ -1904,7 +1904,7 @@ void ScreenGameplay::Init() {
   FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
     if (pi->m_vpStepsQueue.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeper load skipped for %s with empty "
+          "ScoreKeeper load skipped for %s with empty "
           "steps queue.",
           pi->GetName().c_str());
       continue;
@@ -1982,27 +1982,27 @@ void ScreenGameplay::InitSongQueues() {
   if (GAMESTATE->IsCourseMode()) {
     Course* pCourse = GAMESTATE->m_pCurCourse;
     if (pCourse == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Course gameplay has no current course.");
+      LOG->Warn("Course gameplay has no current course.");
       return;
     }
 
     PlayerNumber pnMaster = GAMESTATE->GetMasterPlayerNumber();
     if (!IsValidGameplayPlayer(pnMaster)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Course gameplay has invalid master player %i.",
+          "Course gameplay has invalid master player %i.",
           static_cast<int>(pnMaster));
       return;
     }
     Trail* pTrail = GAMESTATE->m_pCurTrail[pnMaster];
     if (pTrail == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Course gameplay has no master trail.");
+      LOG->Warn("Course gameplay has no master trail.");
       return;
     }
     for (const TrailEntry& e : pTrail->m_vEntries) {
       if (e.pSong != nullptr) {
         m_apSongsQueue.push_back(e.pSong);
       } else {
-        LOG->Warn("SRC_AUDIT_FIX: Ignoring null song in master trail.");
+        LOG->Warn("Ignoring null song in master trail.");
       }
     }
 
@@ -2010,7 +2010,7 @@ void ScreenGameplay::InitSongQueues() {
       Trail* lTrail = GAMESTATE->m_pCurTrail[pi->GetStepsAndTrailIndex()];
       if (lTrail == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Course gameplay missing trail for %s.",
+            "Course gameplay missing trail for %s.",
             pi->GetName().c_str());
         continue;
       }
@@ -2018,7 +2018,7 @@ void ScreenGameplay::InitSongQueues() {
       for (const TrailEntry& e : lTrail->m_vEntries) {
         if (e.pSteps == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Ignoring null steps in trail for %s.",
+              "Ignoring null steps in trail for %s.",
               pi->GetName().c_str());
           continue;
         }
@@ -2029,7 +2029,7 @@ void ScreenGameplay::InitSongQueues() {
       }
       if (pi->m_vpStepsQueue.size() != m_apSongsQueue.size()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Course queue size mismatch for %s: songs=%zu "
+            "Course queue size mismatch for %s: songs=%zu "
             "steps=%zu.",
             pi->GetName().c_str(), m_apSongsQueue.size(),
             pi->m_vpStepsQueue.size());
@@ -2052,7 +2052,7 @@ void ScreenGameplay::InitSongQueues() {
     }
   } else {
     if (GAMESTATE->m_pCurSong == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Song gameplay has no current song.");
+      LOG->Warn("Song gameplay has no current song.");
       return;
     }
     m_apSongsQueue.push_back(GAMESTATE->m_pCurSong);
@@ -2060,7 +2060,7 @@ void ScreenGameplay::InitSongQueues() {
       Steps* pSteps = GAMESTATE->m_pCurSteps[pi->GetStepsAndTrailIndex()];
       if (pSteps == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Song gameplay missing steps for %s.",
+            "Song gameplay missing steps for %s.",
             pi->GetName().c_str());
         continue;
       }
@@ -2091,7 +2091,7 @@ void ScreenGameplay::InitSongQueues() {
       FOREACH_EnabledPlayerInfo(m_vPlayerInfo, pi) {
         if (i >= static_cast<int>(pi->m_vpStepsQueue.size())) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Multiplayer queue too short for %s at song %i.",
+              "Multiplayer queue too short for %s at song %i.",
               pi->GetName().c_str(), i);
           continue;
         }
@@ -2104,7 +2104,7 @@ void ScreenGameplay::InitSongQueues() {
         SongUtil::GetSteps(pSong, vpSteps, pOldSteps->m_StepsType);
         if (vpSteps.empty()) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: No multiplayer steps for %s in %s.",
+              "No multiplayer steps for %s in %s.",
               pi->GetName().c_str(), pSong->GetTranslitFullTitle().c_str());
           continue;
         }
@@ -2192,7 +2192,7 @@ bool ScreenGameplay::IsLastSong() {
 bool ScreenGameplay::SetupSong(int iSongIndex) {
   if (iSongIndex < 0 || iSongIndex >= static_cast<int>(m_apSongsQueue.size())) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SetupSong rejected invalid song index %i/%zu.",
+        "SetupSong rejected invalid song index %i/%zu.",
         iSongIndex, m_apSongsQueue.size());
     return false;
   }
@@ -2208,7 +2208,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
         iSongIndex >= static_cast<int>(pi->m_asModifiersQueue.size()) ||
         pi->m_vpStepsQueue[iSongIndex] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SetupSong preflight rejected incomplete player %s "
+          "SetupSong preflight rejected incomplete player %s "
           "at song index %i.",
           pi->GetName().c_str(), iSongIndex);
       return false;
@@ -2218,7 +2218,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     const PlayerNumber stylePn = pi->IsMultiPlayer() ? PLAYER_INVALID : stepsPn;
     if (GAMESTATE->GetCurrentStyle(stylePn) == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SetupSong preflight rejected missing style for %s.",
+          "SetupSong preflight rejected missing style for %s.",
           pi->GetName().c_str());
       return false;
     }
@@ -2242,7 +2242,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     if (iSongIndex >= static_cast<int>(pi->m_vpStepsQueue.size()) ||
         iSongIndex >= static_cast<int>(pi->m_asModifiersQueue.size())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SetupSong missing queued data for %s at %i.",
+          "SetupSong missing queued data for %s at %i.",
           pi->GetName().c_str(), iSongIndex);
       complete = false;
       continue;
@@ -2250,7 +2250,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     Steps* pSteps = pi->m_vpStepsQueue[iSongIndex];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SetupSong skipped null steps for %s.",
+          "SetupSong skipped null steps for %s.",
           pi->GetName().c_str());
       complete = false;
       continue;
@@ -2272,7 +2272,7 @@ bool ScreenGameplay::SetupSong(int iSongIndex) {
     const Style* pStyle = GAMESTATE->GetCurrentStyle(stylePn);
     if (pStyle == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SetupSong skipped %s because style is missing.",
+          "SetupSong skipped %s because style is missing.",
           pi->GetName().c_str());
       complete = false;
       continue;
@@ -2404,7 +2404,7 @@ void ScreenGameplay::LoadNextSong() {
   }
   GAMESTATE->m_pCurSong.Set(m_apSongsQueue[iPlaySongIndex]);
   if (GAMESTATE->m_pCurSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: LoadNextSong selected a null song.");
+    LOG->Warn("LoadNextSong selected a null song.");
     return;
   }
   m_iLightsRowLastCrossed = 0;
@@ -2435,7 +2435,7 @@ void ScreenGameplay::LoadNextSong() {
 
   if (!SetupSong(iPlaySongIndex)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LoadNextSong aborted after incomplete song setup.");
+        "LoadNextSong aborted after incomplete song setup.");
     return;
   }
 
@@ -2485,7 +2485,7 @@ void ScreenGameplay::LoadNextSong() {
     if (pss == nullptr || pSteps == nullptr || playerState == nullptr ||
         pi->m_pPlayer == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: LoadNextSong skipped incomplete player %s.",
+          "LoadNextSong skipped incomplete player %s.",
           pi->GetName().c_str());
       continue;
     }
@@ -2777,7 +2777,7 @@ void ScreenGameplay::LoadLights() {
   // consistent over single and double styles.
   if (GAMEMAN == nullptr || GAMESTATE->m_pCurGame == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LoadLights skipped autogen lights without game "
+        "LoadLights skipped autogen lights without game "
         "manager/current game.");
     return;
   }
@@ -2785,7 +2785,7 @@ void ScreenGameplay::LoadLights() {
       GAMEMAN->GetHowToPlayStyleForGame(GAMESTATE->m_pCurGame);
   if (lightsStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LoadLights skipped autogen lights without a "
+        "LoadLights skipped autogen lights without a "
         "how-to-play style.");
     return;
   }
@@ -2854,7 +2854,7 @@ void ScreenGameplay::StartPlayingSong(
     float fMinTimeToNotes, float fMinTimeToMusic) {
   if (GAMESTATE == nullptr || m_pSoundMusic == nullptr ||
       GAMESTATE->m_pCurSong == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: StartPlayingSong missing sound or song.");
+    LOG->Warn("StartPlayingSong missing sound or song.");
     return;
   }
   if (!IsFiniteNonNegative(fMinTimeToNotes)) {
@@ -2869,7 +2869,7 @@ void ScreenGameplay::StartPlayingSong(
   RageSoundParams p;
   p.m_fSpeed = GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
   if (!std::isfinite(p.m_fSpeed) || p.m_fSpeed <= 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid music rate %.3f; using 1.0.", p.m_fSpeed);
+    LOG->Warn("Invalid music rate %.3f; using 1.0.", p.m_fSpeed);
     p.m_fSpeed = 1.0f;
   }
   p.StopMode = RageSoundParams::M_CONTINUE;
@@ -2895,7 +2895,7 @@ void ScreenGameplay::StartPlayingSong(
 
   if (m_pSoundMusic->IsPlaying()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: StartPlayingSong stopped an already-playing sound "
+        "StartPlayingSong stopped an already-playing sound "
         "before restart.");
     m_pSoundMusic->StopPlaying();
   }
@@ -3065,7 +3065,7 @@ void ScreenGameplay::UpdateSongPosition(float fDeltaTime) {
   const float fAdjust = SOUND->GetFrameTimingAdjustment(fDeltaTime);
   if (!std::isfinite(fSeconds) || !std::isfinite(fAdjust)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: UpdateSongPosition rejected audio position/adjustment "
+        "UpdateSongPosition rejected audio position/adjustment "
         "%.6f/%.6f.",
         fSeconds, fAdjust);
     return;
@@ -3076,7 +3076,7 @@ void ScreenGameplay::UpdateSongPosition(float fDeltaTime) {
       adjustedSeconds > std::numeric_limits<float>::max() ||
       adjustedSeconds < std::numeric_limits<float>::lowest()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: UpdateSongPosition rejected overflowing audio time.");
+        "UpdateSongPosition rejected overflowing audio time.");
     return;
   }
   GAMESTATE->UpdateSongPosition(
@@ -3261,7 +3261,7 @@ void ScreenGameplay::GetMusicEndTiming(
 void ScreenGameplay::Update(float fDeltaTime) {
   if (!IsFiniteNonNegative(fDeltaTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenGameplay ignored invalid delta %.6f.",
+        "ScreenGameplay ignored invalid delta %.6f.",
         fDeltaTime);
     fDeltaTime = 0.0f;
   }
@@ -3509,7 +3509,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
             break;
           default:
             LOG->Warn(
-                "SRC_AUDIT_FIX: invalid fail type %d for %s.",
+                "invalid fail type %d for %s.",
                 static_cast<int>(ft), pi->GetName().c_str());
             bAllFailed = false;
             break;
@@ -3757,7 +3757,7 @@ void ScreenGameplay::Update(float fDeltaTime) {
           break;
         default:
           LOG->Warn(
-              "SRC_AUDIT_FIX: invalid PlayMode %i during gameplay comments.",
+              "invalid PlayMode %i during gameplay comments.",
               static_cast<int>(mode));
           break;
       }
@@ -3920,7 +3920,7 @@ void ScreenGameplay::DrawPrimitives() {
 
 void ScreenGameplay::FailFadeRemovePlayer(PlayerInfo* pi) {
   if (pi == nullptr || pi->m_pPlayer == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: FailFadeRemovePlayer ignored incomplete player.");
+    LOG->Warn("FailFadeRemovePlayer ignored incomplete player.");
     return;
   }
   if (SOUND != nullptr && THEME != nullptr && THEME->IsThemeLoaded()) {
@@ -3940,7 +3940,7 @@ void ScreenGameplay::FailFadeRemovePlayer(PlayerNumber pn) {
   PlayerInfo* pi = GetPlayerInfo(pn);
   if (pi == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: FailFadeRemovePlayer ignored invalid player %i.",
+        "FailFadeRemovePlayer ignored invalid player %i.",
         static_cast<int>(pn));
     return;
   }
@@ -3963,11 +3963,11 @@ void ScreenGameplay::UpdateHasteRate() {
     m_fHasteLifeSwitchPoint = 0.5f;
   }
   if (!std::isfinite(GAMESTATE->m_fHasteRate)) {
-    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite gameplay haste rate.");
+    LOG->Warn("Reset non-finite gameplay haste rate.");
     GAMESTATE->m_fHasteRate = 0.0f;
   }
   if (!std::isfinite(GAMESTATE->m_fAccumulatedHasteSeconds)) {
-    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite accumulated haste seconds.");
+    LOG->Warn("Reset non-finite accumulated haste seconds.");
     GAMESTATE->m_fAccumulatedHasteSeconds = 0.0f;
   }
   if (GAMESTATE->m_Position.m_fMusicSeconds <
@@ -4079,7 +4079,7 @@ void ScreenGameplay::UpdateHasteRate() {
                 options_haste;
   }
   if (!std::isfinite(speed_add)) {
-    LOG->Warn("SRC_AUDIT_FIX: Reset non-finite gameplay haste adjustment.");
+    LOG->Warn("Reset non-finite gameplay haste adjustment.");
     speed_add = 0.0f;
   }
   rage_clamp(speed_add, -1.0f, 1.0f);
@@ -4738,7 +4738,7 @@ void ScreenGameplay::SaveStats() {
     if (!IsValidGameplayPlayer(pn) || GAMESTATE->m_pCurSteps[pn] == nullptr ||
         pss == nullptr || pi->m_pPlayer == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SaveStats skipped incomplete player %s.",
+          "SaveStats skipped incomplete player %s.",
           pi->GetName().c_str());
       continue;
     }
@@ -4929,7 +4929,7 @@ void ScreenGameplay::StageFinished(bool bBackedOut) {
       LOG->Trace("Running stats for %i", i);
       if (!SetupSong(i)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: StageFinished skipped unplayed song stats for "
+            "StageFinished skipped unplayed song stats for "
             "incomplete setup at %u.",
             i);
         continue;
@@ -5005,7 +5005,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       ScreenMessageHelpers::ScreenMessageToString(SM).c_str()));
   if (GAMESTATE == nullptr && SM != SM_GainFocus && SM != SM_LoseFocus) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenGameplay ignored message %s without GAMESTATE.",
+        "ScreenGameplay ignored message %s without GAMESTATE.",
         ScreenMessageHelpers::ScreenMessageToString(SM).c_str());
     ScreenWithMenuElements::HandleScreenMessage(SM);
     return;
@@ -5318,7 +5318,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
         Trail* trail = GAMESTATE->m_pCurTrail[stepsPn];
         if (trail == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Repeat course missing old trail for %s.",
+              "Repeat course missing old trail for %s.",
               pi->GetName().c_str());
           continue;
         }
@@ -5337,7 +5337,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
             course->GetTrail(snapshot.stepsType, snapshot.difficulty);
         if (trail == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Repeat course failed to regenerate trail for "
+              "Repeat course failed to regenerate trail for "
               "player index %i.",
               static_cast<int>(snapshot.pn));
           continue;
@@ -5346,12 +5346,12 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       }
       PlayerNumber master_pn = GAMESTATE->GetMasterPlayerNumber();
       if (!IsValidGameplayPlayer(master_pn)) {
-        LOG->Warn("SRC_AUDIT_FIX: Repeat course invalid master player.");
+        LOG->Warn("Repeat course invalid master player.");
         return;
       }
       Trail* master_trail = GAMESTATE->m_pCurTrail[master_pn];
       if (master_trail == nullptr) {
-        LOG->Warn("SRC_AUDIT_FIX: Repeat course missing master trail.");
+        LOG->Warn("Repeat course missing master trail.");
         return;
       }
       std::vector<Song*> repeatedSongs;
@@ -5406,7 +5406,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
 
       if (!repeatQueuesValid || repeatedPlayerQueues.empty()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Repeat course regeneration produced incomplete "
+            "Repeat course regeneration produced incomplete "
             "or mismatched queues; leaving gameplay before appending them.");
         HandleScreenMessage(SM_LeaveGameplay);
         return;
@@ -5447,7 +5447,7 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
       if (!ValidateGameplayQueues(
               m_apSongsQueue, m_vPlayerInfo, "ScreenGameplay::repeat course")) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Repeat course produced invalid queues; leaving "
+            "Repeat course produced invalid queues; leaving "
             "gameplay.");
         HandleScreenMessage(SM_LeaveGameplay);
         return;
@@ -5675,7 +5675,7 @@ void ScreenGameplay::HandleMessage(const Message& msg) {
     PlayerNumber pn = PLAYER_INVALID;
     if (!msg.GetParam("Player", pn) || !IsValidGameplayPlayer(pn)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Ignoring Judgment message without valid Player.");
+          "Ignoring Judgment message without valid Player.");
       ScreenWithMenuElements::HandleMessage(msg);
       return;
     }
@@ -5701,7 +5701,7 @@ void ScreenGameplay::HandleMessage(const Message& msg) {
       TapNoteScore tns = TapNoteScore_Invalid;
       const bool hasTapScore = msg.GetParam("TapNoteScore", tns);
       if (!hasHoldScore && !hasTapScore) {
-        LOG->Warn("SRC_AUDIT_FIX: Ignoring Judgment message without a score.");
+        LOG->Warn("Ignoring Judgment message without a score.");
         continue;
       }
 
@@ -5712,7 +5712,7 @@ void ScreenGameplay::HandleMessage(const Message& msg) {
         bOn = tns != TNS_Miss;
       } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Ignoring Judgment message with invalid scores.");
+            "Ignoring Judgment message with invalid scores.");
         continue;
       }
 
@@ -5793,7 +5793,7 @@ void ScreenGameplay::SaveReplay() {
    * Hash of some stuff to validate data (see Profile)
    */
   if (GAMESTATE == nullptr || PROFILEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SaveReplay skipped without required managers.");
+    LOG->Warn("SaveReplay skipped without required managers.");
     return;
   }
   FOREACH_HumanPlayer(pn) {
@@ -5804,7 +5804,7 @@ void ScreenGameplay::SaveReplay() {
     Profile* pTempProfile = PROFILEMAN->GetProfile(pn);
     if (pTempProfile == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SaveReplay skipped player %i without profile.",
+          "SaveReplay skipped player %i without profile.",
           static_cast<int>(pn));
       continue;
     }
@@ -5854,7 +5854,7 @@ void ScreenGameplay::SaveReplay() {
           XmlFileUtil::SaveToFile(p, replayDirectory + sFileName);
       RageUtil::SafeDelete(p);
       if (!saved) {
-        LOG->Warn("SRC_AUDIT_FIX: Failed to save replay for player %i to '%s'.",
+        LOG->Warn("Failed to save replay for player %i to '%s'.",
                   static_cast<int>(pn), sFileName.c_str());
         break;
       }
@@ -5863,7 +5863,7 @@ void ScreenGameplay::SaveReplay() {
     }
     if (!savedForPlayer) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: SaveReplay found no loaded Player for player %i.",
+          "SaveReplay found no loaded Player for player %i.",
           static_cast<int>(pn));
     }
   }

@@ -80,7 +80,7 @@ float SanitizeSeconds(float seconds, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX %s: corrected non-finite seconds %f to 0.", context,
+      "%s: corrected non-finite seconds %f to 0.", context,
       seconds);
   return 0.0f;
 }
@@ -90,11 +90,11 @@ float AddSecondsSaturated(float current, float delta, const char* context) {
   delta = SanitizeSeconds(delta, context);
   const double sum = static_cast<double>(current) + delta;
   if (sum > std::numeric_limits<float>::max()) {
-    LOG->Warn("SRC_AUDIT_FIX %s: saturated positive seconds sum.", context);
+    LOG->Warn("%s: saturated positive seconds sum.", context);
     return std::numeric_limits<float>::max();
   }
   if (sum < -std::numeric_limits<float>::max()) {
-    LOG->Warn("SRC_AUDIT_FIX %s: saturated negative seconds sum.", context);
+    LOG->Warn("%s: saturated negative seconds sum.", context);
     return -std::numeric_limits<float>::max();
   }
   return static_cast<float>(sum);
@@ -140,7 +140,7 @@ void LifeMeterTime::Load(
       !IsValidPlayerNumber(pPlayerState->m_PlayerNumber) || THEME == nullptr ||
       GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterTime refused load without complete runtime "
+        "LifeMeterTime refused load without complete runtime "
         "state.");
     return;
   }
@@ -181,7 +181,7 @@ void LifeMeterTime::OnLoadSong() {
       m_pPlayerState == nullptr ||
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong without "
+        "LifeMeterTime ignored OnLoadSong without "
         "complete runtime state.");
     return;
   }
@@ -197,7 +197,7 @@ void LifeMeterTime::OnLoadSong() {
     if (pCourse == nullptr || courseSongIndex < 0 ||
         static_cast<size_t>(courseSongIndex) >= pCourse->m_vEntries.size()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored invalid course entry "
+          "LifeMeterTime ignored invalid course entry "
           "%i of %zu.",
           courseSongIndex, pCourse == nullptr ? 0 : pCourse->m_vEntries.size());
       return;
@@ -209,7 +209,7 @@ void LifeMeterTime::OnLoadSong() {
     Song* song = GAMESTATE->m_pCurSong;
     if (song == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong without "
+          "LifeMeterTime ignored OnLoadSong without "
           "current song.");
       return;
     }
@@ -217,7 +217,7 @@ void LifeMeterTime::OnLoadSong() {
     PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
     if (!IsValidPlayerNumber(pn) || GAMESTATE->m_pCurSteps[pn] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-253: LifeMeterTime ignored OnLoadSong with "
+          "LifeMeterTime ignored OnLoadSong with "
           "invalid player/steps %i.",
           pn);
       return;
@@ -236,7 +236,7 @@ void LifeMeterTime::OnLoadSong() {
     fGainSeconds = song_len - (gainable_score_time * INITIAL_VALUE);
   }
 
-  fGainSeconds = SanitizeSeconds(fGainSeconds, "SRC-255 LifeMeterTime gain");
+  fGainSeconds = SanitizeSeconds(fGainSeconds, "LifeMeterTime gain");
   const float minLifeTime =
       std::isfinite((float)MIN_LIFE_TIME) ? (float)MIN_LIFE_TIME : 0.0f;
   if (minLifeTime > fGainSeconds) {
@@ -244,7 +244,7 @@ void LifeMeterTime::OnLoadSong() {
   }
   m_fLifeTotalGainedSeconds = AddSecondsSaturated(
       m_fLifeTotalGainedSeconds, fGainSeconds,
-      "SRC-255 LifeMeterTime gained total");
+      "LifeMeterTime gained total");
   m_soundGainLife.Play(false);
   SendLifeChangedMessage(fOldLife, TapNoteScore_Invalid, HoldNoteScore_Invalid);
 }
@@ -255,7 +255,7 @@ void LifeMeterTime::ChangeLife(TapNoteScore tns) {
   }
   if (!IsValidTapNoteScore(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-254: LifeMeterTime ignored invalid TapNoteScore "
+        "LifeMeterTime ignored invalid TapNoteScore "
         "%i.",
         tns);
     return;
@@ -301,7 +301,7 @@ void LifeMeterTime::ChangeLife(TapNoteScore tns) {
   float fOldLife = m_fLifeTotalLostSeconds;
   m_fLifeTotalLostSeconds = AddSecondsSaturated(
       m_fLifeTotalLostSeconds, -fMeterChange,
-      "SRC-255 LifeMeterTime tap total");
+      "LifeMeterTime tap total");
   SendLifeChangedMessage(fOldLife, tns, HoldNoteScore_Invalid);
 }
 
@@ -311,7 +311,7 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
   }
   if (!IsValidHoldNoteScore(hns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-254: LifeMeterTime ignored invalid HoldNoteScore "
+        "LifeMeterTime ignored invalid HoldNoteScore "
         "%i.",
         hns);
     return;
@@ -338,28 +338,28 @@ void LifeMeterTime::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
   float fOldLife = m_fLifeTotalLostSeconds;
   m_fLifeTotalLostSeconds = AddSecondsSaturated(
       m_fLifeTotalLostSeconds, -fMeterChange,
-      "SRC-255 LifeMeterTime hold total");
+      "LifeMeterTime hold total");
   SendLifeChangedMessage(fOldLife, tns, hns);
 }
 
 void LifeMeterTime::ChangeLife(float delta) {
   if (!std::isfinite(delta)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-255: LifeMeterTime ignored non-finite life delta "
+        "LifeMeterTime ignored non-finite life delta "
         "%f.",
         delta);
     return;
   }
   float old_life = m_fLifeTotalLostSeconds;
   m_fLifeTotalLostSeconds = AddSecondsSaturated(
-      m_fLifeTotalLostSeconds, -delta, "SRC-255 LifeMeterTime direct total");
+      m_fLifeTotalLostSeconds, -delta, "LifeMeterTime direct total");
   SendLifeChangedMessage(old_life, TapNoteScore_Invalid, HoldNoteScore_Invalid);
 }
 
 void LifeMeterTime::SetLife(float value) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-255: LifeMeterTime ignored non-finite SetLife %f.",
+        "LifeMeterTime ignored non-finite SetLife %f.",
         value);
     return;
   }
@@ -378,7 +378,7 @@ void LifeMeterTime::SendLifeChangedMessage(
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber) ||
       MESSAGEMAN == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped LifeChanged broadcast "
+        "LifeMeterTime skipped LifeChanged broadcast "
         "without PlayerState.");
     return;
   }
@@ -415,13 +415,13 @@ void LifeMeterTime::Update(float fDeltaTime) {
   if (m_pStream == nullptr || m_pPlayerState == nullptr ||
       m_pPlayerStageStats == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-256: LifeMeterTime skipped update without complete "
+        "LifeMeterTime skipped update without complete "
         "state.");
     return;
   }
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterTime ignored invalid update delta %f.",
+        "LifeMeterTime ignored invalid update delta %f.",
         fDeltaTime);
     return;
   }
@@ -447,7 +447,7 @@ float LifeMeterTime::GetLife() const {
   float fPercent = GetLifeSeconds() / FULL_LIFE_SECONDS;
   if (!std::isfinite(fPercent)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-255: LifeMeterTime corrected non-finite percent.");
+        "LifeMeterTime corrected non-finite percent.");
     fPercent = 0.0f;
   }
   rage_clamp(fPercent, 0, 1);
@@ -456,14 +456,14 @@ float LifeMeterTime::GetLife() const {
 
 float LifeMeterTime::GetLifeSeconds() const {
   const float gained = SanitizeSeconds(
-      m_fLifeTotalGainedSeconds, "SRC-255 LifeMeterTime gained");
+      m_fLifeTotalGainedSeconds, "LifeMeterTime gained");
   const float lost =
-      SanitizeSeconds(m_fLifeTotalLostSeconds, "SRC-255 LifeMeterTime lost");
+      SanitizeSeconds(m_fLifeTotalLostSeconds, "LifeMeterTime lost");
   const float steps = STATSMAN == nullptr
                           ? 0.0f
                           : SanitizeSeconds(
                                 STATSMAN->m_CurStageStats.m_fStepsSeconds,
-                                "SRC-255 LifeMeterTime steps");
+                                "LifeMeterTime steps");
   const double remaining =
       static_cast<double>(gained) - lost - static_cast<double>(steps);
   if (remaining > std::numeric_limits<float>::max()) {

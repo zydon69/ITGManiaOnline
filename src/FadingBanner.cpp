@@ -30,13 +30,13 @@ bool IsFiniteFloat(float value) {
   return std::isfinite(value);
 }
 
-void WarnFadingBannerAuditFix(const char* message) {
+void WarnFadingBannerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void WarnFadingBannerAuditFix(const std::string& message) {
+void WarnFadingBannerSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -45,8 +45,8 @@ void WarnFadingBannerAuditFix(const std::string& message) {
 std::string GetFadingBannerThemePath(
     const std::string& category, const std::string& name) {
   if (THEME == nullptr) {
-    WarnFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1048: FadingBanner cannot resolve theme path %s/%s "
+    WarnFadingBannerSafety(ssprintf(
+        "FadingBanner cannot resolve theme path %s/%s "
         "without THEME.",
         category.c_str(), name.c_str()));
     return std::string();
@@ -77,8 +77,8 @@ void FadingBanner::ScaleToClipped(float fWidth, float fHeight) {
   const bool validHeight = fHeight == -1.0f || fHeight > 0.0f;
   if (!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight) || !validWidth ||
       !validHeight) {
-    WarnFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1047: FadingBanner ignored invalid clip size "
+    WarnFadingBannerSafety(ssprintf(
+        "FadingBanner ignored invalid clip size "
         "%.6fx%.6f.",
         fWidth, fHeight));
     return;
@@ -90,8 +90,8 @@ void FadingBanner::ScaleToClipped(float fWidth, float fHeight) {
 
 void FadingBanner::UpdateInternal(float fDeltaTime) {
   if (!IsFiniteFloat(fDeltaTime)) {
-    WarnFadingBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-1047: FadingBanner ignored non-finite delta.");
+    WarnFadingBannerSafety(
+        "FadingBanner ignored non-finite delta.");
     return;
   }
   // update children manually
@@ -239,8 +239,8 @@ void FadingBanner::LoadMode() {
 
 void FadingBanner::LoadFromSongGroup(std::string sSongGroup) {
   if (SONGMAN == nullptr) {
-    WarnFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-728: FadingBanner cannot load group '%s' without "
+    WarnFadingBannerSafety(ssprintf(
+        "FadingBanner cannot load group '%s' without "
         "SONGMAN.",
         sSongGroup.c_str()));
     LoadFallback();
@@ -312,8 +312,8 @@ void FadingBanner::LoadCourseFallback() {
 
 void FadingBanner::LoadCustom(std::string sBanner) {
   if (sBanner.empty()) {
-    WarnFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-728: FadingBanner refused custom banner '%s'.",
+    WarnFadingBannerSafety(ssprintf(
+        "FadingBanner refused custom banner '%s'.",
         sBanner.c_str()));
     LoadFallback();
     return;
@@ -321,8 +321,8 @@ void FadingBanner::LoadCustom(std::string sBanner) {
 
   const std::string path = GetFadingBannerThemePath("Banner", sBanner);
   if (path.empty()) {
-    WarnFadingBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-3111: FadingBanner could not resolve custom banner "
+    WarnFadingBannerSafety(ssprintf(
+        "FadingBanner could not resolve custom banner "
         "'%s'.",
         sBanner.c_str()));
     LoadFallback();

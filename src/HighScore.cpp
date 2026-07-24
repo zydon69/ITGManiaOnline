@@ -33,7 +33,7 @@ constexpr int MAX_REASONABLE_HIGH_SCORE_LIMIT = 1000;
 
 void WarnHighScore(const char* message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: %s", message);
+    LOG->Warn("%s", message);
   }
 }
 
@@ -93,7 +93,7 @@ float SanitizeFiniteNonNegativeFloat(
   if (!std::isfinite(value) || value < 0.0f) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: HighScore normalized invalid %s value %f to %f.",
+          "HighScore normalized invalid %s value %f to %f.",
           field, value, fallback);
     }
     return fallback;
@@ -106,7 +106,7 @@ float SanitizePercentDP(float value) {
   if (value > 1.0f) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: HighScore clamped PercentDP value %f to 1.", value);
+          "HighScore clamped PercentDP value %f to 1.", value);
     }
     return 1.0f;
   }
@@ -117,7 +117,7 @@ int SanitizeNonNegativeInt(int value, const char* field) {
   if (value < 0) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: HighScore clamped negative %s value %i to 0.",
+          "HighScore clamped negative %s value %i to 0.",
           field, value);
     }
     return 0;
@@ -131,7 +131,7 @@ int AddNonNegativeIntSaturated(int lhs, int rhs, const char* field) {
   if (rhs > std::numeric_limits<int>::max() - lhs) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: HighScore saturated %s sum %i + %i.",
+          "HighScore saturated %s sum %i + %i.",
           field, lhs, rhs);
     }
     return std::numeric_limits<int>::max();
@@ -149,7 +149,7 @@ int GetMaxHighScoresForList(bool isMachine) {
   if (value < 0 || value > MAX_REASONABLE_HIGH_SCORE_LIMIT) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: HighScore clamped max high score list size %i.",
+          "HighScore clamped max high score list size %i.",
           value);
     }
     value = std::clamp(value, 0, MAX_REASONABLE_HIGH_SCORE_LIMIT);

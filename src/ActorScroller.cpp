@@ -29,7 +29,7 @@ float NonNegativeFiniteOrScroller(float value, float fallback) {
   return std::isfinite(value) && value >= 0.0f ? value : fallback;
 }
 
-void WarnActorScrollerAuditFix(const char* message) {
+void WarnActorScrollerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -79,8 +79,8 @@ ActorScroller::ActorScroller() {
 
 float ActorScroller::ClampItemIndex(float fItemIndex) const {
   if (!std::isfinite(fItemIndex)) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-2655: ActorScroller replaced invalid item index.");
+    WarnActorScrollerSafety(
+        "ActorScroller replaced invalid item index.");
     return 0.0f;
   }
 
@@ -94,8 +94,8 @@ float ActorScroller::ClampItemIndex(float fItemIndex) const {
       kMaxScrollerLogicalItems + kMaxScrollerItemPadding);
   const float clamped = std::clamp(fItemIndex, -limit, limit);
   if (clamped != fItemIndex) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-2655: ActorScroller clamped oversized item index.");
+    WarnActorScrollerSafety(
+        "ActorScroller clamped oversized item index.");
   }
   return clamped;
 }
@@ -189,8 +189,8 @@ void ActorScroller::Load2() {
       m_SubActors.size(), static_cast<size_t>(kMaxScrollerLogicalItems)));
 
   if (LUA == nullptr) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-774: ActorScroller skipped Load2 without LUA.");
+    WarnActorScrollerSafety(
+        "ActorScroller skipped Load2 without LUA.");
     return;
   }
   Lua* L = LUA->Get();
@@ -285,8 +285,8 @@ float ActorScroller::GetSecondsToDestination() const {
 
 void ActorScroller::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-774: ActorScroller ignored null XML node.");
+    WarnActorScrollerSafety(
+        "ActorScroller ignored null XML node.");
     return;
   }
   ResetScrollerLoadState();
@@ -316,8 +316,8 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
     }
     LUA->Release(L);
   } else {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-774: ActorScroller skipped transform without LUA.");
+    WarnActorScrollerSafety(
+        "ActorScroller skipped transform without LUA.");
   }
 
   int iSubdivisions = 1;
@@ -354,8 +354,8 @@ void ActorScroller::LoadFromNode(const XNode* pNode) {
 
 void ActorScroller::UpdateInternal(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-775: ActorScroller ignored invalid delta.");
+    WarnActorScrollerSafety(
+        "ActorScroller ignored invalid delta.");
     return;
   }
   ActorFrame::UpdateInternal(fDeltaTime);
@@ -438,8 +438,8 @@ void ActorScroller::PositionItemsAndDrawPrimitives(bool bDrawPrimitives) {
 
   if (!std::isfinite(m_fCurrentItem) || !std::isfinite(m_fDestinationItem) ||
       !std::isfinite(m_fNumItemsToDraw)) {
-    WarnActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-775: ActorScroller skipped invalid positioning.");
+    WarnActorScrollerSafety(
+        "ActorScroller skipped invalid positioning.");
     return;
   }
 

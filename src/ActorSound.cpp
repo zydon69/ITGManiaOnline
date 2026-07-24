@@ -12,7 +12,7 @@
 REGISTER_ACTOR_CLASS_WITH_NAME(ActorSound, Sound);
 
 namespace {
-void WarnActorSoundAuditFix(const std::string& message) {
+void WarnActorSoundSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -46,8 +46,8 @@ bool ActorSound::LoadResolvedPath(
     bool bPrecache) {
   RageSound nextSound;
   if (!nextSound.Load(sResolvedPath, bPrecache, &params)) {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-2673: ActorSound rejected failed sound load '" +
+    WarnActorSoundSafety(
+        "ActorSound rejected failed sound load '" +
         sResolvedPath + "': " + nextSound.GetError());
     ResetLoadedSound();
     return false;
@@ -70,8 +70,8 @@ bool ActorSound::Load(
 
   std::string resolvedPath = sPath;
   if (!ActorUtil::ResolvePath(resolvedPath, "ActorSound:load", true)) {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared unresolved sound path.");
+    WarnActorSoundSafety(
+        "ActorSound cleared unresolved sound path.");
     ResetLoadedSound();
     return false;
   }
@@ -80,8 +80,8 @@ bool ActorSound::Load(
 
 void ActorSound::Play() {
   if (!m_bSoundLoaded) {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-787: ActorSound ignored play before load.");
+    WarnActorSoundSafety(
+        "ActorSound ignored play before load.");
     return;
   }
   m_Sound.Play(m_bIsAction);
@@ -89,8 +89,8 @@ void ActorSound::Play() {
 
 void ActorSound::Pause(bool bPause) {
   if (!m_bSoundLoaded) {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-787: ActorSound ignored pause before load.");
+    WarnActorSoundSafety(
+        "ActorSound ignored pause before load.");
     return;
   }
   m_Sound.Pause(bPause);
@@ -105,8 +105,8 @@ void ActorSound::Stop() {
 
 void ActorSound::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared null XML node.");
+    WarnActorSoundSafety(
+        "ActorSound cleared null XML node.");
     ResetLoadedSound();
     return;
   }
@@ -127,8 +127,8 @@ void ActorSound::LoadFromNode(const XNode* pNode) {
   if (ActorUtil::GetAttrPath(pNode, "File", sFile)) {
     LoadResolvedPath(sFile, params, bPrecache);
   } else {
-    WarnActorSoundAuditFix(
-        "SRC_AUDIT_FIX SRC-2672: ActorSound cleared XML node without File.");
+    WarnActorSoundSafety(
+        "ActorSound cleared XML node without File.");
     ResetLoadedSound();
   }
 

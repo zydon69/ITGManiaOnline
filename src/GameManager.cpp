@@ -3367,7 +3367,7 @@ void GameManager::GetDemonstrationStylesForGame(
 
   if (pGame == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1935: demonstration style lookup received no game.");
+        "demonstration style lookup received no game.");
     return;
   }
 
@@ -3375,7 +3375,7 @@ void GameManager::GetDemonstrationStylesForGame(
     const Style* style = pGame->m_apStyles[s];
     if (style == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1935: ignoring null demonstration style in %s.",
+          "ignoring null demonstration style in %s.",
           pGame->m_szName);
       continue;
     }
@@ -3386,7 +3386,7 @@ void GameManager::GetDemonstrationStylesForGame(
 
   if (vpStylesOut.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1935: game %s has no demonstration style.",
+        "game %s has no demonstration style.",
         pGame->m_szName);
   }
 }

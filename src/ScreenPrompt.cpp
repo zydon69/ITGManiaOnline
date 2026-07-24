@@ -57,7 +57,7 @@ std::deque<PromptSettings> g_PendingPromptSettings;
 
 void WarnScreenPrompt(const char* message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenPrompt: %s", message);
+    LOG->Warn("ScreenPrompt: %s", message);
   }
 }
 

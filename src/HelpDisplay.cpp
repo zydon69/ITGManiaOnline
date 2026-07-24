@@ -38,7 +38,7 @@ HelpDisplay::HelpDisplay() {
 
 void HelpDisplay::Load(const std::string& sType) {
   if (THEME == nullptr || sType.empty()) {
-    WarnHelpDisplay("SRC_AUDIT_FIX SRC-1170: HelpDisplay loaded without THEME.");
+    WarnHelpDisplay("HelpDisplay loaded without THEME.");
     return;
   }
 
@@ -55,7 +55,7 @@ void HelpDisplay::SetTips(
   std::vector<std::string> normalizedTipsAlt = arrayTipsAlt;
   if (normalizedTipsAlt.size() != arrayTips.size()) {
     WarnHelpDisplay(
-        "SRC_AUDIT_FIX SRC-1172: HelpDisplay normalized mismatched alt tips.");
+        "HelpDisplay normalized mismatched alt tips.");
     normalizedTipsAlt.resize(arrayTips.size());
     for (size_t i = 0; i < arrayTips.size(); ++i) {
       if (normalizedTipsAlt[i].empty()) {

@@ -1070,7 +1070,7 @@ static void InitializeConfOptions() {
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
   ADD(ConfOption("LogWindowsEventDiagnostics", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
-  ADD(ConfOption("review_src", MovePref<bool>, "Off", "On"));
+  ADD(ConfOption("runtime_validation", MovePref<bool>, "Off", "On"));
   g_ConfOptions.back().m_iEffects = OPT_APPLY_LOGGING;
 
   // Sound options

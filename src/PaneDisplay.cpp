@@ -63,13 +63,13 @@ static const Content_t g_Contents[NUM_PaneCategory] = {
 };
 
 namespace {
-void WarnPaneDisplayAuditFix(const char* message) {
+void WarnPaneDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TracePaneDisplayAuditFix(const char* message) {
+void TracePaneDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -139,8 +139,8 @@ float GetPaneMetricF(
   }
   const float value = THEME->GetMetricF(sMetricsGroup, metric);
   if (!std::isfinite(value)) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1081: PaneDisplay used zero for non-finite layout "
+    WarnPaneDisplaySafety(
+        "PaneDisplay used zero for non-finite layout "
         "metric.");
     return 0.0f;
   }
@@ -194,13 +194,13 @@ bool IsValidProfileSlotForPane(ProfileSlot slot) {
 
 std::string FormatPaneCount(const std::string& format, float value) {
   if (!std::isfinite(value)) {
-    TracePaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-269: PaneDisplay corrected non-finite pane count.");
+    TracePaneDisplaySafety(
+        "PaneDisplay corrected non-finite pane count.");
     value = 0.0f;
   }
   if (!IsSafeCountFormat(format)) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-269: PaneDisplay ignored unsafe count format.");
+    WarnPaneDisplaySafety(
+        "PaneDisplay ignored unsafe count format.");
     return ssprintf("%.0f", value);
   }
   return ssprintf(format.c_str(), value);
@@ -256,20 +256,20 @@ void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
 
   std::string sResolvedMetricsGroup = sMetricsGroup;
   if (sResolvedMetricsGroup.empty()) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1081: PaneDisplay fell back from empty metrics "
+    WarnPaneDisplaySafety(
+        "PaneDisplay fell back from empty metrics "
         "group.");
     sResolvedMetricsGroup = "PaneDisplay";
   }
   if (THEME == nullptr) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1081: PaneDisplay refused load without THEME.");
+    WarnPaneDisplaySafety(
+        "PaneDisplay refused load without THEME.");
     return;
   }
 
   if (!IsValidPlayerNumber(pn)) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-267: PaneDisplay loaded with invalid player; using "
+    WarnPaneDisplaySafety(
+        "PaneDisplay loaded with invalid player; using "
         "PLAYER_1 for layout.");
     pn = PLAYER_1;
   }
@@ -301,8 +301,8 @@ void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
       ActorUtil::SetXY(m_Labels[pc], sResolvedMetricsGroup);
       m_ContentsFrame.AddChild(m_Labels[pc]);
     } else {
-      WarnPaneDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-2976: PaneDisplay loaded without a label actor.");
+      WarnPaneDisplaySafety(
+          "PaneDisplay loaded without a label actor.");
     }
 
     ActorUtil::LoadAllCommandsFromName(
@@ -320,8 +320,8 @@ void PaneDisplay::Load(const std::string& sMetricsGroup, PlayerNumber pn) {
 
 void PaneDisplay::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1080: PaneDisplay ignored null XML node.");
+    WarnPaneDisplaySafety(
+        "PaneDisplay ignored null XML node.");
     return;
   }
   bool b;
@@ -341,8 +341,8 @@ void PaneDisplay::LoadFromNode(const XNode* pNode) {
         "PaneDisplay must have a PlayerNumber specified.");
   } else {
     if (!IsValidPlayerNumber(pn)) {
-      WarnPaneDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid PlayerNumber "
+      WarnPaneDisplaySafety(
+          "PaneDisplay ignored invalid PlayerNumber "
           "from XML.");
       pn = SafeMasterPlayerNumber();
     }
@@ -358,22 +358,22 @@ void PaneDisplay::GetPaneTextAndLevel(
   if (c < PaneCategory_NumSteps || c >= NUM_PaneCategory) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid category %i.", c);
+          "PaneDisplay ignored invalid category %i.", c);
     }
     sTextOut = NOT_AVAILABLE;
     fLevelOut = 0;
     return;
   }
   if (!IsValidPlayerNumber(m_PlayerNumber)) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-267: PaneDisplay ignored invalid player.");
+    WarnPaneDisplaySafety(
+        "PaneDisplay ignored invalid player.");
     sTextOut = NOT_AVAILABLE;
     fLevelOut = 0;
     return;
   }
   if (GAMESTATE == nullptr || PROFILEMAN == nullptr) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1082: PaneDisplay skipped update without game or "
+    WarnPaneDisplaySafety(
+        "PaneDisplay skipped update without game or "
         "profile manager.");
     sTextOut = NOT_AVAILABLE;
     fLevelOut = 0;
@@ -466,8 +466,8 @@ void PaneDisplay::GetPaneTextAndLevel(
       }
       Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
       if (pProfileForScores == nullptr) {
-        WarnPaneDisplayAuditFix(
-            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot.");
+        WarnPaneDisplaySafety(
+            "PaneDisplay missing profile slot.");
         sTextOut = NOT_AVAILABLE;
         return;
       }
@@ -484,8 +484,8 @@ void PaneDisplay::GetPaneTextAndLevel(
       }
       Profile* pProfileForScores = PROFILEMAN->GetProfile(slot);
       if (pProfileForScores == nullptr) {
-        WarnPaneDisplayAuditFix(
-            "SRC_AUDIT_FIX SRC-268: PaneDisplay missing profile slot.");
+        WarnPaneDisplaySafety(
+            "PaneDisplay missing profile slot.");
         sTextOut = NOT_AVAILABLE;
         return;
       }
@@ -582,8 +582,8 @@ void PaneDisplay::GetPaneTextAndLevel(
 
 void PaneDisplay::SetContent(PaneCategory c) {
   if (c < PaneCategory_NumSteps || c >= NUM_PaneCategory) {
-    WarnPaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1083: PaneDisplay ignored invalid SetContent "
+    WarnPaneDisplaySafety(
+        "PaneDisplay ignored invalid SetContent "
         "category.");
     return;
   }
@@ -621,8 +621,8 @@ void PaneDisplay::SetContent(PaneCategory c) {
 
 void PaneDisplay::SetFromGameState() {
   if (!m_bLoaded) {
-    TracePaneDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1081: PaneDisplay skipped update before load.");
+    TracePaneDisplaySafety(
+        "PaneDisplay skipped update before load.");
     return;
   }
   // Don't update text that doesn't apply to the current mode. It's still

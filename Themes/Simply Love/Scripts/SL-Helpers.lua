@@ -83,7 +83,7 @@ local function safe_preference(name, fallback)
 end
 
 RoutineCoupleTrace = function(message)
-	if safe_preference("review_src", false) ~= true then return end
+	if safe_preference("runtime_validation", false) ~= true then return end
 	local line = "ROUTINE_COUPLE_TRACE component=theme " .. tostring(message or "")
 	if type(Trace) == "function" then
 		Trace(line)

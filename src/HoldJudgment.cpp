@@ -22,7 +22,7 @@ HoldJudgment::HoldJudgment() { m_mpToTrack = MultiPlayer_Invalid; }
 void HoldJudgment::Load(const std::string& sPath) {
   m_sprJudgment.Load(sPath);
   if (!m_sprJudgment.IsLoaded()) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2022: HoldJudgment failed to load '%s'.",
+    LOG->Warn("HoldJudgment failed to load '%s'.",
               sPath.c_str());
     return;
   }
@@ -51,7 +51,7 @@ void HoldJudgment::LoadFromNode(const XNode* pNode) {
 void HoldJudgment::ResetAnimation() {
   if (!m_sprJudgment.IsLoaded()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2022: HoldJudgment reset skipped unloaded actor.");
+        "HoldJudgment reset skipped unloaded actor.");
     return;
   }
   m_sprJudgment->SetDiffuse(RageColor(1, 1, 1, 0));
@@ -64,7 +64,7 @@ void HoldJudgment::SetHoldJudgment(HoldNoteScore hns) {
   // LOG->Trace( "Judgment::SetJudgment()" );
   if (!m_sprJudgment.IsLoaded()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2022: HoldJudgment ignored score %i without actor.",
+        "HoldJudgment ignored score %i without actor.",
         hns);
     return;
   }
@@ -89,7 +89,7 @@ void HoldJudgment::SetHoldJudgment(HoldNoteScore hns) {
       break;
     case HNS_None:
     default:
-      LOG->Warn("SRC_AUDIT_FIX SRC-2043: Invalid hold judgment score %i.", hns);
+      LOG->Warn("Invalid hold judgment score %i.", hns);
       break;
   }
 }

@@ -556,7 +556,7 @@ bool BMSChart::Load(const std::string& chartPath) {
       if (!IsValidPositiveBMSValue(size)) {
         LOG->UserLog(
             "Song file", path,
-            "SRC_AUDIT_FIX ignored invalid BMS measure size in measure %d: %f.",
+            "ignored invalid BMS measure size in measure %d: %f.",
             measure, size);
         continue;
       }
@@ -570,7 +570,7 @@ bool BMSChart::Load(const std::string& chartPath) {
       if (data.size() % 2 != 0) {
         LOG->UserLog(
             "Song file", path,
-            "SRC_AUDIT_FIX ignored trailing half-object in BMS channel %02d, "
+            "ignored trailing half-object in BMS channel %02d, "
             "measure %03d.",
             channel, measure);
       }
@@ -855,7 +855,7 @@ void BMSChartReader::ReadHeaders() {
       } else {
         LOG->UserLog(
             "Song file", in->path,
-            "SRC_AUDIT_FIX ignored invalid initial BMS BPM \"%s\". Using 60.",
+            "ignored invalid initial BMS BPM \"%s\". Using 60.",
             it->second.c_str());
       }
     } else if (it->first == "#lntype") {
@@ -1081,7 +1081,7 @@ bool BMSChartReader::ReadNoteData() {
   if (tracks <= 0) {
     LOG->UserLog(
         "Song file", in->path,
-        "SRC_AUDIT_FIX cannot parse BMS chart with %i tracks.", tracks);
+        "cannot parse BMS chart with %i tracks.", tracks);
     return false;
   }
 
@@ -1233,7 +1233,7 @@ bool BMSChartReader::ReadNoteData() {
     default:
       LOG->UserLog(
           "Song file", in->path,
-          "SRC_AUDIT_FIX cannot parse BMS chart with invalid StepsType %i.",
+          "cannot parse BMS chart with invalid StepsType %i.",
           out->m_StepsType);
       return false;
   }
@@ -1246,7 +1246,7 @@ bool BMSChartReader::ReadNoteData() {
     if (transform[i] < 0 || transform[i] >= 30) {
       LOG->UserLog(
           "Song file", in->path,
-          "SRC_AUDIT_FIX cannot parse BMS chart with invalid lane transform "
+          "cannot parse BMS chart with invalid lane transform "
           "%i.",
           transform[i]);
       return false;
@@ -1286,7 +1286,7 @@ bool BMSChartReader::ReadNoteData() {
       if (!std::isfinite(measureSize) || measureSize <= 0.0) {
         LOG->UserLog(
             "Song file", in->path,
-            "SRC_AUDIT_FIX ignored invalid BMS adjusted measure size %f at "
+            "ignored invalid BMS adjusted measure size %f at "
             "measure %i.",
             measureSize, trackMeasure);
         measureSize = 4.0f;
@@ -1333,7 +1333,7 @@ bool BMSChartReader::ReadNoteData() {
         } else {
           LOG->UserLog(
               "Song file", in->path,
-              "SRC_AUDIT_FIX ignored invalid BMS channel 03 BPM \"%s\".",
+              "ignored invalid BMS channel 03 BPM \"%s\".",
               obj.value.c_str());
         }
       }
@@ -1381,7 +1381,7 @@ bool BMSChartReader::ReadNoteData() {
         } else {
           LOG->UserLog(
               "Song file", in->path,
-              "SRC_AUDIT_FIX ignored invalid extended BMS BPM \"%s\" for tag "
+              "ignored invalid extended BMS BPM \"%s\" for tag "
               "\"%s\".",
               it->second.c_str(), search.c_str());
         }
@@ -1400,7 +1400,7 @@ bool BMSChartReader::ReadNoteData() {
             !IsValidPositiveBMSValue(currentBPM)) {
           LOG->UserLog(
               "Song file", in->path,
-              "SRC_AUDIT_FIX ignored invalid BMS stop \"%s\" at BPM %f.",
+              "ignored invalid BMS stop \"%s\" at BPM %f.",
               it->second.c_str(), currentBPM);
         } else {
           td.SetStopAtRow(row, (stopValue / 48.0f) * (60.0f / currentBPM));
@@ -1422,7 +1422,7 @@ bool BMSChartReader::ReadNoteData() {
         if (row < holdStart[track]) {
           LOG->UserLog(
               "Song file", in->path,
-              "SRC_AUDIT_FIX ignored BMS hold tail before its head on track %i.",
+              "ignored BMS hold tail before its head on track %i.",
               track);
         } else {
           nd.AddHoldNote(track, holdStart[track], row, tn);
@@ -1438,7 +1438,7 @@ bool BMSChartReader::ReadNoteData() {
         if (row < lastNote[track]) {
           LOG->UserLog(
               "Song file", in->path,
-              "SRC_AUDIT_FIX ignored BMS LNOBJ tail before its head on track "
+              "ignored BMS LNOBJ tail before its head on track "
               "%i.",
               track);
         } else {
@@ -1764,7 +1764,7 @@ bool BMSLoader::LoadFromDir(const std::string& sDir, Song& out) {
   if (!out.m_vsKeysoundFile.empty()) {
     LOG->UserLog(
         "Song", sDir,
-        "SRC_AUDIT_FIX cannot load BMS into a Song that already has "
+        "cannot load BMS into a Song that already has "
         "keysounds.");
     return false;
   }
@@ -1775,7 +1775,7 @@ bool BMSLoader::LoadFromDir(const std::string& sDir, Song& out) {
   if (arrayBMSFileNames.empty()) {
     LOG->UserLog(
         "Song", sDir,
-        "SRC_AUDIT_FIX found no applicable BMS simfile for direct LoadFromDir.");
+        "found no applicable BMS simfile for direct LoadFromDir.");
     return false;
   }
 
@@ -1786,7 +1786,7 @@ bool BMSLoader::LoadFromDir(const std::string& sDir, Song& out) {
   if (!loader.HasLoadedSteps()) {
     LOG->UserLog(
         "Song", sDir,
-        "SRC_AUDIT_FIX found no loadable BMS charts in directory.");
+        "found no loadable BMS charts in directory.");
     return false;
   }
   loader.AddToSong();

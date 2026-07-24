@@ -17,7 +17,7 @@
 REGISTER_ACTOR_CLASS(RollingNumbers);
 
 namespace {
-void WarnRollingNumbersAuditFix(const char* message) {
+void WarnRollingNumbersSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -77,13 +77,13 @@ bool IsSafeRollingNumberFormat(const std::string& format) {
 
 std::string FormatRollingNumber(const std::string& format, float value) {
   if (!std::isfinite(value)) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1092: RollingNumbers reset non-finite text value.");
+    WarnRollingNumbersSafety(
+        "RollingNumbers reset non-finite text value.");
     value = 0.0f;
   }
   if (!IsSafeRollingNumberFormat(format)) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1090: RollingNumbers ignored unsafe TextFormat.");
+    WarnRollingNumbersSafety(
+        "RollingNumbers ignored unsafe TextFormat.");
     return ssprintf("%.0f", value);
   }
   return ssprintf(format.c_str(), value);
@@ -99,16 +99,16 @@ RollingNumbers::RollingNumbers() {
 
 void RollingNumbers::Load(const std::string& sMetricsGroup) {
   if (THEME == nullptr) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1090: RollingNumbers refused load without THEME.");
+    WarnRollingNumbersSafety(
+        "RollingNumbers refused load without THEME.");
     m_metrics_loaded = false;
     return;
   }
   const std::string sResolvedMetricsGroup =
       sMetricsGroup.empty() ? "RollingNumbers" : sMetricsGroup;
   if (sMetricsGroup.empty()) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1090: RollingNumbers fell back from empty metrics "
+    WarnRollingNumbersSafety(
+        "RollingNumbers fell back from empty metrics "
         "group.");
   }
 
@@ -201,8 +201,8 @@ void RollingNumbers::DrawPrimitives() noexcept {
 
 void RollingNumbers::Update(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1092: RollingNumbers ignored invalid update delta.");
+    WarnRollingNumbersSafety(
+        "RollingNumbers ignored invalid update delta.");
     BitmapText::Update(0.0f);
     return;
   }
@@ -236,8 +236,8 @@ void RollingNumbers::SetTargetNumber(float fTargetNumber) {
     return;
   }
   if (!std::isfinite(fTargetNumber)) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1093: RollingNumbers reset non-finite target.");
+    WarnRollingNumbersSafety(
+        "RollingNumbers reset non-finite target.");
     fTargetNumber = 0.0f;
   }
   if (!std::isfinite(m_fCurrentNumber)) {
@@ -246,8 +246,8 @@ void RollingNumbers::SetTargetNumber(float fTargetNumber) {
   m_fTargetNumber = fTargetNumber;
   float approach_secs = APPROACH_SECONDS.GetValue();
   if (!std::isfinite(approach_secs) || approach_secs < 0.0f) {
-    WarnRollingNumbersAuditFix(
-        "SRC_AUDIT_FIX SRC-1092: RollingNumbers used instant approach for "
+    WarnRollingNumbersSafety(
+        "RollingNumbers used instant approach for "
         "invalid ApproachSeconds.");
     approach_secs = 0.0f;
   }

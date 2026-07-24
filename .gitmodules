@@ -1,11 +1,11 @@
 [submodule "extern/ixwebsocket"]
 	path = extern/IXWebSocket
-	url = git@github.com:chabbiaz/ITGManiaOnline.git
+	url = https://github.com/zydon69/itgOnline.git
 	branch = ixwebsocket-online
 	shallow = true
 [submodule "extern/mbedtls"]
 	path = extern/mbedtls
-	url = git@github.com:chabbiaz/ITGManiaOnline.git
+	url = https://github.com/zydon69/itgOnline.git
 	branch = mbedtls-online
 	shallow = true
 [submodule "extern/zlib"]

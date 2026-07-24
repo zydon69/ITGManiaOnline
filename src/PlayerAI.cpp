@@ -25,14 +25,14 @@ struct TapScoreDistribution {
     for (int i = 0; i < NUM_TapNoteScore; ++i) {
       if (!std::isfinite(fPercent[i]) || fPercent[i] < 0.0f) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Invalid AI weight %f for score %i; using 0.",
+            "Invalid AI weight %f for score %i; using 0.",
             fPercent[i], i);
         fPercent[i] = 0.0f;
       }
       sum += fPercent[i];
     }
     if (!std::isfinite(sum) || sum <= 0.0f) {
-      LOG->Warn("SRC_AUDIT_FIX: Invalid AI weight sum %f; using defaults.", sum);
+      LOG->Warn("Invalid AI weight sum %f; using defaults.", sum);
       SetDefaultWeights();
       sum = 1.0f;
     }
@@ -61,7 +61,7 @@ struct TapScoreDistribution {
     }
     // the fCumulativePercents must sum to 1.0, so we should never get here!
     LOG->Warn(
-        "SRC_AUDIT_FIX: AI distribution did not resolve score (%f/%f); using "
+        "AI distribution did not resolve score (%f/%f); using "
         "W1.",
         fRand, fCumulativePercent);
     return TNS_W1;
@@ -119,14 +119,14 @@ void PlayerAI::InitFromDisk() {
 
 TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
   if (pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: PlayerAI called without PlayerState.");
+    LOG->Warn("PlayerAI called without PlayerState.");
     return TNS_None;
   }
   if (pPlayerState->m_PlayerController == PC_AUTOPLAY) {
     return TNS_W1;
   }
   if (GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: PlayerAI called without GAMESTATE.");
+    LOG->Warn("PlayerAI called without GAMESTATE.");
     return TNS_None;
   }
 
@@ -141,7 +141,7 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
   int iCpuSkill = std::clamp(pPlayerState->m_iCpuSkill, 0, NUM_SKILL_LEVELS - 1);
   if (iCpuSkill != pPlayerState->m_iCpuSkill) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Clamped invalid CPU skill %i to %i.",
+        "Clamped invalid CPU skill %i to %i.",
         pPlayerState->m_iCpuSkill, iCpuSkill);
   }
 
@@ -157,7 +157,7 @@ TapNoteScore PlayerAI::GetTapNoteScore(const PlayerState* pPlayerState) {
             : 0;
     if (pPlayerState->m_PlayerController != PC_CPU) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerAI non-CPU controller %i; using neutral score.",
+          "PlayerAI non-CPU controller %i; using neutral score.",
           pPlayerState->m_PlayerController);
       return TNS_None;
     }

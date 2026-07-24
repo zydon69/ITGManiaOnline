@@ -16,7 +16,7 @@
 REGISTER_ACTOR_CLASS(TextBanner);
 
 namespace {
-void WarnTextBannerAuditFix(const char* message) {
+void WarnTextBannerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -43,8 +43,8 @@ void TextBanner::EnsureTextChildren() {
 
 void TextBanner::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnTextBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-1060: TextBanner ignored null XML node.");
+    WarnTextBannerSafety(
+        "TextBanner ignored null XML node.");
     return;
   }
   m_bInitted = true;
@@ -57,15 +57,15 @@ void TextBanner::Load(std::string sMetricsGroup) {
   EnsureTextChildren();
 
   if (sMetricsGroup.empty()) {
-    WarnTextBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-1061: TextBanner fell back from empty metrics "
+    WarnTextBannerSafety(
+        "TextBanner fell back from empty metrics "
         "group.");
     sMetricsGroup = "TextBanner";
   }
 
   if (THEME == nullptr) {
-    WarnTextBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-1061: TextBanner refused font load without THEME.");
+    WarnTextBannerSafety(
+        "TextBanner refused font load without THEME.");
     return;
   }
 
@@ -105,8 +105,8 @@ void TextBanner::SetFromString(
     const std::string& sDisplaySubTitle, const std::string& sTranslitSubTitle,
     const std::string& sDisplayArtist, const std::string& sTranslitArtist) {
   if (!m_bInitted) {
-    WarnTextBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-1062: TextBanner initialized lazily before text "
+    WarnTextBannerSafety(
+        "TextBanner initialized lazily before text "
         "assignment.");
     m_bInitted = true;
   }

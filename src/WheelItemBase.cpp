@@ -72,7 +72,7 @@ void WheelItemBase::LoadFromWheelItemData(
   (void)iDrawIndex;
   if (pWID == nullptr) {
     WarnWheelItemBase(
-        "SRC_AUDIT_FIX SRC-1268: WheelItemBase ignored null wheel item data.");
+        "WheelItemBase ignored null wheel item data.");
     m_pData = nullptr;
     m_bHasFocus = false;
     m_pGrayBar = nullptr;

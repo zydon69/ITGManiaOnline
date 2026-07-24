@@ -106,7 +106,7 @@ static bool StepsContainQuadsForPlayer(const Steps* steps, PlayerNumber pn) {
           noteData, playerParts, steps->m_StepsType)) {
     if (static_cast<size_t>(pn) >= playerParts.size()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Cannot inspect NoQuads for player %i in malformed "
+          "Cannot inspect NoQuads for player %i in malformed "
           "per-player Steps data.",
           pn);
       return false;
@@ -139,7 +139,7 @@ static float SanitizeFinite(
     float value, float fallback, const char* context, bool allowNegative = true) {
   if (!std::isfinite(value) || (!allowNegative && value < 0.0f)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid PlayerOptions float %f in %s; using %f.",
+        "Invalid PlayerOptions float %f in %s; using %f.",
         value, context, fallback);
     return fallback;
   }
@@ -153,7 +153,7 @@ static float SanitizeTweenSpeed(float value, const char* context) {
 static int ClampBatteryLives(float value) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Non-finite battery lives %f; using default.", value);
+        "Non-finite battery lives %f; using default.", value);
     return 4;
   }
   return std::clamp(static_cast<int>(std::lrint(value)), 0, 100);
@@ -272,7 +272,7 @@ void PlayerOptions::Init() {
 void PlayerOptions::Approach(const PlayerOptions& other, float fDeltaSeconds) {
   if (!std::isfinite(fDeltaSeconds) || fDeltaSeconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring invalid PlayerOptions::Approach delta %f.",
+        "Ignoring invalid PlayerOptions::Approach delta %f.",
         fDeltaSeconds);
     return;
   }
@@ -398,7 +398,7 @@ static void AddPart(
   }
   if (!std::isfinite(level)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Skipping non-finite PlayerOptions mod %s=%f.",
+        "Skipping non-finite PlayerOptions mod %s=%f.",
         name.c_str(), level);
     return;
   }
@@ -444,7 +444,7 @@ void PlayerOptions::GetMods(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid LifeType %i while serializing PlayerOptions; "
+          "Invalid LifeType %i while serializing PlayerOptions; "
           "using Bar.",
           m_LifeType);
       break;
@@ -465,7 +465,7 @@ void PlayerOptions::GetMods(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid HideLightType %i while serializing "
+          "Invalid HideLightType %i while serializing "
           "PlayerOptions; using NoHideLights.",
           m_HideLightType);
       AddTo.push_back("NoHideLights");
@@ -519,7 +519,7 @@ void PlayerOptions::GetMods(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid ModTimerType %i while serializing "
+          "Invalid ModTimerType %i while serializing "
           "PlayerOptions; ignoring.",
           m_ModTimerType);
       break;
@@ -839,7 +839,7 @@ void PlayerOptions::GetMods(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid FailType %i while serializing "
+          "Invalid FailType %i while serializing "
           "PlayerOptions; using immediate fail.",
           m_FailType);
       break;
@@ -1797,7 +1797,7 @@ bool PlayerOptions::FromOneModString(
 
 void NextFloat(float fValues[], int size) {
   if (fValues == nullptr || size <= 0) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid NextFloat call.");
+    LOG->Warn("Ignoring invalid NextFloat call.");
     return;
   }
   int index = -1;
@@ -1822,7 +1822,7 @@ void NextFloat(float fValues[], int size) {
 
 void NextBool(bool bValues[], int size) {
   if (bValues == nullptr || size <= 0) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid NextBool call.");
+    LOG->Warn("Ignoring invalid NextBool call.");
     return;
   }
   int index = -1;
@@ -1937,7 +1937,7 @@ PlayerOptions::Scroll PlayerOptions::GetFirstScroll() {
 
 void PlayerOptions::SetOneAccel(Accel a) {
   if (!EnumInRange(a, NUM_ACCELS)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Accel %i in SetOneAccel.", a);
+    LOG->Warn("Invalid Accel %i in SetOneAccel.", a);
     return;
   }
   ZERO(m_fAccels);
@@ -1946,7 +1946,7 @@ void PlayerOptions::SetOneAccel(Accel a) {
 
 void PlayerOptions::SetOneEffect(Effect e) {
   if (!EnumInRange(e, NUM_EFFECTS)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Effect %i in SetOneEffect.", e);
+    LOG->Warn("Invalid Effect %i in SetOneEffect.", e);
     return;
   }
   ZERO(m_fEffects);
@@ -1955,7 +1955,7 @@ void PlayerOptions::SetOneEffect(Effect e) {
 
 void PlayerOptions::SetOneAppearance(Appearance a) {
   if (!EnumInRange(a, NUM_APPEARANCES)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Appearance %i in SetOneAppearance.", a);
+    LOG->Warn("Invalid Appearance %i in SetOneAppearance.", a);
     return;
   }
   ZERO(m_fAppearances);
@@ -1964,7 +1964,7 @@ void PlayerOptions::SetOneAppearance(Appearance a) {
 
 void PlayerOptions::SetOneScroll(Scroll s) {
   if (!EnumInRange(s, NUM_SCROLLS)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Scroll %i in SetOneScroll.", s);
+    LOG->Warn("Invalid Scroll %i in SetOneScroll.", s);
     return;
   }
   ZERO(m_fScrolls);
@@ -1973,7 +1973,7 @@ void PlayerOptions::SetOneScroll(Scroll s) {
 
 void PlayerOptions::ToggleOneTurn(Turn t) {
   if (!EnumInRange(t, NUM_TURNS)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Turn %i in ToggleOneTurn.", t);
+    LOG->Warn("Invalid Turn %i in ToggleOneTurn.", t);
     return;
   }
   bool bWasOn = m_bTurns[t];
@@ -1986,14 +1986,14 @@ float PlayerOptions::GetReversePercentForColumn(int iCol) const {
   if (!IsValidPlayerNumber(m_pn) || GAMESTATE == nullptr ||
       GAMESTATE->GetCurrentStyle(m_pn) == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid PlayerOptions reverse context for player %i.",
+        "Invalid PlayerOptions reverse context for player %i.",
         m_pn);
     return 0.0f;
   }
   int iNumCols = GAMESTATE->GetCurrentStyle(m_pn)->m_iColsPerPlayer;
   if (iCol < 0 || iCol >= iNumCols || iCol >= 16) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid reverse column %i for %i columns.", iCol,
+        "Invalid reverse column %i for %i columns.", iCol,
         iNumCols);
     return 0.0f;
   }
@@ -2022,7 +2022,7 @@ float PlayerOptions::GetReversePercentForColumn(int iCol) const {
     f = SCALE(f, 1.f, 2.f, 1.f, 0.f);
   }
   if (!std::isfinite(f)) {
-    LOG->Warn("SRC_AUDIT_FIX: Non-finite reverse percent; using 0.");
+    LOG->Warn("Non-finite reverse percent; using 0.");
     return 0.0f;
   }
   return std::clamp(f, 0.0f, 1.0f);
@@ -2230,7 +2230,7 @@ bool PlayerOptions::IsEasierForSongAndSteps(
     Song* pSong, Steps* pSteps, PlayerNumber pn) const {
   if (pSong == nullptr || pSteps == nullptr || !IsValidPlayerNumber(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Incomplete IsEasierForSongAndSteps context; treating "
+        "Incomplete IsEasierForSongAndSteps context; treating "
         "options as not easier.");
     return false;
   }
@@ -2343,13 +2343,13 @@ bool PlayerOptions::IsEasierForCourseAndTrail(
     Course* pCourse, Trail* pTrail) const {
   if (pCourse == nullptr || pTrail == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Incomplete IsEasierForCourseAndTrail context; "
+        "Incomplete IsEasierForCourseAndTrail context; "
         "treating options as not easier.");
     return false;
   }
   if (!IsValidPlayerNumber(m_pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: IsEasierForCourseAndTrail has no valid player "
+        "IsEasierForCourseAndTrail has no valid player "
         "identity; treating options as not easier.");
     return false;
   }
@@ -2380,7 +2380,7 @@ void PlayerOptions::GetLocalizedMods(std::vector<std::string>& AddTo) const {
       asTokens.erase(asTokens.begin());
       if (asTokens.empty()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-2603: Ignoring localized player option with "
+            "Ignoring localized player option with "
             "only an approach token.");
         continue;
       }
@@ -2452,7 +2452,7 @@ void PlayerOptions::ResetPrefs(ResetPrefsType type) {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid ResetPrefsType %i; using course-safe reset.",
+          "Invalid ResetPrefsType %i; using course-safe reset.",
           type);
       break;
   }

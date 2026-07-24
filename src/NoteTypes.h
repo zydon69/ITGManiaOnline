@@ -226,7 +226,7 @@ struct TapNote {
         HoldResult() {
     if (type_ < TapNoteType_Empty || type_ >= NUM_TapNoteType) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TapNote corrected invalid tap note type %i.",
+          "TapNote corrected invalid tap note type %i.",
           int(type_));
       type = TapNoteType_Empty;
     }
@@ -235,14 +235,14 @@ struct TapNote {
     }
     if (source_ < TapNoteSource_Original || source_ >= NUM_TapNoteSource) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TapNote corrected invalid note source %i.",
+          "TapNote corrected invalid note source %i.",
           int(source_));
       source = TapNoteSource_Original;
     }
     if (!std::isfinite(fAttackDurationSeconds_) ||
         fAttackDurationSeconds_ < 0.f) {
       LOG->Trace(
-          "SRC_AUDIT_FIX TapNote corrected invalid attack duration %f.",
+          "TapNote corrected invalid attack duration %f.",
           fAttackDurationSeconds_);
       fAttackDurationSeconds = 0.f;
     }
@@ -363,20 +363,20 @@ inline int   BeatToNoteRow( float fBeatNum )
 inline int BeatToNoteRow(float fBeatNum) {
   if (!std::isfinite(fBeatNum)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRow corrected non-finite beat %f.",
+        "BeatToNoteRow corrected non-finite beat %f.",
         fBeatNum);
     return 0;
   }
   const double row = double(fBeatNum) * ROWS_PER_BEAT;
   if (row > MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRow clamped huge beat %f to MAX_NOTE_ROW.",
+        "BeatToNoteRow clamped huge beat %f to MAX_NOTE_ROW.",
         fBeatNum);
     return MAX_NOTE_ROW;
   }
   if (row < -MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRow clamped huge negative beat %f.",
+        "BeatToNoteRow clamped huge negative beat %f.",
         fBeatNum);
     return -MAX_NOTE_ROW;
   }
@@ -389,20 +389,20 @@ inline int BeatToNoteRow(float fBeatNum) {
 inline int BeatToNoteRowNotRounded(float fBeatNum) {
   if (!std::isfinite(fBeatNum)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRowNotRounded corrected non-finite beat %f.",
+        "BeatToNoteRowNotRounded corrected non-finite beat %f.",
         fBeatNum);
     return 0;
   }
   const double row = double(fBeatNum) * ROWS_PER_BEAT;
   if (row > MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRowNotRounded clamped huge beat %f.",
+        "BeatToNoteRowNotRounded clamped huge beat %f.",
         fBeatNum);
     return MAX_NOTE_ROW;
   }
   if (row < -MAX_NOTE_ROW) {
     LOG->Trace(
-        "SRC_AUDIT_FIX BeatToNoteRowNotRounded clamped huge negative beat %f.",
+        "BeatToNoteRowNotRounded clamped huge negative beat %f.",
         fBeatNum);
     return -MAX_NOTE_ROW;
   }
@@ -453,12 +453,12 @@ template <typename T>
 inline T ScalePosition(T start, T length, T newLength, T position) {
   if (length <= 0) {
     LOG->Trace(
-        "SRC_AUDIT_FIX ScalePosition ignored invalid length %g.",
+        "ScalePosition ignored invalid length %g.",
         static_cast<double>(length));
     return position;
   }
   if (start > std::numeric_limits<T>::max() - length) {
-    LOG->Trace("SRC_AUDIT_FIX ScalePosition avoided range overflow.");
+    LOG->Trace("ScalePosition avoided range overflow.");
     return position;
   }
   if (position < start) {

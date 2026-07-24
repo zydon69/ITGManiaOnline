@@ -119,7 +119,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   HideAttack();
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
     WarnAttackDisplay(
-        "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init missing gameplay "
+        "AttackDisplay::Init missing gameplay "
         "context.");
     HideAttack();
     m_pPlayerState = nullptr;
@@ -130,7 +130,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (!IsValidAttackDisplayPlayer(pn)) {
     WarnAttackDisplay(
-        "SRC_AUDIT_FIX SRC-1236: AttackDisplay::Init invalid player %i.", pn);
+        "AttackDisplay::Init invalid player %i.", pn);
     HideAttack();
     m_pPlayerState = nullptr;
     return;
@@ -143,7 +143,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   }
   if (!AttackDisplayThemeIsReady()) {
     WarnAttackDisplay(
-        "SRC_AUDIT_FIX SRC-1237: AttackDisplay skipped preload without loaded "
+        "AttackDisplay skipped preload without loaded "
         "theme manager.");
     return;
   }
@@ -153,7 +153,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
     const Character* ch = GAMESTATE->m_pCurCharacters[pn];
     if (ch == nullptr) {
       WarnAttackDisplay(
-          "SRC_AUDIT_FIX SRC-1236: AttackDisplay missing character for player "
+          "AttackDisplay missing character for player "
           "%i.",
           pn);
       m_pPlayerState = nullptr;
@@ -173,7 +173,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
     const std::string pieceName = GetAttackPieceName(attack);
     if (pieceName.empty()) {
       WarnAttackDisplay(
-          "SRC_AUDIT_FIX: AttackDisplay skipped attack with empty display "
+          "AttackDisplay skipped attack with empty display "
           "token.");
       continue;
     }
@@ -187,7 +187,7 @@ void AttackDisplay::Init(const PlayerState* pPlayerState) {
   for (const std::string& attack : attacks) {
     if (ambiguousAttacks.find(attack) != ambiguousAttacks.end()) {
       WarnAttackDisplay(
-          "SRC_AUDIT_FIX: AttackDisplay skipped ambiguous attack asset token.");
+          "AttackDisplay skipped ambiguous attack asset token.");
       continue;
     }
 
@@ -227,7 +227,7 @@ void AttackDisplay::Update(float fDelta) {
     if (!std::isfinite(attack.fStartSecond) ||
         !std::isfinite(attack.fSecsRemaining)) {
       WarnAttackDisplay(
-          "SRC_AUDIT_FIX SRC-1236: Ignoring non-finite displayed attack.");
+          "Ignoring non-finite displayed attack.");
       continue;
     }
 
@@ -266,7 +266,7 @@ void AttackDisplay::SetAttack(const std::string& sText) {
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (!IsValidAttackDisplayPlayer(pn)) {
     WarnAttackDisplay(
-        "SRC_AUDIT_FIX SRC-1239: AttackDisplay::SetAttack invalid player %i.",
+        "AttackDisplay::SetAttack invalid player %i.",
         pn);
     HideAttack();
     return;
@@ -275,7 +275,7 @@ void AttackDisplay::SetAttack(const std::string& sText) {
   const auto preloaded = m_PreloadedAttackPathsByModifier.find(sText);
   if (preloaded == m_PreloadedAttackPathsByModifier.end()) {
     WarnAttackDisplay(
-        "SRC_AUDIT_FIX SRC-1242: AttackDisplay skipped non-preloaded dynamic "
+        "AttackDisplay skipped non-preloaded dynamic "
         "attack asset.");
     HideAttack();
     return;

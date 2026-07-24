@@ -65,7 +65,7 @@ void CourseContentsList::LoadFromNode(const XNode* pNode) {
   ClearDisplays();
   if (pNode == nullptr) {
     WarnCourseContentsList(
-        "SRC_AUDIT_FIX SRC-1218: CourseContentsList ignored null XML node.");
+        "CourseContentsList ignored null XML node.");
     return;
   }
 
@@ -85,7 +85,7 @@ void CourseContentsList::LoadFromNode(const XNode* pNode) {
     Actor* pDisplay = ActorUtil::LoadFromNode(pDisplayNode, this);
     if (pDisplay == nullptr) {
       WarnCourseContentsList(
-          "SRC_AUDIT_FIX SRC-1220: CourseContentsList skipped null display.");
+          "CourseContentsList skipped null display.");
       continue;
     }
     pDisplay->SetUseZBuffer(true);

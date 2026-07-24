@@ -80,13 +80,13 @@ bool ShouldShowW1() { return GAMESTATE == nullptr || GAMESTATE->ShowW1(); }
 int ClampInt64ToInt(int64_t value, const char* context) {
   if (value > std::numeric_limits<int>::max()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated integer value %" PRId64 " to INT_MAX.",
+        "%s saturated integer value %" PRId64 " to INT_MAX.",
         context, value);
     return std::numeric_limits<int>::max();
   }
   if (value < std::numeric_limits<int>::min()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated integer value %" PRId64 " to INT_MIN.",
+        "%s saturated integer value %" PRId64 " to INT_MIN.",
         context, value);
     return std::numeric_limits<int>::min();
   }
@@ -112,7 +112,7 @@ int AddNonNegativeIntSaturated(int current, int delta, const char* context) {
       AddIntSaturated(std::max(0, current), std::max(0, delta), context);
   if (value < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped negative saturated result %i to 0.", context,
+        "%s clamped negative saturated result %i to 0.", context,
         value);
     return 0;
   }
@@ -124,13 +124,13 @@ unsigned int AddUnsignedDeltaSaturated(
   const int64_t value = static_cast<int64_t>(current) + delta;
   if (value < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped unsigned score delta %" PRId64 " below 0.",
+        "%s clamped unsigned score delta %" PRId64 " below 0.",
         context, delta);
     return 0;
   }
   if (value > std::numeric_limits<unsigned int>::max()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated unsigned score value %" PRId64 ".",
+        "%s saturated unsigned score value %" PRId64 ".",
         context, value);
     return std::numeric_limits<unsigned int>::max();
   }
@@ -146,7 +146,7 @@ int RadarValueToNonNegativeInt(float value, const char* context) {
   if (!std::isfinite(value) || value <= 0.0f) {
     if (!std::isfinite(value) || value < 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s ignored invalid radar value %f.", context, value);
+          "%s ignored invalid radar value %f.", context, value);
     }
     return 0;
   }
@@ -154,7 +154,7 @@ int RadarValueToNonNegativeInt(float value, const char* context) {
   // representable int range.  Keep the comparison inclusive before casting.
   if (value >= static_cast<float>(std::numeric_limits<int>::max())) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated radar value %f to INT_MAX.", context,
+        "%s saturated radar value %f to INT_MAX.", context,
         value);
     return std::numeric_limits<int>::max();
   }
@@ -164,7 +164,7 @@ int RadarValueToNonNegativeInt(float value, const char* context) {
 int UnsignedToIntSaturated(unsigned int value, const char* context) {
   if (value > static_cast<unsigned int>(std::numeric_limits<int>::max())) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s saturated unsigned value %u to INT_MAX.", context,
+        "%s saturated unsigned value %u to INT_MAX.", context,
         value);
     return std::numeric_limits<int>::max();
   }
@@ -175,13 +175,13 @@ int ClampScoreWeight(int weight, const char* context) {
   static const int kMaxReasonableWeight = 1000000;
   if (weight > kMaxReasonableWeight) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped extreme score weight %i to %i.", context,
+        "%s clamped extreme score weight %i to %i.", context,
         weight, kMaxReasonableWeight);
     return kMaxReasonableWeight;
   }
   if (weight < -kMaxReasonableWeight) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped extreme score weight %i to -%i.", context,
+        "%s clamped extreme score weight %i to -%i.", context,
         weight, kMaxReasonableWeight);
     return -kMaxReasonableWeight;
   }
@@ -191,7 +191,7 @@ int ClampScoreWeight(int weight, const char* context) {
 int ClampComboInput(int count, const char* context) {
   if (count < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s clamped negative combo count %i to 0.", context,
+        "%s clamped negative combo count %i to 0.", context,
         count);
     return 0;
   }
@@ -203,7 +203,7 @@ bool IsValidScoreRow(int row) { return row >= 0 && row <= MAX_NOTE_ROW; }
 void BroadcastScoreKeeperMessage(Message& msg, const char* context) {
   if (MESSAGEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped message broadcast without MESSAGEMAN.",
+        "%s skipped message broadcast without MESSAGEMAN.",
         context);
     return;
   }
@@ -213,7 +213,7 @@ void BroadcastScoreKeeperMessage(Message& msg, const char* context) {
 void BroadcastScoreKeeperMessage(MessageID msg, const char* context) {
   if (MESSAGEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped message broadcast without MESSAGEMAN.",
+        "%s skipped message broadcast without MESSAGEMAN.",
         context);
     return;
   }
@@ -226,7 +226,7 @@ TapNoteScore ClampTapMetric(
     return score;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: %s used fallback tap score metric %i for invalid %i.",
+      "%s used fallback tap score metric %i for invalid %i.",
       context, fallback, score);
   return fallback;
 }
@@ -234,13 +234,13 @@ TapNoteScore ClampTapMetric(
 TimingData* GetCurrentTimingDataForPlayer(PlayerNumber pn) {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal missing timing data because "
+        "ScoreKeeperNormal missing timing data because "
         "GAMESTATE is null.");
     return nullptr;
   }
   if (!IsValidPlayerNumber(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal missing timing data for invalid "
+        "ScoreKeeperNormal missing timing data for invalid "
         "player %i.",
         pn);
     return nullptr;
@@ -249,7 +249,7 @@ TimingData* GetCurrentTimingDataForPlayer(PlayerNumber pn) {
   Steps* pSteps = GAMESTATE->m_pCurSteps[pn];
   if (pSteps == nullptr || pSteps->GetTimingData() == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal missing current timing data for "
+        "ScoreKeeperNormal missing current timing data for "
         "player %i.",
         pn);
     return nullptr;
@@ -264,7 +264,7 @@ int GetComboMultiplier(
   }
   if (!IsValidScoreRow(iRow)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal ignored combo multiplier for "
+        "ScoreKeeperNormal ignored combo multiplier for "
         "invalid row %i.",
         iRow);
     return 1;
@@ -273,7 +273,7 @@ int GetComboMultiplier(
   ComboSegment* cs = pTiming->GetComboSegmentAtRow(iRow);
   if (cs == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal missing combo segment at row %i; "
+        "ScoreKeeperNormal missing combo segment at row %i; "
         "using multiplier 1.",
         iRow);
     return 1;
@@ -282,7 +282,7 @@ int GetComboMultiplier(
   int multiplier = bMissComboMultiplier ? cs->GetMissCombo() : cs->GetCombo();
   if (multiplier <= 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal clamped invalid combo multiplier %i "
+        "ScoreKeeperNormal clamped invalid combo multiplier %i "
         "at row %i to 1.",
         multiplier, iRow);
     return 1;
@@ -290,7 +290,7 @@ int GetComboMultiplier(
   static const int kMaxComboMultiplier = 1000;
   if (multiplier > kMaxComboMultiplier) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal clamped huge combo multiplier %i at "
+        "ScoreKeeperNormal clamped huge combo multiplier %i at "
         "row %i to %i.",
         multiplier, iRow, kMaxComboMultiplier);
     return kMaxComboMultiplier;
@@ -349,14 +349,14 @@ void ScoreKeeperNormal::Load(
   if (GAMESTATE == nullptr ||
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2051: ScoreKeeperNormal::Load aborted with "
+        "ScoreKeeperNormal::Load aborted with "
         "GAMESTATE=%p player=%i.",
         static_cast<void*>(GAMESTATE), m_pPlayerState->m_PlayerNumber);
     return;
   }
   if (THEME == nullptr || !THEME->IsThemeLoaded() || LUA == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::Load aborted without theme/Lua "
+        "ScoreKeeperNormal::Load aborted without theme/Lua "
         "runtime.");
     return;
   }
@@ -364,7 +364,7 @@ void ScoreKeeperNormal::Load(
   if (apSongs.size() != apSteps.size() ||
       apSongs.size() != asModifiers.size()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::Load rejected mismatched course "
+        "ScoreKeeperNormal::Load rejected mismatched course "
         "vectors: songs=%zu steps=%zu modifiers=%zu.",
         apSongs.size(), apSteps.size(), asModifiers.size());
     return;
@@ -374,7 +374,7 @@ void ScoreKeeperNormal::Load(
       GAMESTATE->GetCurrentStyle(m_pPlayerState->m_PlayerNumber);
   if (pStyle == nullptr && !apSongs.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::Load rejected charts because no "
+        "ScoreKeeperNormal::Load rejected charts because no "
         "current style was available for player %i.",
         m_pPlayerState->m_PlayerNumber);
     return;
@@ -384,7 +384,7 @@ void ScoreKeeperNormal::Load(
         apSteps[i]->m_pSong != apSongs[i] ||
         apSteps[i]->GetTimingData() == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::Load rejected invalid entry %zu: "
+          "ScoreKeeperNormal::Load rejected invalid entry %zu: "
           "song=%p steps=%p steps_song=%p timing=%p.",
           i, static_cast<void*>(apSongs[i]), static_cast<void*>(apSteps[i]),
           apSteps[i] == nullptr ? nullptr
@@ -485,7 +485,7 @@ void ScoreKeeperNormal::OnNextSong(
   if (pSteps == nullptr || pNoteData == nullptr ||
       pSteps->GetTimingData() == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored invalid input: "
+        "ScoreKeeperNormal::OnNextSong ignored invalid input: "
         "steps=%p notedata=%p timing=%p.",
         static_cast<const void*>(pSteps), static_cast<const void*>(pNoteData),
         pSteps == nullptr ? nullptr
@@ -521,7 +521,7 @@ void ScoreKeeperNormal::OnNextSong(
   if (isCourseMode) {
     if (iSongInCourseIndex < 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong rejected negative "
+          "ScoreKeeperNormal::OnNextSong rejected negative "
           "course index %i.",
           iSongInCourseIndex);
       m_iPointBonus = 0;
@@ -532,7 +532,7 @@ void ScoreKeeperNormal::OnNextSong(
         m_apSteps.size() >
             static_cast<size_t>(std::numeric_limits<int>::max())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong ignored invalid "
+          "ScoreKeeperNormal::OnNextSong ignored invalid "
           "course scoring size %zu.",
           m_apSteps.size());
       m_iPointBonus = 0;
@@ -544,7 +544,7 @@ void ScoreKeeperNormal::OnNextSong(
     const int iIndex = iSongInCourseIndex % numSongsInCourse;
     if (m_apSteps[iIndex] != pSteps) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong rejected course "
+          "ScoreKeeperNormal::OnNextSong rejected course "
           "steps mismatch at index %i: expected=%p actual=%p.",
           iIndex, static_cast<void*>(m_apSteps[iIndex]),
           static_cast<const void*>(pSteps));
@@ -582,7 +582,7 @@ void ScoreKeeperNormal::OnNextSong(
       iLengthMultiplier = GameState::GetNumStagesMultiplierForSong(pSong);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal::OnNextSong used length "
+          "ScoreKeeperNormal::OnNextSong used length "
           "multiplier 1 because no song was available.");
     }
     iLengthMultiplier = std::max(1, iLengthMultiplier);
@@ -618,7 +618,7 @@ void ScoreKeeperNormal::OnNextSong(
 
   if (m_iPointBonus < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal clamped negative point bonus %i.",
+        "ScoreKeeperNormal clamped negative point bonus %i.",
         m_iPointBonus);
     m_iPointBonus = 0;
   }
@@ -696,7 +696,7 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
   if (m_UseInternalScoring) {
     if (!IsRegularTapNoteScore(score)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored non-regular tap score %i "
+          "ScoreKeeperNormal ignored non-regular tap score %i "
           "in "
           "internal scoring.",
           score);
@@ -704,13 +704,13 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
     }
     if (m_iNumTapsAndHolds <= 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal skipped internal scoring because "
+          "ScoreKeeperNormal skipped internal scoring because "
           "there are no scorable taps or holds.");
       return;
     }
     if (m_iTapNotesHit >= m_iNumTapsAndHolds) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored excess internal scoring "
+          "ScoreKeeperNormal ignored excess internal scoring "
           "callback %i/%i.",
           m_iTapNotesHit + 1, m_iNumTapsAndHolds);
       return;
@@ -813,7 +813,7 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
         "ScoreKeeperNormal::AddScoreInternal score remainder");
     if (m_iRoundTo <= 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal reset invalid round-to value %i "
+          "ScoreKeeperNormal reset invalid round-to value %i "
           "to 1.",
           m_iRoundTo);
       m_iRoundTo = 1;
@@ -834,14 +834,14 @@ int ScoreKeeperNormal::CalcNextToastyAt(int level) {
   const int default_amount = 250;
   if (level < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::CalcNextToastyAt normalized "
+        "ScoreKeeperNormal::CalcNextToastyAt normalized "
         "negative level %i to 0.",
         level);
     level = 0;
   }
   if (LUA == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2054: ScoreKeeperNormal used default Toasty "
+        "ScoreKeeperNormal used default Toasty "
         "threshold without Lua.");
     return AddNonNegativeIntSaturated(
         m_next_toasty_at, default_amount,
@@ -893,7 +893,7 @@ int ScoreKeeperNormal::CalcNextToastyAt(int level) {
   }
   if (erred) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::CalcNextToastyAt used default "
+        "ScoreKeeperNormal::CalcNextToastyAt used default "
         "threshold %i after an invalid metric result.",
         default_amount);
     amount = default_amount;
@@ -921,7 +921,7 @@ void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
   if (tn.type == TapNoteType_Mine) {
     if (!IsValidTapNoteScore(tns)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored mine with invalid tap "
+          "ScoreKeeperNormal ignored mine with invalid tap "
           "score %i.",
           tns);
       return;
@@ -964,14 +964,14 @@ void ScoreKeeperNormal::HandleHoldCheckpointScore(
   }
   if (!IsValidScoreRow(iRow)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2057: ScoreKeeperNormal ignored checkpoint score "
+        "ScoreKeeperNormal ignored checkpoint score "
         "for invalid row %i.",
         iRow);
     return;
   }
   if (iNumHoldsHeldThisRow < 0 || iNumHoldsMissedThisRow < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleHoldCheckpointScore rejected "
+        "ScoreKeeperNormal::HandleHoldCheckpointScore rejected "
         "negative counts held=%i missed=%i.",
         iNumHoldsHeldThisRow, iNumHoldsMissedThisRow);
     return;
@@ -989,7 +989,7 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
   }
   if (!IsRowTapNoteScore(tns) || !IsRowTapNoteScore(maximum)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid tap score %i "
+        "ScoreKeeperNormal ignored invalid tap score %i "
         "maximum %i.",
         tns, maximum);
     return;
@@ -1090,7 +1090,7 @@ void ScoreKeeperNormal::HandleRowComboInternal(
   }
   if (!IsRowTapNoteScore(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleRowComboInternal ignored "
+        "ScoreKeeperNormal::HandleRowComboInternal ignored "
         "invalid tap score %i.",
         tns);
     return;
@@ -1141,7 +1141,7 @@ void ScoreKeeperNormal::GetRowCounts(
   iNumHitContinueCombo = iNumHitMaintainCombo = iNumBreakCombo = 0;
   if (iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetRowCounts ignored invalid row "
+        "ScoreKeeperNormal::GetRowCounts ignored invalid row "
         "%i.",
         iRow);
     return;
@@ -1162,7 +1162,7 @@ void ScoreKeeperNormal::GetRowCounts(
     TapNoteScore tns = tn.result.tns;
     if (!IsRowTapNoteScore(tns)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid row tap score %i "
+          "ScoreKeeperNormal ignored invalid row tap score %i "
           "at row %i.",
           tns, iRow);
       iNumHitContinueCombo = iNumHitMaintainCombo = iNumBreakCombo = 0;
@@ -1184,7 +1184,7 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
   }
   if (iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleTapRowScore ignored invalid "
+        "ScoreKeeperNormal::HandleTapRowScore ignored invalid "
         "row %i.",
         iRow);
     return;
@@ -1209,7 +1209,7 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
       NoteDataWithScoring::LastTapNoteWithResult(nd, iRow).result.tns;
   if (!IsRowTapNoteScore(scoreOfLastTap)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::HandleTapRowScore ignored invalid "
+        "ScoreKeeperNormal::HandleTapRowScore ignored invalid "
         "last tap score %i at row %i.",
         scoreOfLastTap, iRow);
     return;
@@ -1280,7 +1280,7 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
         PROFILEMAN->IncrementToastiesCount(pn);
       } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScoreKeeperNormal skipped Toasty profile update "
+            "ScoreKeeperNormal skipped Toasty profile update "
             "for player %i with PROFILEMAN=%p.",
             pn, static_cast<void*>(PROFILEMAN));
       }
@@ -1311,7 +1311,7 @@ void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
   HoldNoteScore holdScore = tn.HoldResult.hns;
   if (!IsValidHoldNoteScore(holdScore) || holdScore == HNS_None) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal ignored invalid hold score %i.",
+        "ScoreKeeperNormal ignored invalid hold score %i.",
         holdScore);
     return;
   }
@@ -1346,19 +1346,19 @@ int ScoreKeeperNormal::GetPossibleDancePoints(
     NoteData* nd, const TimingData* td, float fSongSeconds) {
   if (nd == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleDancePoints received "
+        "ScoreKeeperNormal::GetPossibleDancePoints received "
         "null NoteData.");
     return 0;
   }
   if (td == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2059: ScoreKeeperNormal::GetPossibleDancePoints "
+        "ScoreKeeperNormal::GetPossibleDancePoints "
         "received null timing data.");
     return 0;
   }
   if (!std::isfinite(fSongSeconds) || fSongSeconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleDancePoints normalized "
+        "ScoreKeeperNormal::GetPossibleDancePoints normalized "
         "invalid song seconds %f.",
         fSongSeconds);
     fSongSeconds = 0.0f;
@@ -1431,19 +1431,19 @@ int ScoreKeeperNormal::GetPossibleGradePoints(
     NoteData* nd, const TimingData* td, float fSongSeconds) {
   if (nd == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleGradePoints received "
+        "ScoreKeeperNormal::GetPossibleGradePoints received "
         "null NoteData.");
     return 0;
   }
   if (td == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2059: ScoreKeeperNormal::GetPossibleGradePoints "
+        "ScoreKeeperNormal::GetPossibleGradePoints "
         "received null timing data.");
     return 0;
   }
   if (!std::isfinite(fSongSeconds) || fSongSeconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal::GetPossibleGradePoints normalized "
+        "ScoreKeeperNormal::GetPossibleGradePoints normalized "
         "invalid song seconds %f.",
         fSongSeconds);
     fSongSeconds = 0.0f;
@@ -1531,7 +1531,7 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
     TapNoteScore tns, bool bBeginner) {
   if (!IsValidTapNoteScore(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid tap score %i to 0 "
+        "ScoreKeeperNormal mapped invalid tap score %i to 0 "
         "dance points.",
         tns);
     return 0;
@@ -1595,7 +1595,7 @@ int ScoreKeeperNormal::TapNoteScoreToDancePoints(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected tap score %i "
+          "ScoreKeeperNormal mapped unexpected tap score %i "
           "to 0 dance points.",
           tns);
       iWeight = 0;
@@ -1611,7 +1611,7 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
     HoldNoteScore hns, bool bBeginner) {
   if (!IsValidHoldNoteScore(hns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid hold score %i to 0 "
+        "ScoreKeeperNormal mapped invalid hold score %i to 0 "
         "dance points.",
         hns);
     return 0;
@@ -1639,7 +1639,7 @@ int ScoreKeeperNormal::HoldNoteScoreToDancePoints(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected hold score %i "
+          "ScoreKeeperNormal mapped unexpected hold score %i "
           "to 0 dance points.",
           hns);
       iWeight = 0;
@@ -1655,7 +1655,7 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
     TapNoteScore tns, bool bBeginner) {
   if (!IsValidTapNoteScore(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid tap score %i to 0 "
+        "ScoreKeeperNormal mapped invalid tap score %i to 0 "
         "grade points.",
         tns);
     return 0;
@@ -1721,7 +1721,7 @@ int ScoreKeeperNormal::TapNoteScoreToGradePoints(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected tap score %i "
+          "ScoreKeeperNormal mapped unexpected tap score %i "
           "to 0 grade points.",
           tns);
       iWeight = 0;
@@ -1737,7 +1737,7 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
     HoldNoteScore hns, bool bBeginner) {
   if (!IsValidHoldNoteScore(hns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperNormal mapped invalid hold score %i to 0 "
+        "ScoreKeeperNormal mapped invalid hold score %i to 0 "
         "grade points.",
         hns);
     return 0;
@@ -1765,7 +1765,7 @@ int ScoreKeeperNormal::HoldNoteScoreToGradePoints(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScoreKeeperNormal mapped unexpected hold score %i "
+          "ScoreKeeperNormal mapped unexpected hold score %i "
           "to 0 grade points.",
           hns);
       iWeight = 0;

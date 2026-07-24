@@ -131,10 +131,10 @@ std::int64_t MillisecondsToFrames(int ms, int sampleRate) {
 RageSoundReader_Extend::RageSoundReader_Extend(RageSoundReader* pSource)
     : RageSoundReader_Filter(pSource) {
   if (pSource == nullptr) {
-    SetError("SRC_AUDIT_FIX SRC-2751: extend reader has no source reader");
+    SetError("extend reader has no source reader");
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2751: RageSoundReader_Extend created without "
+          "RageSoundReader_Extend created without "
           "a source reader.");
     }
     return;
@@ -149,7 +149,7 @@ RageSoundReader_Extend* RageSoundReader_Extend::Copy() const {
     if (!m_pSource.isNull()) {
       sourceCopy.reset(m_pSource->Copy());
       if (sourceCopy == nullptr) {
-        SetError("SRC_AUDIT_FIX SRC-2890: failed to copy extend source reader");
+        SetError("failed to copy extend source reader");
         return nullptr;
       }
     }
@@ -174,10 +174,10 @@ RageSoundReader_Extend* RageSoundReader_Extend::Copy() const {
     copy->m_sError = m_sError;
     return copy.release();
   } catch (const std::bad_alloc&) {
-    SetError("SRC_AUDIT_FIX SRC-2890: failed to allocate extend copy");
+    SetError("failed to allocate extend copy");
     return nullptr;
   } catch (...) {
-    SetError("SRC_AUDIT_FIX SRC-2890: failed to copy extend reader");
+    SetError("failed to copy extend reader");
     return nullptr;
   }
 }
@@ -186,7 +186,7 @@ int RageSoundReader_Extend::GetLength() const {
   if (m_iLengthFrames != -1) {
     int ms = 0;
     if (!FramesToMilliseconds(m_iLengthFrames, GetSampleRate(), &ms)) {
-      SetError("SRC_AUDIT_FIX SRC-2896: invalid extend length state");
+      SetError("invalid extend length state");
       return RageSoundReader::ERROR;
     }
     return ms;
@@ -200,14 +200,14 @@ int RageSoundReader_Extend::GetLength() const {
   std::int64_t playbackFrames =
       MillisecondsToFrames(sourceLengthMs, GetSampleRate());
   if (!SubtractFrames(playbackFrames, m_iStartFrames, &playbackFrames)) {
-    SetError("SRC_AUDIT_FIX SRC-2896: extend playback length overflow");
+    SetError("extend playback length overflow");
     return RageSoundReader::ERROR;
   }
   playbackFrames = std::max<std::int64_t>(0, playbackFrames);
 
   int ms = 0;
   if (!FramesToMilliseconds(playbackFrames, GetSampleRate(), &ms)) {
-    SetError("SRC_AUDIT_FIX SRC-2896: invalid extend playback length");
+    SetError("invalid extend playback length");
     return RageSoundReader::ERROR;
   }
   return ms;
@@ -226,14 +226,14 @@ int RageSoundReader_Extend::GetLength_Fast() const {
   std::int64_t playbackFrames =
       MillisecondsToFrames(sourceLengthMs, GetSampleRate());
   if (!SubtractFrames(playbackFrames, m_iStartFrames, &playbackFrames)) {
-    SetError("SRC_AUDIT_FIX SRC-2896: extend fast length overflow");
+    SetError("extend fast length overflow");
     return RageSoundReader::ERROR;
   }
   playbackFrames = std::max<std::int64_t>(0, playbackFrames);
 
   int ms = 0;
   if (!FramesToMilliseconds(playbackFrames, GetSampleRate(), &ms)) {
-    SetError("SRC_AUDIT_FIX SRC-2896: invalid extend fast length");
+    SetError("invalid extend fast length");
     return RageSoundReader::ERROR;
   }
   return ms;
@@ -241,13 +241,13 @@ int RageSoundReader_Extend::GetLength_Fast() const {
 
 int RageSoundReader_Extend::SetPosition(int iFrame) {
   if (m_pSource.isNull()) {
-    SetError("SRC_AUDIT_FIX SRC-2894: extend seek has no source reader");
+    SetError("extend seek has no source reader");
     return RageSoundReader::ERROR;
   }
 
   int iRet = m_pSource->SetPosition(std::max(iFrame, 0));
   if (iRet < 0) {
-    SetError("SRC_AUDIT_FIX SRC-2891: extend source seek failed");
+    SetError("extend source seek failed");
     return iRet;
   }
 
@@ -284,7 +284,7 @@ bool RageSoundReader_Extend::GetEndFrame(std::int64_t* pEndFrame) const {
   }
 
   if (!AddFrames(m_iStartFrames, m_iLengthFrames, pEndFrame)) {
-    SetError("SRC_AUDIT_FIX SRC-2893: extend end frame overflow");
+    SetError("extend end frame overflow");
     return false;
   }
   return true;
@@ -303,7 +303,7 @@ int RageSoundReader_Extend::GetData(
     return 0;
   }
   if (pBuffer == nullptr || iFrames < 0 || m_pSource.isNull()) {
-    SetError("SRC_AUDIT_FIX SRC-2894: invalid extend data request");
+    SetError("invalid extend data request");
     return RageSoundReader::ERROR;
   }
 
@@ -315,7 +315,7 @@ int RageSoundReader_Extend::GetData(
     }
     std::int64_t iFramesLeft = 0;
     if (!SubtractFrames(endFrame, m_iPositionFrames, &iFramesLeft)) {
-      SetError("SRC_AUDIT_FIX SRC-2893: extend remaining frame overflow");
+      SetError("extend remaining frame overflow");
       return RageSoundReader::ERROR;
     }
     iFramesLeft = std::max<std::int64_t>(0, iFramesLeft);
@@ -337,7 +337,7 @@ int RageSoundReader_Extend::GetData(
     size_t samples = 0;
     if (!FramesToSamples(iFramesToRead, this->GetNumChannels(), &samples) ||
         samples > std::numeric_limits<size_t>::max() / sizeof(float)) {
-      SetError("SRC_AUDIT_FIX SRC-2894: extend silence sample count overflow");
+      SetError("extend silence sample count overflow");
       return RageSoundReader::ERROR;
     }
     memset(pBuffer, 0, samples * sizeof(float));
@@ -354,7 +354,7 @@ int RageSoundReader_Extend::GetData(
     std::int64_t nextSourceFrame = iSourceStartFrame;
     if (!AdvanceFrameByRatio(
             iSourceStartFrame, iRet, fSourceRatio, &nextSourceFrame)) {
-      SetError("SRC_AUDIT_FIX SRC-2897: extend source frame advance failed");
+      SetError("extend source frame advance failed");
       return RageSoundReader::ERROR;
     }
     m_iPositionFrames = nextSourceFrame;
@@ -370,7 +370,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
     return 0;
   }
   if (pBuffer == nullptr || iFrames < 0) {
-    SetError("SRC_AUDIT_FIX SRC-2894: invalid extend read request");
+    SetError("invalid extend read request");
     return RageSoundReader::ERROR;
   }
   bool bAdvancedPosition = false;
@@ -391,7 +391,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       if (m_StopMode != M_CONTINUE) {
         std::int64_t framesToEnd = 0;
         if (!SubtractFrames(endFrame, m_iPositionFrames, &framesToEnd)) {
-          SetError("SRC_AUDIT_FIX SRC-2893: extend continuation frame "
+          SetError("extend continuation frame "
                    "overflow");
           return RageSoundReader::ERROR;
         }
@@ -401,7 +401,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       size_t samples = 0;
       if (!FramesToSamples(iFramesRead, this->GetNumChannels(), &samples) ||
           samples > std::numeric_limits<size_t>::max() / sizeof(float)) {
-        SetError("SRC_AUDIT_FIX SRC-2894: extend continuation sample count "
+        SetError("extend continuation sample count "
                  "overflow");
         return RageSoundReader::ERROR;
       }
@@ -415,7 +415,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
     if (m_iFadeInFrames != 0 && !m_bIgnoreFadeInFrames) {
       std::int64_t iBlockEndFrame = iBlockStartFrame;
       if (!AddFrames(iBlockStartFrame, iFramesRead, &iBlockEndFrame)) {
-        SetError("SRC_AUDIT_FIX SRC-2893: extend fade-in frame overflow");
+        SetError("extend fade-in frame overflow");
         return RageSoundReader::ERROR;
       }
       const float fStartVolume = SCALE(
@@ -425,7 +425,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       if (!RageSoundUtil::Fade(
               pBuffer, static_cast<size_t>(iFramesRead),
               this->GetNumChannels(), fStartVolume, fEndVolume)) {
-        SetError("SRC_AUDIT_FIX SRC-2909: extend fade-in failed");
+        SetError("extend fade-in failed");
         return RageSoundReader::ERROR;
       }
     }
@@ -445,7 +445,7 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
               iSilencePositionFrames, m_iFadeOutFrames,
               &iFullVolumePositionFrames) ||
           !AddFrames(iBlockStartFrame, iFramesRead, &iBlockEndFrame)) {
-        SetError("SRC_AUDIT_FIX SRC-2893: extend fade-out frame overflow");
+        SetError("extend fade-out frame overflow");
         return RageSoundReader::ERROR;
       }
       const float fStartVolume = SCALE(
@@ -457,14 +457,14 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
       if (!RageSoundUtil::Fade(
               pBuffer, static_cast<size_t>(iFramesRead),
               this->GetNumChannels(), fStartVolume, fEndVolume)) {
-        SetError("SRC_AUDIT_FIX SRC-2909: extend fade-out failed");
+        SetError("extend fade-out failed");
         return RageSoundReader::ERROR;
       }
     }
 
     if (!bAdvancedPosition &&
         !AddFrames(m_iPositionFrames, iFramesRead, &m_iPositionFrames)) {
-      SetError("SRC_AUDIT_FIX SRC-2893: extend position frame overflow");
+      SetError("extend position frame overflow");
       return RageSoundReader::ERROR;
     }
     ClearError();
@@ -473,11 +473,11 @@ int RageSoundReader_Extend::Read(float* pBuffer, int iFrames) {
   if (iFramesRead == RageSoundReader::END_OF_FILE && m_StopMode == M_LOOP) {
     if (m_iStartFrames < std::numeric_limits<int>::min() ||
         m_iStartFrames > std::numeric_limits<int>::max()) {
-      SetError("SRC_AUDIT_FIX SRC-2892: extend loop start is out of range");
+      SetError("extend loop start is out of range");
       return RageSoundReader::ERROR;
     }
     if (this->SetPosition(ClampInt64ToInt(m_iStartFrames)) < 0) {
-      SetError("SRC_AUDIT_FIX SRC-2892: extend loop restart seek failed");
+      SetError("extend loop restart seek failed");
       return RageSoundReader::ERROR;
     }
 
@@ -505,7 +505,7 @@ bool RageSoundReader_Extend::SetProperty(
   if (sProperty == "StartSecond") {
     std::int64_t frames = 0;
     if (!SecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
-      SetError("SRC_AUDIT_FIX SRC-2894: invalid extend StartSecond");
+      SetError("invalid extend StartSecond");
       return false;
     }
     m_iStartFrames = frames;
@@ -519,7 +519,7 @@ bool RageSoundReader_Extend::SetProperty(
     } else {
       std::int64_t frames = 0;
       if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
-        SetError("SRC_AUDIT_FIX SRC-2894: invalid extend LengthSeconds");
+        SetError("invalid extend LengthSeconds");
         return false;
       }
       m_iLengthFrames = frames;
@@ -549,7 +549,7 @@ bool RageSoundReader_Extend::SetProperty(
   if (sProperty == "FadeInSeconds") {
     std::int64_t frames = 0;
     if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
-      SetError("SRC_AUDIT_FIX SRC-2894: invalid extend FadeInSeconds");
+      SetError("invalid extend FadeInSeconds");
       return false;
     }
     m_iFadeInFrames = frames;
@@ -560,7 +560,7 @@ bool RageSoundReader_Extend::SetProperty(
   if (sProperty == "FadeSeconds" || sProperty == "FadeOutSeconds") {
     std::int64_t frames = 0;
     if (!NonNegativeSecondsToFrames(fValue, this->GetSampleRate(), &frames)) {
-      SetError("SRC_AUDIT_FIX SRC-2894: invalid extend FadeOutSeconds");
+      SetError("invalid extend FadeOutSeconds");
       return false;
     }
     m_iFadeOutFrames = frames;

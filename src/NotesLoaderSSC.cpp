@@ -768,7 +768,7 @@ bool ParseSSCFloat(
 
   LOG->UserLog(
       "Song file", loader.GetSongTitle(),
-      "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+      "ignored invalid #%s %s value \"%s\" in \"%s\".",
       tag, field, SanitizeForLog(raw).c_str(),
       SanitizeForLog(expression).c_str());
   return false;
@@ -782,7 +782,7 @@ bool ParseSSCInt(
   if (value.empty()) {
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
-        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        "ignored invalid #%s %s value \"%s\" in \"%s\".",
         tag, field, SanitizeForLog(raw).c_str(),
         SanitizeForLog(expression).c_str());
     return false;
@@ -795,7 +795,7 @@ bool ParseSSCInt(
       parsed < INT_MIN || parsed > INT_MAX) {
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
-        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        "ignored invalid #%s %s value \"%s\" in \"%s\".",
         tag, field, SanitizeForLog(raw).c_str(),
         SanitizeForLog(expression).c_str());
     return false;

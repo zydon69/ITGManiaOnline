@@ -86,7 +86,7 @@ Font* FontManager::LoadFont(
 Font* FontManager::CopyFont(Font* pFont) {
   if (pFont == nullptr) {
     if (LOG != nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-810: attempted to copy a null font.");
+      LOG->Warn("attempted to copy a null font.");
     }
     return nullptr;
   }
@@ -96,7 +96,7 @@ Font* FontManager::CopyFont(Font* pFont) {
   if (!cached) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3144: refused to copy an uncached font pointer "
+          "refused to copy an uncached font pointer "
           "%p.",
           static_cast<void*>(pFont));
     }
@@ -128,7 +128,7 @@ void FontManager::UnloadFont(Font* fp) {
     if (fp->m_iRefCount <= 0) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-810: attempted to unload font '%s' with ref "
+            "attempted to unload font '%s' with ref "
             "count %d.",
             fp->path.c_str(), fp->m_iRefCount);
       }
@@ -146,7 +146,7 @@ void FontManager::UnloadFont(Font* fp) {
 
   if (LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-810: unloaded an unknown font (%p).",
+        "unloaded an unknown font (%p).",
         static_cast<void*>(fp));
   }
 }

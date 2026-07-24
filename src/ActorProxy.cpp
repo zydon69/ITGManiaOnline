@@ -26,7 +26,7 @@ ActorLifetimeRegistry() {
   return *registry;
 }
 
-void WarnActorProxyAuditFix(const char* message) {
+void WarnActorProxySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -117,8 +117,8 @@ ActorProxy::ActorProxy(const ActorProxy& cpy) : Actor(cpy) {
   m_pLifetimeToken = std::make_shared<LifetimeToken>();
   ActorProxyRegistry().insert(this);
   if (cpy.m_pActorTarget != nullptr) {
-    WarnActorProxyAuditFix(
-        "SRC_AUDIT_FIX SRC-2654: ActorProxy copy intentionally dropped target.");
+    WarnActorProxySafety(
+        "ActorProxy copy intentionally dropped target.");
   }
 }
 
@@ -174,8 +174,8 @@ void ActorProxy::SetTarget(Actor* pTarget) {
     return;
   }
   if (WouldCreateProxyCycle(this, pTarget)) {
-    WarnActorProxyAuditFix(
-        "SRC_AUDIT_FIX SRC-773: ActorProxy rejected cyclic target.");
+    WarnActorProxySafety(
+        "ActorProxy rejected cyclic target.");
     m_pActorTarget = nullptr;
     return;
   }
@@ -215,8 +215,8 @@ class LunaActorProxy : public Luna<ActorProxy> {
     void* rawTarget = nullptr;
     if (!LuaBinding::TryGetPointerFromStack(
             L, Luna<Actor>::m_sClassName, 1, rawTarget)) {
-      WarnActorProxyAuditFix(
-          "SRC_AUDIT_FIX SRC-2651: ActorProxy cleared stale Lua target.");
+      WarnActorProxySafety(
+          "ActorProxy cleared stale Lua target.");
       p->SetTarget(nullptr);
       COMMON_RETURN_SELF;
     }

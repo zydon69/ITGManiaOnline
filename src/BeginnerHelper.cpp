@@ -72,7 +72,7 @@ float GetSafeBeginnerHelperBPS() {
   if (GAMESTATE == nullptr || !std::isfinite(GAMESTATE->m_Position.m_fCurBPS) ||
       GAMESTATE->m_Position.m_fCurBPS <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-733: BeginnerHelper used fallback BPS because the "
+        "BeginnerHelper used fallback BPS because the "
         "current BPS is invalid.");
     return 1.0f;
   }
@@ -98,13 +98,13 @@ BeginnerHelper::~BeginnerHelper() {
 bool BeginnerHelper::Init(int iDancePadType) {
   if (m_bInitialized) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-730: BeginnerHelper::Init ignored duplicate init.");
+        "BeginnerHelper::Init ignored duplicate init.");
     return true;
   }
 
   if (THEME == nullptr || !CanUse(PLAYER_INVALID)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3113: BeginnerHelper cannot initialize without "
+        "BeginnerHelper cannot initialize without "
         "THEME or a compatible style.");
     return false;
   }
@@ -178,7 +178,7 @@ bool BeginnerHelper::Init(int iDancePadType) {
         break;
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-732: BeginnerHelper ignored invalid dance pad "
+            "BeginnerHelper ignored invalid dance pad "
             "type %d.",
             iDancePadType);
         break;
@@ -202,7 +202,7 @@ bool BeginnerHelper::Init(int iDancePadType) {
         GAMESTATE != nullptr ? GAMESTATE->m_pCurCharacters[pl] : nullptr;
     if (Character == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "BeginnerHelper disabled player %d because "
           "no character is assigned.",
           pl + 1);
       m_bPlayerEnabled[pl] = false;
@@ -214,7 +214,7 @@ bool BeginnerHelper::Init(int iDancePadType) {
     // Load textures
     if (!DoesFileExist(Character->GetModelPath())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "BeginnerHelper disabled player %d because "
           "model '%s' is missing.",
           pl + 1, Character->GetModelPath().c_str());
       m_bPlayerEnabled[pl] = false;
@@ -238,7 +238,7 @@ bool BeginnerHelper::Init(int iDancePadType) {
             "rest", Character->GetRestAnimationPath());
     if (!animationsLoaded) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-732: BeginnerHelper disabled player %d because "
+          "BeginnerHelper disabled player %d because "
           "one or more animations failed to load (rest='%s').",
           pl + 1, Character->GetRestAnimationPath().c_str());
       m_bPlayerEnabled[pl] = false;
@@ -262,7 +262,7 @@ bool BeginnerHelper::Init(int iDancePadType) {
 void BeginnerHelper::ShowStepCircle(PlayerNumber pn, int CSTEP) {
   if (!IsValidBeginnerHelperPlayer(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored step circle for "
+        "BeginnerHelper ignored step circle for "
         "invalid player %d.",
         static_cast<int>(pn));
     return;
@@ -285,7 +285,7 @@ void BeginnerHelper::ShowStepCircle(PlayerNumber pn, int CSTEP) {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored invalid step circle "
+          "BeginnerHelper ignored invalid step circle "
           "mask %d.",
           CSTEP);
       return;
@@ -304,7 +304,7 @@ void BeginnerHelper::AddPlayer(PlayerNumber pn, const NoteData& ns) {
   if (m_bInitialized || !IsValidBeginnerHelperPlayer(pn) ||
       GAMESTATE == nullptr || !GAMESTATE->IsHumanPlayer(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-731: BeginnerHelper refused AddPlayer pn=%d "
+        "BeginnerHelper refused AddPlayer pn=%d "
         "initialized=%d.",
         static_cast<int>(pn), m_bInitialized ? 1 : 0);
     return;
@@ -317,7 +317,7 @@ void BeginnerHelper::AddPlayer(PlayerNumber pn, const NoteData& ns) {
   const Character* Character = GAMESTATE->m_pCurCharacters[pn];
   if (Character == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-731: BeginnerHelper refused AddPlayer pn=%d "
+        "BeginnerHelper refused AddPlayer pn=%d "
         "without character.",
         static_cast<int>(pn));
     return;
@@ -333,7 +333,7 @@ void BeginnerHelper::AddPlayer(PlayerNumber pn, const NoteData& ns) {
 bool BeginnerHelper::CanUse(PlayerNumber pn) {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-730: BeginnerHelper cannot be used without "
+        "BeginnerHelper cannot be used without "
         "GAMESTATE.");
     return false;
   }
@@ -368,7 +368,7 @@ void BeginnerHelper::DrawPrimitives() {
   }
   if (PREFSMAN == nullptr || DISPLAY == nullptr || GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-734: BeginnerHelper skipped draw because global "
+        "BeginnerHelper skipped draw because global "
         "state is incomplete.");
     return;
   }
@@ -428,7 +428,7 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
   if (!IsValidBeginnerHelperPlayer(pn) || m_pDancer[pn] == nullptr ||
       !m_bPlayerEnabled[pn]) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored step for invalid or "
+        "BeginnerHelper ignored step for invalid or "
         "disabled player %d.",
         static_cast<int>(pn));
     return;
@@ -476,7 +476,7 @@ void BeginnerHelper::Step(PlayerNumber pn, int CSTEP) {
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-733: BeginnerHelper ignored unsupported step "
+          "BeginnerHelper ignored unsupported step "
           "mask %d.",
           CSTEP);
       return;
@@ -496,7 +496,7 @@ void BeginnerHelper::Update(float fDeltaTime) {
   }
   if (GAMESTATE == nullptr || !std::isfinite(fDeltaTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-734: BeginnerHelper skipped update because state "
+        "BeginnerHelper skipped update because state "
         "or delta time is invalid.");
     return;
   }
@@ -514,7 +514,7 @@ void BeginnerHelper::Update(float fDeltaTime) {
                              static_cast<int64_t>(m_iLastRowChecked);
   if (rowsToScan > MAX_BEGINNER_HELPER_ROWS_PER_UPDATE) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-734: BeginnerHelper capped row scan from %d to %d.",
+        "BeginnerHelper capped row scan from %d to %d.",
         m_iLastRowChecked, iCurRow);
     m_iLastRowChecked = iCurRow - MAX_BEGINNER_HELPER_ROWS_PER_UPDATE;
   }
@@ -536,7 +536,7 @@ void BeginnerHelper::Update(float fDeltaTime) {
       for (int t = 0; t < iNumTracks; t++) {
         if (t >= 30) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-735: BeginnerHelper ignored tracks above "
+              "BeginnerHelper ignored tracks above "
               "bitmask capacity for player %d.",
               static_cast<int>(pn));
           break;

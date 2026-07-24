@@ -39,7 +39,7 @@ SnapDisplay::SnapDisplay() {
     if (THEME != nullptr) {
       m_sprIndicators[i].Load(THEME->GetPathG("SnapDisplay", "icon 9x1"));
     } else {
-      WarnSnapDisplay("SRC_AUDIT_FIX SRC-1188: SnapDisplay loaded without THEME.");
+      WarnSnapDisplay("SnapDisplay loaded without THEME.");
     }
     m_sprIndicators[i].StopAnimating();
     this->AddChild(&m_sprIndicators[i]);
@@ -61,7 +61,7 @@ void SnapDisplay::Load() {
   }
   if (style == nullptr) {
     WarnSnapDisplay(
-        "SRC_AUDIT_FIX SRC-1189: SnapDisplay loaded without current style.");
+        "SnapDisplay loaded without current style.");
     m_iNumCols = 4;
   } else {
     m_iNumCols = std::clamp(style->m_iColsPerPlayer, 1, MAX_COLS_PER_PLAYER);

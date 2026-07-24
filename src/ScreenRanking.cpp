@@ -60,7 +60,7 @@ static std::string STEPS_TYPE_COLOR_NAME(size_t i) {
 namespace {
 void WarnScreenRanking(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenRanking: %s", message.c_str());
+    LOG->Warn("ScreenRanking: %s", message.c_str());
   }
 }
 

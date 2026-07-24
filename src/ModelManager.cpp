@@ -88,7 +88,7 @@ void ModelManager::UnloadModel(RageModelGeometry* m) {
   if (cached == m_mapFileToGeometry.end()) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3143: ignored uncached model geometry pointer %p.",
+          "ignored uncached model geometry pointer %p.",
           static_cast<void*>(m));
     }
     return;
@@ -96,7 +96,7 @@ void ModelManager::UnloadModel(RageModelGeometry* m) {
 
   if (m->m_iRefCount <= 0) {
     if (LOG != nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-799: duplicate unload of model geometry %p.",
+      LOG->Warn("duplicate unload of model geometry %p.",
                 static_cast<void*>(m));
     }
     return;

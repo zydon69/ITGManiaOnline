@@ -73,7 +73,7 @@ static std::string NormalizeCacheGroupName(const std::string& sGroup) {
   }
   if (sNormalized != sGroup) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-633: sanitized cache group '%s' to '%s'.",
+        "sanitized cache group '%s' to '%s'.",
         sGroup.c_str(), sNormalized.c_str());
   }
 
@@ -101,7 +101,7 @@ std::string SongCacheIndex::GetCacheFilePath(
 SongCacheIndex::SongCacheIndex()
     : Mutex("SongCacheIndex"), m_bDelaySaveCache(false) {
   LOG->Trace(
-      "SRC_AUDIT_FIX: SongCacheIndex initialized with SHA1 cache key mapping "
+      "SongCacheIndex initialized with SHA1 cache key mapping "
       "and delay_save_cache=false.");
   ReadCacheIndex();
 }
@@ -119,17 +119,17 @@ void SongCacheIndex::ReadFromDisk() { ReadCacheIndex(); }
 
 static void EmptyDir(std::string dir) {
   if (FILEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: refused to purge cache without FileManager.");
+    LOG->Warn("refused to purge cache without FileManager.");
     return;
   }
   if (dir.empty()) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-634: refused to empty an empty cache path.");
+    LOG->Warn("refused to empty an empty cache path.");
     return;
   }
   FixSlashesInPlace(dir);
   if (dir[dir.size() - 1] != '/') {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-634: cache path '%s' lacked trailing slash; "
+        "cache path '%s' lacked trailing slash; "
         "normalizing before purge.",
         dir.c_str());
     dir += '/';
@@ -141,7 +141,7 @@ static void EmptyDir(std::string dir) {
     const std::string sCachePath = dir + asCacheFileNames[i];
     if (!IsADirectory(sCachePath) && !FILEMAN->Remove(sCachePath)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-635: failed to remove stale cache file '%s'.",
+          "failed to remove stale cache file '%s'.",
           sCachePath.c_str());
     }
   }
@@ -163,7 +163,7 @@ void SongCacheIndex::ReadCacheIndex() {
     }
     if (bCacheIndexExists) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: preserving cache files after unreadable cache "
+          "preserving cache files after unreadable cache "
           "index '%s'.",
           sCacheIndexPath.c_str());
       return;
@@ -203,7 +203,7 @@ void SongCacheIndex::SaveCacheIndex() {
   const std::string sCacheIndexPath = CACHE_INDEX;
   if (!CacheIndex.WriteFile(sCacheIndexPath)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-631: failed to save cache index '%s': %s",
+        "failed to save cache index '%s': %s",
         sCacheIndexPath.c_str(), CacheIndex.GetError().c_str());
   }
 }
@@ -219,7 +219,7 @@ void SongCacheIndex::AddCacheIndex(const std::string& path, unsigned hash) {
     const std::string sCacheIndexPath = CACHE_INDEX;
     if (!CacheIndex.WriteFile(sCacheIndexPath)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-631: failed to save cache index '%s' after "
+          "failed to save cache index '%s' after "
           "adding '%s': %s",
           sCacheIndexPath.c_str(), path.c_str(), CacheIndex.GetError().c_str());
     }

@@ -131,7 +131,7 @@ bool IsValidEvaluationPlayer(PlayerNumber pn) {
 bool IsThemeRuntimeAvailable(const char* context) {
   if (THEME == nullptr || !THEME->IsThemeLoaded() || LUA == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s used fallback because theme runtime is "
+        "%s used fallback because theme runtime is "
         "unavailable.",
         context);
     return false;
@@ -148,7 +148,7 @@ float GetEvaluationMetricF(
   }
   if (!THEME->HasMetric(screenName, metric)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation used fallback for missing theme "
+        "ScreenEvaluation used fallback for missing theme "
         "metric %s::%s.",
         screenName.c_str(), metric.c_str());
     return fallback;
@@ -157,7 +157,7 @@ float GetEvaluationMetricF(
   const float value = THEME->GetMetricF(screenName, metric);
   if (!std::isfinite(value) || (requireNonNegative && value < 0.0f)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation clamped invalid theme metric %s::%s "
+        "ScreenEvaluation clamped invalid theme metric %s::%s "
         "value %f to %f.",
         screenName.c_str(), metric.c_str(), value, fallback);
     return fallback;
@@ -173,7 +173,7 @@ bool GetEvaluationMetricB(
   }
   if (!THEME->HasMetric(screenName, metric)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation used fallback for missing theme "
+        "ScreenEvaluation used fallback for missing theme "
         "metric %s::%s.",
         screenName.c_str(), metric.c_str());
     return fallback;
@@ -190,7 +190,7 @@ std::string GetEvaluationMetricString(
   }
   if (!THEME->HasMetric(screenName, metric)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation used fallback for missing theme "
+        "ScreenEvaluation used fallback for missing theme "
         "metric %s::%s.",
         screenName.c_str(), metric.c_str());
     return fallback;
@@ -216,7 +216,7 @@ float ClampFiniteNonNegativeEvaluationFloat(
     float value, const char* field, float fallback = 0.0f) {
   if (!std::isfinite(value) || value < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation normalized invalid %s value %f to "
+        "ScreenEvaluation normalized invalid %s value %f to "
         "%f.",
         field, value, fallback);
     return fallback;
@@ -227,7 +227,7 @@ float ClampFiniteNonNegativeEvaluationFloat(
 int ClampNonNegativeEvaluationInt(int value, const char* field) {
   if (value < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation clamped negative %s value %i to 0.",
+        "ScreenEvaluation clamped negative %s value %i to 0.",
         field, value);
     return 0;
   }
@@ -240,7 +240,7 @@ int AddNonNegativeEvaluationIntSaturated(
   add = ClampNonNegativeEvaluationInt(add, field);
   if (add > std::numeric_limits<int>::max() - current) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation saturated %s integer sum %i + %i.",
+        "ScreenEvaluation saturated %s integer sum %i + %i.",
         field, current, add);
     return std::numeric_limits<int>::max();
   }
@@ -251,7 +251,7 @@ int RoundNonNegativeRadarValue(float value, const char* field) {
   value = ClampFiniteNonNegativeEvaluationFloat(value, field);
   if (value > static_cast<float>(std::numeric_limits<int>::max())) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation saturated %s radar value %f.",
+        "ScreenEvaluation saturated %s radar value %f.",
         field, value);
     return std::numeric_limits<int>::max();
   }
@@ -307,7 +307,7 @@ std::string FormatDetailLine(
     const std::string& format, int actual, int possible) {
   if (!DetailLineFormatAcceptsTwoIntegers(format)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation used fallback for invalid "
+        "ScreenEvaluation used fallback for invalid "
         "DetailLineFormat '%s'.",
         format.c_str());
     return ssprintf("%3d/%3d", actual, possible);
@@ -394,7 +394,7 @@ bool IsEvaluationCourseMode(const StageStats* stageStats) {
       return false;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScreenEvaluation treated invalid recorded play "
+          "ScreenEvaluation treated invalid recorded play "
           "mode %i as non-course.",
           stageStats->m_playMode);
       return false;
@@ -564,13 +564,13 @@ void ScreenEvaluation::Init() {
     if (PROFILEMAN == nullptr || STATSMAN == nullptr || GAMESTATE == nullptr ||
         GAMEMAN == nullptr || SONGMAN == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScreenEvaluation skipped fake stats because a "
+          "ScreenEvaluation skipped fake stats because a "
           "required manager is unavailable.");
     } else if (Song* debugSong = SONGMAN->GetRandomSong()) {
       const std::vector<Steps*>& debugSteps = debugSong->GetAllSteps();
       if (debugSteps.empty() || debugSteps[0] == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScreenEvaluation skipped fake stats for song with "
+            "ScreenEvaluation skipped fake stats for song with "
             "no usable steps.");
       } else {
         PROFILEMAN->LoadFirstAvailableProfile(PLAYER_1);
@@ -716,14 +716,14 @@ void ScreenEvaluation::Init() {
       }
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScreenEvaluation skipped fake stats because no "
+          "ScreenEvaluation skipped fake stats because no "
           "debug song was available.");
     }
   }
 
   if (STATSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation cannot initialize without "
+        "ScreenEvaluation cannot initialize without "
         "STATSMAN.");
     ScreenWithMenuElements::Init();
     return;
@@ -818,7 +818,7 @@ void ScreenEvaluation::Init() {
         Song* pSong = m_pStageStats->m_vpPlayedSongs[i];
         if (pSong == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: ScreenEvaluation skipped null summary song at "
+              "ScreenEvaluation skipped null summary song at "
               "index %zu.",
               i);
           continue;
@@ -847,7 +847,7 @@ void ScreenEvaluation::Init() {
           m_LargeBanner.LoadFromSong(pSong);
         } else {
           LOG->Warn(
-              "SRC_AUDIT_FIX: ScreenEvaluation has no song/course for large "
+              "ScreenEvaluation has no song/course for large "
               "banner.");
         }
       }
@@ -870,7 +870,7 @@ void ScreenEvaluation::Init() {
       for (const PlayerNumber& p : evaluationPlayers) {
         if (GAMESTATE == nullptr || GAMESTATE->m_pPlayerState[p] == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: ScreenEvaluation skipped player options for "
+              "ScreenEvaluation skipped player options for "
               "player %i because PlayerState is unavailable.",
               p);
           continue;
@@ -942,7 +942,7 @@ void ScreenEvaluation::Init() {
     for (const PlayerNumber& p : evaluationPlayers) {
       if (GAMESTATE == nullptr || GAMESTATE->m_pPlayerState[p] == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScreenEvaluation skipped percent display for "
+            "ScreenEvaluation skipped percent display for "
             "player %i because PlayerState is unavailable.",
             p);
         continue;
@@ -978,7 +978,7 @@ void ScreenEvaluation::Init() {
         fDivider = 1.0f / static_cast<float>(courseEntries);
       } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScreenEvaluation used bonus divider fallback for "
+            "ScreenEvaluation used bonus divider fallback for "
             "empty course stats.");
       }
     }
@@ -1004,7 +1004,7 @@ void ScreenEvaluation::Init() {
         }
         if (actual > possible) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: ScreenEvaluation clamped radar actual %f to "
+              "ScreenEvaluation clamped radar actual %f to "
               "possible %f.",
               actual, possible);
           actual = possible;
@@ -1086,7 +1086,7 @@ void ScreenEvaluation::Init() {
       const int numStates = m_sprWin[p].GetNumStates();
       if (numStates > 0 && (iFrame < 0 || iFrame >= numStates)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScreenEvaluation clamped win frame %i to range "
+            "ScreenEvaluation clamped win frame %i to range "
             "0..%i.",
             iFrame, numStates - 1);
         rage_clamp(iFrame, 0, numStates - 1);
@@ -1201,7 +1201,7 @@ void ScreenEvaluation::Init() {
             break;
           default:
             LOG->Warn(
-                "SRC_AUDIT_FIX: ScreenEvaluation ignored invalid judgment "
+                "ScreenEvaluation ignored invalid judgment "
                 "line %i.",
                 l);
             break;
@@ -1415,7 +1415,7 @@ bool ScreenEvaluation::Input(const InputEventPlus& input) {
       PlayerNumber pn = input.pn;
       if (!IsValidEvaluationPlayer(pn)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: ScreenEvaluation ignored screenshot for invalid "
+            "ScreenEvaluation ignored screenshot for invalid "
             "player %i.",
             pn);
         return true;
@@ -1428,14 +1428,14 @@ bool ScreenEvaluation::Input(const InputEventPlus& input) {
         if (fromMemoryCard) {
           if (MEMCARDMAN == nullptr) {
             LOG->Warn(
-                "SRC_AUDIT_FIX: ScreenEvaluation skipped screenshot because "
+                "ScreenEvaluation skipped screenshot because "
                 "MEMCARDMAN is unavailable.");
             return true;
           }
           mountedMemoryCard = MEMCARDMAN->MountCard(pn);
           if (!mountedMemoryCard) {
             LOG->Warn(
-                "SRC_AUDIT_FIX: ScreenEvaluation skipped screenshot because "
+                "ScreenEvaluation skipped screenshot because "
                 "memory card mount failed for player %i.",
                 pn);
             return true;
@@ -1445,7 +1445,7 @@ bool ScreenEvaluation::Input(const InputEventPlus& input) {
         Profile* pProfile = PROFILEMAN->GetProfile(pn);
         if (pProfile == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: ScreenEvaluation skipped screenshot because "
+              "ScreenEvaluation skipped screenshot because "
               "profile is unavailable for player %i.",
               pn);
           if (mountedMemoryCard) {
@@ -1541,7 +1541,7 @@ bool ScreenEvaluation::MenuRestart(const InputEventPlus& input) {
   if (SCREENMAN == nullptr || THEME == nullptr || !THEME->IsThemeLoaded() ||
       !SCREENMAN->IsScreenNameValid("ScreenGameplay")) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation refused restart because "
+        "ScreenEvaluation refused restart because "
         "ScreenGameplay is unavailable.");
     return false;
   }
@@ -1549,7 +1549,7 @@ bool ScreenEvaluation::MenuRestart(const InputEventPlus& input) {
   Screen* topScreen = SCREENMAN->GetTopScreen();
   if (topScreen == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScreenEvaluation refused restart because top screen "
+        "ScreenEvaluation refused restart because top screen "
         "is unavailable.");
     return false;
   }
@@ -1607,7 +1607,7 @@ bool ScreenEvaluation::OnlineEvaluationAutoAdvanceBlocked() const {
       LuaHelpers::Pop(L, blocked);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: ScreenEvaluation online auto advance gate returned "
+          "ScreenEvaluation online auto advance gate returned "
           "a non-boolean value.");
       lua_pop(L, 1);
     }

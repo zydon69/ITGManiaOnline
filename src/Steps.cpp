@@ -96,7 +96,7 @@ PlayerNumber SafePlayerNumber(PlayerNumber pn, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX: Invalid PlayerNumber %i in Steps::%s; using PLAYER_1.",
+      "Invalid PlayerNumber %i in Steps::%s; using PLAYER_1.",
       pn, context);
   return PLAYER_1;
 }
@@ -104,7 +104,7 @@ PlayerNumber SafePlayerNumber(PlayerNumber pn, const char* context) {
 int GetTrackCountForStepsType(StepsType st, const char* context) {
   if (!IsPlayableStepsType(st)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid StepsType %i in Steps::%s; using 0 tracks.",
+        "Invalid StepsType %i in Steps::%s; using 0 tracks.",
         st, context);
     return 0;
   }
@@ -115,7 +115,7 @@ const StepsTypeInfo* GetSafeStepsTypeInfo(
     StepsType st, const char* context) {
   if (!IsPlayableStepsType(st)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid StepsType %i in Steps::%s; skipping typed "
+        "Invalid StepsType %i in Steps::%s; skipping typed "
         "operation.",
         st, context);
     return nullptr;
@@ -245,7 +245,7 @@ const Steps* Steps::Real() const {
   }
   if (m_pSong == nullptr || !m_pSong->OwnsSteps(parent)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-605: autogen steps '%s' have a stale parent; using "
+        "autogen steps '%s' have a stale parent; using "
         "local data.",
         m_sFilename.c_str());
     return this;
@@ -279,7 +279,7 @@ unsigned Steps::GetHash() const {
     GetSMNoteData(noteDataForHash);
     if (noteDataForHash.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-602: no note data available while hashing '%s'.",
+          "no note data available while hashing '%s'.",
           m_sFilename.c_str());
       return 0;
     }
@@ -364,7 +364,7 @@ void Steps::SetNoteData(const NoteData& noteDataNew) {
       GetTrackCountForStepsType(m_StepsType, "SetNoteData");
   if (expectedTracks > 0 && noteDataNew.GetNumTracks() != expectedTracks) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Adjusting NoteData tracks for StepsType %i in '%s': "
+        "Adjusting NoteData tracks for StepsType %i in '%s': "
         "got %i, expected %i.",
         m_StepsType, m_sFilename.c_str(), noteDataNew.GetNumTracks(),
         expectedTracks);
@@ -414,7 +414,7 @@ void Steps::GetSMNoteData(std::string& notes_comp_out) const {
 
     if (!m_bNoteDataIsFilled) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Returning empty SM note data for '%s' because no "
+          "Returning empty SM note data for '%s' because no "
           "NoteData could be loaded.",
           m_sFilename.c_str());
       notes_comp_out = "";
@@ -446,7 +446,7 @@ float Steps::PredictMeter() const {
     pMeter += DifficultyCoeffs[difficulty];
   } else {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid Difficulty %i in Steps::PredictMeter for "
+        "Invalid Difficulty %i in Steps::PredictMeter for "
         "'%s'; ignoring difficulty coefficient.",
         difficulty, m_sFilename.c_str());
   }
@@ -589,7 +589,7 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
       NoteAnnotationCache cachedAnnotations;
       if (splitNoteData.size() <= static_cast<size_t>(pn)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-642: missing split NoteData for player %i in "
+            "missing split NoteData for player %i in "
             "%s; marking tech counts unknown.",
             pn, m_StepsTypeStr.c_str());
         m_TechCounts[pn].MakeUnknown();
@@ -611,7 +611,7 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
       StepParity::StepParityGenerator gen(&*layout, timing);
       if (!gen.analyzeNoteData(splitNoteData[pn])) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s player "
+            "StepParity analysis failed for %s player "
             "%i; marking tech counts unknown.",
             m_StepsTypeStr.c_str(), pn);
         m_TechCounts[pn].MakeUnknown();
@@ -635,7 +635,7 @@ void Steps::CalculateTechCounts(const NoteData& tempNoteData) {
     StepParity::StepParityGenerator gen(&*layout, timing);
     if (!gen.analyzeNoteData(tempNoteData)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-642: StepParity analysis failed for %s; marking "
+          "StepParity analysis failed for %s; marking "
           "tech counts unknown.",
           m_StepsTypeStr.c_str());
       FOREACH_PlayerNumber(pn) m_TechCounts[pn].MakeUnknown();
@@ -878,7 +878,7 @@ void Steps::DeAutogen(bool bCopyNoteData) {
 
 void Steps::AutogenFrom(const Steps* parent_, StepsType ntTo) {
   if (parent_ == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Refusing to autogen Steps from null parent.");
+    LOG->Warn("Refusing to autogen Steps from null parent.");
     parent = nullptr;
     m_StepsType = StepsType_Invalid;
     m_StepsTypeStr.clear();
@@ -914,7 +914,7 @@ void Steps::CopyFrom(
     return;
   }
   if (pSource == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: CopyFrom received null source; creating blank.");
+    LOG->Warn("CopyFrom received null source; creating blank.");
     CreateBlank(ntTo);
     CalculateStepStats(fMusicLengthSeconds);
     return;
@@ -994,7 +994,7 @@ void Steps::SetDisplayBPM(const DisplayBPM type) {
   DeAutogen();
   if (!IsValidDisplayBPM(type)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid DisplayBPM %i for '%s'; using Actual.",
+        "Invalid DisplayBPM %i for '%s'; using Actual.",
         type, m_sFilename.c_str());
     displayBPMType = DISPLAY_BPM_ACTUAL;
     return;
@@ -1005,7 +1005,7 @@ void Steps::SetDisplayBPM(const DisplayBPM type) {
 DisplayBPM Steps::GetDisplayBPM() const {
   if (!IsValidDisplayBPM(Real()->displayBPMType)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid stored DisplayBPM %i for '%s'; treating as "
+        "Invalid stored DisplayBPM %i for '%s'; treating as "
         "Actual.",
         Real()->displayBPMType, Real()->m_sFilename.c_str());
     return DISPLAY_BPM_ACTUAL;
@@ -1014,7 +1014,7 @@ DisplayBPM Steps::GetDisplayBPM() const {
       (!IsPositiveFinite(Real()->specifiedBPMMin) ||
        !IsPositiveFinite(Real()->specifiedBPMMax))) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid specified DisplayBPM range %.6f..%.6f for "
+        "Invalid specified DisplayBPM range %.6f..%.6f for "
         "'%s'; treating as Actual.",
         Real()->specifiedBPMMin, Real()->specifiedBPMMax,
         Real()->m_sFilename.c_str());
@@ -1027,7 +1027,7 @@ void Steps::SetMinBPM(const float f) {
   DeAutogen();
   if (!std::isfinite(f) || f < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid minimum DisplayBPM %.6f for '%s'; using 0.",
+        "Invalid minimum DisplayBPM %.6f for '%s'; using 0.",
         f, m_sFilename.c_str());
     specifiedBPMMin = 0.0f;
     return;
@@ -1047,7 +1047,7 @@ void Steps::SetMaxBPM(const float f) {
   DeAutogen();
   if (!std::isfinite(f) || f < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid maximum DisplayBPM %.6f for '%s'; using 0.",
+        "Invalid maximum DisplayBPM %.6f for '%s'; using 0.",
         f, m_sFilename.c_str());
     specifiedBPMMax = 0.0f;
     return;
@@ -1069,7 +1069,7 @@ const TimingData* Steps::GetTimingData() const {
   }
   if (m_pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-604: steps '%s' have no parent song timing; using "
+        "steps '%s' have no parent song timing; using "
         "local timing.",
         m_sFilename.c_str());
     return &m_Timing;
@@ -1099,7 +1099,7 @@ bool Steps::HasSignificantTimingChanges() const {
 const std::string Steps::GetMusicPath() const {
   if (m_pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-604: steps '%s' have no parent song for music "
+        "steps '%s' have no parent song for music "
         "path.",
         m_sFilename.c_str());
     return std::string();

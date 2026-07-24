@@ -62,7 +62,7 @@ GrooveRadar::GrooveRadar() {
   if (THEME != nullptr) {
     m_sprRadarBase.Load(THEME->GetPathG("GrooveRadar", "base"));
   } else {
-    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1150: GrooveRadar loaded without THEME.");
+    WarnGrooveRadar("GrooveRadar loaded without THEME.");
     m_sprRadarBase.LoadFallback();
   }
   if (m_sprRadarBase.IsLoaded()) {
@@ -140,7 +140,7 @@ void GrooveRadar::SetEmpty(PlayerNumber pn) { SetFromSteps(pn, nullptr); }
 
 void GrooveRadar::SetFromRadarValues(PlayerNumber pn, const RadarValues& rv) {
   if (!IsValidGrooveRadarPlayer(pn)) {
-    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    WarnGrooveRadar("GrooveRadar ignored invalid player.");
     return;
   }
   m_GrooveRadarValueMap[pn].SetFromSteps(rv);
@@ -150,7 +150,7 @@ void GrooveRadar::SetFromSteps(
     PlayerNumber pn, Steps* pSteps)  // nullptr means no Song
 {
   if (!IsValidGrooveRadarPlayer(pn)) {
-    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    WarnGrooveRadar("GrooveRadar ignored invalid player.");
     return;
   }
   if (pSteps == nullptr) {
@@ -164,7 +164,7 @@ void GrooveRadar::SetFromSteps(
 
 void GrooveRadar::SetFromValues(PlayerNumber pn, std::vector<float> vals) {
   if (!IsValidGrooveRadarPlayer(pn)) {
-    WarnGrooveRadar("SRC_AUDIT_FIX SRC-1151: GrooveRadar ignored invalid player.");
+    WarnGrooveRadar("GrooveRadar ignored invalid player.");
     return;
   }
   m_GrooveRadarValueMap[pn].SetFromValues(vals);

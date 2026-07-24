@@ -44,7 +44,7 @@ std::list<SyncPromptContext> g_PromptContexts;
 
 void WarnSaveSync(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenSaveSync: %s", message.c_str());
+    LOG->Warn("ScreenSaveSync: %s", message.c_str());
   }
 }
 

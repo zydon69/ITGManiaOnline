@@ -16,7 +16,7 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayBattleAuditFix(const char* message) {
+void WarnScoreDisplayBattleSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -45,8 +45,8 @@ ScoreDisplayBattle::ScoreDisplayBattle() {
   if (THEME != nullptr) {
     m_sprFrame.Load(THEME->GetPathG("ScoreDisplayBattle", "frame"));
   } else {
-    WarnScoreDisplayBattleAuditFix(
-        "SRC_AUDIT_FIX SRC-1106: ScoreDisplayBattle constructed without "
+    WarnScoreDisplayBattleSafety(
+        "ScoreDisplayBattle constructed without "
         "THEME.");
   }
   this->AddChild(&m_sprFrame);
@@ -81,7 +81,7 @@ void ScoreDisplayBattle::Update(float fDelta) {
 
   if (m_pPlayerState == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-240: ScoreDisplayBattle skipped update without "
+        "ScoreDisplayBattle skipped update without "
         "PlayerState.");
     return;
   }
@@ -98,8 +98,8 @@ void ScoreDisplayBattle::Update(float fDelta) {
             ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
       } else {
         if (THEME == nullptr || !IsSafeBattleModifierName(sNewModifier)) {
-          WarnScoreDisplayBattleAuditFix(
-              "SRC_AUDIT_FIX SRC-1107: ScoreDisplayBattle hid unsafe or "
+          WarnScoreDisplayBattleSafety(
+              "ScoreDisplayBattle hid unsafe or "
               "unavailable modifier icon.");
           m_ItemIcon[s].RunCommands(
               ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));
@@ -108,8 +108,8 @@ void ScoreDisplayBattle::Update(float fDelta) {
         const std::string iconPath = THEME->GetPathG(
             "ScoreDisplayBattle", "icon " + sNewModifier, true);
         if (iconPath.empty()) {
-          WarnScoreDisplayBattleAuditFix(
-              "SRC_AUDIT_FIX SRC-240: ScoreDisplayBattle missing icon for "
+          WarnScoreDisplayBattleSafety(
+              "ScoreDisplayBattle missing icon for "
               "modifier.");
           m_ItemIcon[s].RunCommands(
               ActorUtil::ParseActorCommands("linear,0.25;zoom,0"));

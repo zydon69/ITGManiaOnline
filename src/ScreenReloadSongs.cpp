@@ -98,7 +98,7 @@ class ScreenReloadSongsLoadingWindow : public LoadingWindow {
 namespace {
 void WarnScreenReloadSongs(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenReloadSongs: %s", message.c_str());
+    LOG->Warn("ScreenReloadSongs: %s", message.c_str());
   }
 }
 

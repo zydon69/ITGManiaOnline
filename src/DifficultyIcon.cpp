@@ -19,7 +19,7 @@
 REGISTER_ACTOR_CLASS(DifficultyIcon);
 
 namespace {
-void WarnDifficultyIconAuditFix(const std::string& message) {
+void WarnDifficultyIconSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -41,8 +41,8 @@ DifficultyIcon::DifficultyIcon() {
 
 bool DifficultyIcon::Load(std::string sPath) {
   if (sPath.empty() || !DoesFileExist(sPath)) {
-    WarnDifficultyIconAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1063: DifficultyIcon refused missing file '%s'.",
+    WarnDifficultyIconSafety(ssprintf(
+        "DifficultyIcon refused missing file '%s'.",
         sPath.c_str()));
     Unset();
     return false;
@@ -71,8 +71,8 @@ bool DifficultyIcon::Load(std::string sPath) {
 
 void DifficultyIcon::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnDifficultyIconAuditFix(
-        "SRC_AUDIT_FIX SRC-1064: DifficultyIcon ignored null XML node.");
+    WarnDifficultyIconSafety(
+        "DifficultyIcon ignored null XML node.");
     Unset();
     return;
   }
@@ -93,8 +93,8 @@ void DifficultyIcon::LoadFromNode(const XNode* pNode) {
 
 void DifficultyIcon::SetPlayer(PlayerNumber pn) {
   if (!IsValidDifficultyIconPlayer(pn)) {
-    WarnDifficultyIconAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1065: DifficultyIcon ignored invalid player %d.",
+    WarnDifficultyIconSafety(ssprintf(
+        "DifficultyIcon ignored invalid player %d.",
         pn));
     m_PlayerNumber = PLAYER_1;
     return;
@@ -124,8 +124,8 @@ void DifficultyIcon::Unset() { m_bBlank = true; }
 
 void DifficultyIcon::SetFromDifficulty(Difficulty dc) {
   if (!IsValidDifficultyIconDifficulty(dc)) {
-    WarnDifficultyIconAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1066: DifficultyIcon unset invalid difficulty %d.",
+    WarnDifficultyIconSafety(ssprintf(
+        "DifficultyIcon unset invalid difficulty %d.",
         dc));
     Unset();
     return;

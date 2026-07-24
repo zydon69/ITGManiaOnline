@@ -48,7 +48,7 @@ bool IsPositiveFiniteActorValue(float value) {
   return IsFiniteActorValue(value) && value > 0.0f;
 }
 
-void WarnActorAuditFix(const char* message) {
+void WarnActorSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -114,8 +114,8 @@ void Actor::SetBGMTime(
 void Actor::SetPlayerBGMBeat(
     PlayerNumber pn, float fBeat, float fBeatNoOffset) {
   if (!IsValidPlayerNumberForActor(pn)) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-743: Actor ignored invalid player BGM beat.");
+    WarnActorSafety(
+        "Actor ignored invalid player BGM beat.");
     return;
   }
   g_vfCurrentBGMBeatPlayer[pn] = IsFiniteActorValue(fBeat) ? fBeat : 0.0f;
@@ -125,7 +125,7 @@ void Actor::SetPlayerBGMBeat(
 
 void Actor::SetBGMLight(int iLightNumber, float fCabinetLights) {
   if (iLightNumber < 0 || iLightNumber >= NUM_CabinetLight) {
-    WarnActorAuditFix("SRC_AUDIT_FIX SRC-743: Actor ignored invalid BGM light.");
+    WarnActorSafety("Actor ignored invalid BGM light.");
     return;
   }
   g_fCabinetLights[iLightNumber] =
@@ -243,8 +243,8 @@ Actor::Actor(const Actor& cpy) : MessageSubscriber(cpy) {
   for (size_t i = 0; i < cpy.m_WrapperStates.size(); ++i) {
     ActorFrame* wrapper = dynamic_cast<ActorFrame*>(cpy.m_WrapperStates[i]);
     if (wrapper == nullptr) {
-      WarnActorAuditFix(
-          "SRC_AUDIT_FIX SRC-750: Actor skipped invalid wrapper during copy.");
+      WarnActorSafety(
+          "Actor skipped invalid wrapper during copy.");
       continue;
     }
     m_WrapperStates.push_back(new ActorFrame(*wrapper));
@@ -412,7 +412,7 @@ bool Actor::IsAlias(const std::string& name) {
  * former is more important. */
 void Actor::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnActorAuditFix("SRC_AUDIT_FIX SRC-744: Actor ignored null XML node.");
+    WarnActorSafety("Actor ignored null XML node.");
     return;
   }
   Lua* L = LUA != nullptr ? LUA->Get() : nullptr;
@@ -422,8 +422,8 @@ void Actor::LoadFromNode(const XNode* pNode) {
     const XNodeValue* pValue = pAttr->second;
     if (EndsWith(sKeyName, "Command")) {
       if (L == nullptr) {
-        WarnActorAuditFix(
-            "SRC_AUDIT_FIX SRC-744: Actor skipped XML command without Lua.");
+        WarnActorSafety(
+            "Actor skipped XML command without Lua.");
         continue;
       }
       LuaReference* pRef = new LuaReference;
@@ -730,8 +730,8 @@ void Actor::PreDraw()  // calculate actor properties
         m_current_with_effects.scale.z *= c.b;
       } break;
       default:
-        WarnActorAuditFix(
-            "SRC_AUDIT_FIX SRC-746: Actor stopped invalid effect.");
+        WarnActorSafety(
+            "Actor stopped invalid effect.");
         StopEffect();
         break;
     }
@@ -923,8 +923,8 @@ void Actor::CalcPercentThroughTween() {
 
 void Actor::UpdateTweening(float fDeltaTime) {
   if (!IsFiniteActorValue(fDeltaTime)) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-747: Actor ignored non-finite tween delta.");
+    WarnActorSafety(
+        "Actor ignored non-finite tween delta.");
     return;
   }
   if (fDeltaTime < 0.0 && !m_Tweens.empty() && m_Tweens[0] != nullptr) {
@@ -994,7 +994,7 @@ bool Actor::IsFirstUpdate() const { return m_bFirstUpdate; }
 void Actor::Update(float fDeltaTime) {
   //	LOG->Trace( "Actor::Update( %f )", fDeltaTime );
   if (!IsFiniteActorValue(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnActorAuditFix("SRC_AUDIT_FIX SRC-747: Actor ignored invalid delta.");
+    WarnActorSafety("Actor ignored invalid delta.");
     return;
   }
 
@@ -1007,8 +1007,8 @@ void Actor::Update(float fDeltaTime) {
     if (rate != 0) {
       fDeltaTime *= (1 / rate);
       if (!IsFiniteActorValue(fDeltaTime) || fDeltaTime < 0.0f) {
-        WarnActorAuditFix(
-            "SRC_AUDIT_FIX SRC-3120: Actor rejected an overflowing scaled "
+        WarnActorSafety(
+            "Actor rejected an overflowing scaled "
             "update delta.");
         return;
       }
@@ -1155,8 +1155,8 @@ void Actor::AddWrapperState() {
 
 void Actor::RemoveWrapperState(size_t i) {
   if (i >= m_WrapperStates.size()) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-750: Actor ignored invalid wrapper removal.");
+    WarnActorSafety(
+        "Actor ignored invalid wrapper removal.");
     return;
   }
   RageUtil::SafeDelete(m_WrapperStates[i]);
@@ -1165,8 +1165,8 @@ void Actor::RemoveWrapperState(size_t i) {
 
 Actor* Actor::GetWrapperState(size_t i) {
   if (i >= m_WrapperStates.size()) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-750: Actor rejected invalid wrapper lookup.");
+    WarnActorSafety(
+        "Actor rejected invalid wrapper lookup.");
     return nullptr;
   }
   return m_WrapperStates[i];
@@ -1175,8 +1175,8 @@ Actor* Actor::GetWrapperState(size_t i) {
 void Actor::BeginTweening(float time, ITween* pTween) {
   if (!IsFiniteActorValue(time) || time < 0.0f || pTween == nullptr) {
     delete pTween;
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-747: Actor rejected invalid tween.");
+    WarnActorSafety(
+        "Actor rejected invalid tween.");
     return;
   }
 
@@ -1214,8 +1214,8 @@ void Actor::BeginTweening(float time, ITween* pTween) {
 
 void Actor::BeginTweening(float time, TweenType tt) {
   if (!IsFiniteActorValue(time) || time < 0.0f) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-747: Actor rejected invalid tween time.");
+    WarnActorSafety(
+        "Actor rejected invalid tween time.");
     return;
   }
 
@@ -1239,8 +1239,8 @@ void Actor::FinishTweening() {
 
 void Actor::HurryTweening(float factor) {
   if (!IsFiniteActorValue(factor) || factor < 0.0f) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-747: Actor ignored invalid hurry factor.");
+    WarnActorSafety(
+        "Actor ignored invalid hurry factor.");
     return;
   }
   for (unsigned i = 0; i < m_Tweens.size(); ++i) {
@@ -1253,8 +1253,8 @@ void Actor::HurryTweening(float factor) {
       if (!std::isfinite(timeLeft) || !std::isfinite(tweenTime) ||
           timeLeft > std::numeric_limits<float>::max() ||
           tweenTime > std::numeric_limits<float>::max()) {
-        WarnActorAuditFix(
-            "SRC_AUDIT_FIX SRC-3120: Actor ignored an overflowing hurry "
+        WarnActorSafety(
+            "Actor ignored an overflowing hurry "
             "factor.");
         continue;
       }
@@ -1344,8 +1344,8 @@ void Actor::SetEffectClock(EffectClock c) {
     return;
   }
 
-  WarnActorAuditFix(
-      "SRC_AUDIT_FIX SRC-743: Actor replaced invalid effect clock.");
+  WarnActorSafety(
+      "Actor replaced invalid effect clock.");
   m_EffectClock = CLOCK_TIMER;
 }
 
@@ -1379,8 +1379,8 @@ void Actor::RecalcEffectPeriod() {
 
 void Actor::SetEffectPeriod(float time) {
   if (!IsPositiveFiniteActorValue(time)) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-746: Actor replaced invalid effect period.");
+    WarnActorSafety(
+        "Actor replaced invalid effect period.");
     time = default_effect_period;
   }
   m_effect_ramp_to_half = time / 2;
@@ -1566,8 +1566,8 @@ void Actor::AddRotationR(float rot) {
 void Actor::RunCommands(
     const LuaReference& cmds, const LuaReference* pParamTable) {
   if (LUA == nullptr) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-744: Actor skipped command without Lua.");
+    WarnActorSafety(
+        "Actor skipped command without Lua.");
     return;
   }
   if (!cmds.IsSet() || cmds.IsNil()) {
@@ -1750,7 +1750,7 @@ void Actor::TweenState::MakeWeightedAverage(
 
 void Actor::Sleep(float time) {
   if (!IsFiniteActorValue(time) || time < 0.0f) {
-    WarnActorAuditFix("SRC_AUDIT_FIX SRC-747: Actor ignored invalid sleep.");
+    WarnActorSafety("Actor ignored invalid sleep.");
     return;
   }
 
@@ -1833,8 +1833,8 @@ void Actor::PushContext(lua_State* L) {
 
 void Actor::SetParent(Actor* pParent) {
   if (pParent != nullptr && WouldCreateParentCycle(this, pParent)) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-751: Actor rejected cyclic parent assignment.");
+    WarnActorSafety(
+        "Actor rejected cyclic parent assignment.");
     return;
   }
 
@@ -1863,8 +1863,8 @@ void Actor::SetParent(Actor* pParent) {
 
 void Actor::SetFakeParent(Actor* mailman) {
   if (mailman != nullptr && WouldCreateParentCycle(this, mailman)) {
-    WarnActorAuditFix(
-        "SRC_AUDIT_FIX SRC-751: Actor rejected cyclic fake parent.");
+    WarnActorSafety(
+        "Actor rejected cyclic fake parent.");
     return;
   }
   m_FakeParent = mailman;

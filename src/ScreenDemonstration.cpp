@@ -34,7 +34,7 @@ float GetSecondsToShow(const std::string& screenName) {
   float seconds = THEME->GetMetricF(screenName, "SecondsToShow");
   if (!std::isfinite(seconds) || seconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1937: %s SecondsToShow is invalid; using %.1f.",
+        "%s SecondsToShow is invalid; using %.1f.",
         screenName.c_str(), kFallbackSeconds);
     return kFallbackSeconds;
   }
@@ -59,7 +59,7 @@ std::vector<StyleType> GetAllowedStyleTypes(const std::string& screenName) {
     StyleType styleType = StringToStyleType(styleTypeName);
     if (styleType == StyleType_Invalid) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1934: ignoring invalid demonstration style type "
+          "ignoring invalid demonstration style type "
           "'%s'.",
           styleTypeName.c_str());
       continue;
@@ -82,7 +82,7 @@ ScreenDemonstration::ScreenDemonstration() { m_bDemonstration = true; }
 void ScreenDemonstration::Init() {
   if (GAMESTATE == nullptr || GAMEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-1933: ScreenDemonstration cannot init without game "
+        "ScreenDemonstration cannot init without game "
         "state and game manager.");
     AbortDemonstration(this, SM_GoToNextScreen);
     return;
@@ -117,7 +117,7 @@ void ScreenDemonstration::Init() {
 
     if (vStylePossible.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1934: ScreenDemonstration has no valid style to "
+          "ScreenDemonstration has no valid style to "
           "use.");
       AbortDemonstration(this, SM_GoToNextScreen);
       return;

@@ -53,7 +53,7 @@ static float g_fUpdateRate = 1;
 void GameLoop::SetUpdateRate(float fUpdateRate) {
   if (!std::isfinite(fUpdateRate) || fUpdateRate < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring invalid update rate %.6f.",
+        "Ignoring invalid update rate %.6f.",
         fUpdateRate);
     return;
   }
@@ -382,7 +382,7 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
     static bool loggedMissingManagers = false;
     if (!loggedMissingManagers && LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: GameLoop update skipped with incomplete managers.");
+          "GameLoop update skipped with incomplete managers.");
       loggedMissingManagers = true;
     }
     return;
@@ -415,7 +415,7 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
                          : g_GameplayTimer.GetDeltaTime();
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: GameLoop clamped invalid delta %.6f.",
+        "GameLoop clamped invalid delta %.6f.",
         fDeltaTime);
     fDeltaTime = 0.0f;
   }
@@ -432,7 +432,7 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
   fDeltaTime *= g_fUpdateRate;
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: GameLoop reset invalid scaled delta %.6f.",
+        "GameLoop reset invalid scaled delta %.6f.",
         fDeltaTime);
     fDeltaTime = 0.0f;
   }

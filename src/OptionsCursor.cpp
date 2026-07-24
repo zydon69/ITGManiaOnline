@@ -33,7 +33,7 @@ bool LoadCursorSprite(
   if (THEME != nullptr && !group.empty()) {
     actor.Load(THEME->GetPathG(group, name));
   } else {
-    WarnOptionsCursor("SRC_AUDIT_FIX SRC-1212: OptionsCursor loaded without THEME.");
+    WarnOptionsCursor("OptionsCursor loaded without THEME.");
     actor.LoadFallback();
   }
   if (!actor.IsLoaded()) {

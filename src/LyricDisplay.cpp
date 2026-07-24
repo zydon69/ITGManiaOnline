@@ -85,14 +85,14 @@ void LyricDisplay::LoadLyricActor(BitmapText& text, const std::string& name) {
   text.SetName(name);
   if (THEME == nullptr) {
     WarnLyricDisplay(
-        "SRC_AUDIT_FIX SRC-1243: LyricDisplay loaded without theme manager.");
+        "LyricDisplay loaded without theme manager.");
     return;
   }
 
   ActorUtil::LoadAllCommands(text, "LyricDisplay");
   if (!text.LoadFromFont(THEME->GetPathF("LyricDisplay", "text"))) {
     WarnLyricDisplay(
-        "SRC_AUDIT_FIX SRC-1244: LyricDisplay failed to load lyric font.");
+        "LyricDisplay failed to load lyric font.");
   }
 }
 
@@ -122,7 +122,7 @@ void LyricDisplay::Update(float fDeltaTime) {
   const float fMusicSeconds = GAMESTATE->m_Position.m_fMusicSeconds;
   if (!std::isfinite(fMusicSeconds)) {
     WarnLyricDisplay(
-        "SRC_AUDIT_FIX SRC-1246: LyricDisplay ignored non-finite music time.");
+        "LyricDisplay ignored non-finite music time.");
     return;
   }
 
@@ -141,7 +141,7 @@ void LyricDisplay::Update(float fDeltaTime) {
   const float fLyricStartTime = seg.m_fStartTime;
   if (!std::isfinite(fLyricStartTime)) {
     WarnLyricDisplay(
-        "SRC_AUDIT_FIX SRC-1248: LyricDisplay skipped non-finite lyric "
+        "LyricDisplay skipped non-finite lyric "
         "segment.");
     m_iCurLyricNumber++;
     return;
@@ -181,7 +181,7 @@ void LyricDisplay::Update(float fDeltaTime) {
 
   if (LUA == nullptr) {
     WarnLyricDisplay(
-        "SRC_AUDIT_FIX SRC-1250: LyricDisplay skipped lyric without Lua "
+        "LyricDisplay skipped lyric without Lua "
         "manager.");
     m_iCurLyricNumber++;
     return;

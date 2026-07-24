@@ -38,13 +38,13 @@ void ScreenGameplaySyncMachine::Init() {
   if (GAMESTATE == nullptr || GAMEMAN == nullptr || THEME == nullptr ||
       PREFSMAN == nullptr ||
       GAMESTATE->m_pCurGame == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SyncMachine missing required global state.");
+    LOG->Warn("SyncMachine missing required global state.");
     return;
   }
   GAMESTATE->m_PlayMode.Set(PLAY_MODE_REGULAR);
   const Style* style = GAMEMAN->GetHowToPlayStyleForGame(GAMESTATE->m_pCurGame);
   if (style == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SyncMachine has no how-to-play style.");
+    LOG->Warn("SyncMachine has no how-to-play style.");
     return;
   }
   GAMESTATE->SetCurrentStyle(style, PLAYER_INVALID);
@@ -63,7 +63,7 @@ void ScreenGameplaySyncMachine::Init() {
   }
   if (!loaded) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SyncMachine failed to load sync song '%s'.",
+        "SyncMachine failed to load sync song '%s'.",
         sFile.c_str());
     return;
   }
@@ -76,7 +76,7 @@ void ScreenGameplaySyncMachine::Init() {
   std::vector<Steps*> vpSteps;
   SongUtil::GetPlayableSteps(&m_Song, vpSteps);
   if (vpSteps.empty() || vpSteps[0] == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SyncMachine has no playable steps.");
+    LOG->Warn("SyncMachine has no playable steps.");
     return;
   }
   Steps* pSteps = vpSteps[0];

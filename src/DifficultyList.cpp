@@ -37,7 +37,7 @@ inline constexpr int MAX_METERS =
 REGISTER_ACTOR_CLASS(StepsDisplayList);
 
 namespace {
-void WarnStepsDisplayListAuditFix(const char* message) {
+void WarnStepsDisplayListSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -49,13 +49,13 @@ bool IsValidListPlayer(PlayerNumber pn) {
 
 int ClampShownItems(int value) {
   if (value <= 0) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1135: StepsDisplayList used one shown item.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList used one shown item.");
     return 1;
   }
   if (value > MAX_METERS) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1135: StepsDisplayList clamped NumShownItems.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList clamped NumShownItems.");
     return MAX_METERS;
   }
   return value;
@@ -63,8 +63,8 @@ int ClampShownItems(int value) {
 
 float SanitizeItemSpacing(float value) {
   if (!std::isfinite(value)) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1138: StepsDisplayList reset non-finite spacing.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList reset non-finite spacing.");
     return 0.0f;
   }
   return value;
@@ -104,8 +104,8 @@ void StepsDisplayList::LoadFromNode(const XNode* pNode) {
   ResetLoadedActors();
 
   if (pNode == nullptr) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1132: StepsDisplayList ignored null XML node.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList ignored null XML node.");
     return;
   }
   ActorFrame::LoadFromNode(pNode);
@@ -115,8 +115,8 @@ void StepsDisplayList::LoadFromNode(const XNode* pNode) {
     return;
   }
   if (THEME == nullptr) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1132: StepsDisplayList refused load without THEME.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList refused load without THEME.");
     return;
   }
 
@@ -346,15 +346,15 @@ void StepsDisplayList::PositionItems() {
 
 void StepsDisplayList::SetFromGameState() {
   if (GAMESTATE == nullptr) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1134: StepsDisplayList ignored missing GAMESTATE.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList ignored missing GAMESTATE.");
     m_Rows.clear();
     PositionItems();
     return;
   }
   if (m_Lines.size() < MAX_METERS) {
-    WarnStepsDisplayListAuditFix(
-        "SRC_AUDIT_FIX SRC-1133: StepsDisplayList ignored update before load.");
+    WarnStepsDisplayListSafety(
+        "StepsDisplayList ignored update before load.");
     return;
   }
   const Song* pSong = GAMESTATE->m_pCurSong;
@@ -368,15 +368,15 @@ void StepsDisplayList::SetFromGameState() {
         CommonMetrics::DIFFICULTIES_TO_SHOW.GetValue();
     const Style* style = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
     if (style == nullptr) {
-      WarnStepsDisplayListAuditFix(
-          "SRC_AUDIT_FIX SRC-1136: StepsDisplayList fell back without style.");
+      WarnStepsDisplayListSafety(
+          "StepsDisplayList fell back without style.");
       m_Rows.clear();
       PositionItems();
       return;
     }
     if (difficulties.size() > MAX_METERS) {
-      WarnStepsDisplayListAuditFix(
-          "SRC_AUDIT_FIX SRC-1137: StepsDisplayList truncated difficulties.");
+      WarnStepsDisplayListSafety(
+          "StepsDisplayList truncated difficulties.");
     }
     m_Rows.clear();
     m_Rows.resize(std::min<size_t>(difficulties.size(), MAX_METERS));
@@ -395,8 +395,8 @@ void StepsDisplayList::SetFromGameState() {
     // Should match the sort in ScreenSelectMusic::AfterMusicChange.
 
     if (vpSteps.size() > MAX_METERS) {
-      WarnStepsDisplayListAuditFix(
-          "SRC_AUDIT_FIX SRC-1137: StepsDisplayList truncated playable steps.");
+      WarnStepsDisplayListSafety(
+          "StepsDisplayList truncated playable steps.");
     }
     m_Rows.clear();
     m_Rows.resize(std::min<size_t>(vpSteps.size(), MAX_METERS));

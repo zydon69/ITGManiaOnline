@@ -111,7 +111,7 @@ void MenuTimer::Load(std::string sMetricsGroup) {
   if (THEME != nullptr && !sMetricsGroup.empty()) {
     m_sprFrame.Load(THEME->GetPathG(sMetricsGroup, "Frame"));
   } else {
-    WarnMenuTimer("SRC_AUDIT_FIX SRC-1176: MenuTimer loaded without THEME.");
+    WarnMenuTimer("MenuTimer loaded without THEME.");
     m_sprFrame.LoadFallback();
   }
   if (m_sprFrame.IsLoaded()) {

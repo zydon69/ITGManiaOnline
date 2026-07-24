@@ -56,13 +56,13 @@ bool IsFiniteFloat(float value) {
   return std::isfinite(value);
 }
 
-void WarnBannerAuditFix(const char* message) {
+void WarnBannerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void WarnBannerAuditFix(const std::string& message) {
+void WarnBannerSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -71,8 +71,8 @@ void WarnBannerAuditFix(const std::string& message) {
 std::string GetBannerThemePath(
     const std::string& category, const std::string& name) {
   if (THEME == nullptr) {
-    WarnBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1046: Banner cannot resolve theme path %s/%s "
+    WarnBannerSafety(ssprintf(
+        "Banner cannot resolve theme path %s/%s "
         "without THEME.",
         category.c_str(), name.c_str()));
     return std::string();
@@ -137,8 +137,8 @@ void Banner::LoadFromCachedBanner(const std::string& sPath) {
 
 void Banner::Update(float fDeltaTime) {
   if (!IsFiniteFloat(fDeltaTime)) {
-    WarnBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-3109: Banner ignored non-finite update delta.");
+    WarnBannerSafety(
+        "Banner ignored non-finite update delta.");
     return;
   }
   Sprite::Update(fDeltaTime);
@@ -147,8 +147,8 @@ void Banner::Update(float fDeltaTime) {
     const float divisor = SCROLL_SPEED_DIVISOR;
     if (!IsFiniteFloat(divisor) || divisor <= 0.0f ||
         !IsFiniteFloat(fDeltaTime) || !IsFiniteFloat(m_fPercentScrolling)) {
-      WarnBannerAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-723: Banner disabled invalid scrolling state "
+      WarnBannerSafety(ssprintf(
+          "Banner disabled invalid scrolling state "
           "divisor=%.6f delta=%.6f percent=%.6f.",
           divisor, fDeltaTime, m_fPercentScrolling));
       m_bScrolling = false;
@@ -162,8 +162,8 @@ void Banner::Update(float fDeltaTime) {
 
     const RectF* pTextureRect = GetCurrentTextureCoordRect();
     if (pTextureRect == nullptr) {
-      WarnBannerAuditFix(
-          "SRC_AUDIT_FIX SRC-723: Banner skipped scrolling because no texture "
+      WarnBannerSafety(
+          "Banner skipped scrolling because no texture "
           "coord rect is available.");
       m_bScrolling = false;
       m_fPercentScrolling = 0.0f;
@@ -183,8 +183,8 @@ void Banner::Update(float fDeltaTime) {
 void Banner::SetScrolling(bool bScroll, float Percent) {
   m_bScrolling = bScroll;
   if (!IsFiniteFloat(Percent)) {
-    WarnBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-723: Banner clamped non-finite scrolling percent "
+    WarnBannerSafety(ssprintf(
+        "Banner clamped non-finite scrolling percent "
         "%.6f.",
         Percent));
     Percent = 0.0f;
@@ -215,8 +215,8 @@ void Banner::LoadMode() {
 
 void Banner::LoadFromSongGroup(std::string sSongGroup) {
   if (SONGMAN == nullptr) {
-    WarnBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-724: Banner cannot load group '%s' without "
+    WarnBannerSafety(ssprintf(
+        "Banner cannot load group '%s' without "
         "SONGMAN.",
         sSongGroup.c_str()));
     LoadGroupFallback();
@@ -316,8 +316,8 @@ void Banner::LoadCourseFallback() {
 
 void Banner::LoadFallbackCharacterIcon() {
   if (CHARMAN == nullptr) {
-    WarnBannerAuditFix(
-        "SRC_AUDIT_FIX SRC-724: Banner cannot load fallback character icon "
+    WarnBannerSafety(
+        "Banner cannot load fallback character icon "
         "without CHARMAN.");
     LoadFallback();
     return;
@@ -343,8 +343,8 @@ void Banner::LoadRandom() {
 
 void Banner::LoadFromSortOrder(SortOrder so) {
   if (so < 0 || so >= NUM_SortOrder) {
-    WarnBannerAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-3109: Banner rejected invalid sort order %d.",
+    WarnBannerSafety(ssprintf(
+        "Banner rejected invalid sort order %d.",
         static_cast<int>(so)));
     LoadFallback();
     return;

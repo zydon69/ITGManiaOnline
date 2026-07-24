@@ -26,14 +26,14 @@ bool RadarValues::IsValidCategory(int cat) {
 float& RadarValues::InvalidValue() {
   static float invalid = RADAR_VAL_UNKNOWN;
   LOG->Trace(
-      "SRC_AUDIT_FIX RadarValues ignored invalid mutable category access.");
+      "RadarValues ignored invalid mutable category access.");
   invalid = RADAR_VAL_UNKNOWN;
   return invalid;
 }
 
 const float& RadarValues::InvalidConstValue() {
   static const float invalid = RADAR_VAL_UNKNOWN;
-  LOG->Trace("SRC_AUDIT_FIX RadarValues ignored invalid category access.");
+  LOG->Trace("RadarValues ignored invalid category access.");
   return invalid;
 }
 
@@ -68,7 +68,7 @@ XNode* RadarValues::CreateNode(
 void RadarValues::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr || pNode->GetName() != "RadarValues") {
     LOG->Trace(
-        "SRC_AUDIT_FIX RadarValues ignored invalid XML node while loading.");
+        "RadarValues ignored invalid XML node while loading.");
     MakeUnknown();
     return;
   }
@@ -86,7 +86,7 @@ void RadarValues::LoadFromNode(const XNode* pNode) {
     float value = RADAR_VAL_UNKNOWN;
     if (!StringToFloat(rawValue, value)) {
       LOG->Trace(
-          "SRC_AUDIT_FIX SRC-2947: RadarValues rejected malformed XML value "
+          "RadarValues rejected malformed XML value "
           "'%s' for category '%s'.",
           rawValue.c_str(), category.c_str());
       continue;
@@ -126,7 +126,7 @@ void RadarValues::FromString(std::string sRadarValues) {
     float value = RADAR_VAL_UNKNOWN;
     if (!StringToFloat(saValues[rc], value)) {
       LOG->Trace(
-          "SRC_AUDIT_FIX RadarValues rejected malformed cached value '%s'.",
+          "RadarValues rejected malformed cached value '%s'.",
           saValues[rc].c_str());
       MakeUnknown();
       return;

@@ -273,7 +273,7 @@ bool SMLoader::LoadFromDir(
   if (aFileNames.empty()) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX found no applicable SM simfile for direct LoadFromDir.");
+        "found no applicable SM simfile for direct LoadFromDir.");
     return false;
   }
   return LoadFromSimfile(sPath + aFileNames[0], out);
@@ -447,7 +447,7 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
           attack.sModifiers.empty()) {
         LOG->UserLog(
             "Song file", this->GetSongTitle(),
-            "SRC_AUDIT_FIX ignored incomplete #ATTACKS entry ending at "
+            "ignored incomplete #ATTACKS entry ending at "
             "\"%s\" (time=%d duration=%d modifiers=%d).",
             SanitizeForLog(params[j]).c_str(), hasTime ? 1 : 0,
             hasDuration ? 1 : 0, attack.sModifiers.empty() ? 0 : 1);
@@ -463,7 +463,7 @@ void SMLoader::ProcessAttacks(AttackArray& attacks, MsdFile::value_t params) {
       if (attack.fSecsRemaining < 0.0f) {
         LOG->UserLog(
             "Song file", this->GetSongTitle(),
-            "SRC_AUDIT_FIX clamped negative #ATTACKS duration for \"%s\".",
+            "clamped negative #ATTACKS duration for \"%s\".",
             params[j].c_str());
         attack.fSecsRemaining = 0.0f;
       }
@@ -591,7 +591,7 @@ bool ParseSMFloat(
 
   LOG->UserLog(
       "Song file", loader.GetSongTitle(),
-      "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+      "ignored invalid #%s %s value \"%s\" in \"%s\".",
       tag, field, raw.c_str(), expression.c_str());
   return false;
 }
@@ -613,7 +613,7 @@ bool ParseSMBeat(
   if (!StringToFloat(value, parsed)) {
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
-        "SRC_AUDIT_FIX ignored invalid #%s beat value \"%s\" in \"%s\".",
+        "ignored invalid #%s beat value \"%s\" in \"%s\".",
         tag, raw.c_str(), expression.c_str());
     return false;
   }
@@ -622,7 +622,7 @@ bool ParseSMBeat(
     if (rowsPerBeat <= 0) {
       LOG->UserLog(
           "Song file", loader.GetSongTitle(),
-          "SRC_AUDIT_FIX ignored row-based #%s beat value \"%s\" without a "
+          "ignored row-based #%s beat value \"%s\" without a "
           "valid rows-per-beat base in \"%s\".",
           tag, raw.c_str(), expression.c_str());
       return false;
@@ -642,7 +642,7 @@ bool ParseSMInt(
   if (value.empty()) {
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
-        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        "ignored invalid #%s %s value \"%s\" in \"%s\".",
         tag, field, raw.c_str(), expression.c_str());
     return false;
   }
@@ -654,7 +654,7 @@ bool ParseSMInt(
       parsed < INT_MIN || parsed > INT_MAX) {
     LOG->UserLog(
         "Song file", loader.GetSongTitle(),
-        "SRC_AUDIT_FIX ignored invalid #%s %s value \"%s\" in \"%s\".",
+        "ignored invalid #%s %s value \"%s\" in \"%s\".",
         tag, field, raw.c_str(), expression.c_str());
     return false;
   }
@@ -1241,7 +1241,7 @@ bool SMLoader::LoadFromBGChangesVector(
       if (tmp.empty()) {
         LOG->UserLog(
             "Song file", this->GetSongTitle(),
-            "SRC_AUDIT_FIX ignored #BGCHANGES entry with an empty file in "
+            "ignored #BGCHANGES entry with an empty file in "
             "\"%s\".",
             expression.c_str());
         return false;
@@ -1270,7 +1270,7 @@ bool SMLoader::LoadFromBGChangesVector(
   if (change.m_fStartBeat < 0.0f) {
     LOG->UserLog(
         "Song file", this->GetSongTitle(),
-        "SRC_AUDIT_FIX ignored #BGCHANGES entry with negative beat %f in "
+        "ignored #BGCHANGES entry with negative beat %f in "
         "\"%s\".",
         change.m_fStartBeat, expression.c_str());
     return false;
@@ -1279,7 +1279,7 @@ bool SMLoader::LoadFromBGChangesVector(
   if (change.m_fRate <= 0.0f) {
     LOG->UserLog(
         "Song file", this->GetSongTitle(),
-        "SRC_AUDIT_FIX ignored #BGCHANGES entry with non-positive rate %f in "
+        "ignored #BGCHANGES entry with non-positive rate %f in "
         "\"%s\".",
         change.m_fRate, expression.c_str());
     return false;
@@ -1645,7 +1645,7 @@ std::vector<std::string> SMLoader::GetSongDirFiles(
   if (sSongDir.empty()) {
     LOG->UserLog(
         "Song file", this->GetSongTitle(),
-        "SRC_AUDIT_FIX parsed BGChanges without a song directory; filename "
+        "parsed BGChanges without a song directory; filename "
         "matching for commas and equals signs is disabled.");
     return m_SongDirFiles;
   }

@@ -28,7 +28,7 @@ namespace {
 constexpr int kMaxDisplayTicks = 64;
 constexpr int kMaxDisplayedMeter = 999;
 
-void WarnStepsDisplayAuditFix(const char* message) {
+void WarnStepsDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -52,13 +52,13 @@ bool IsValidCourseTypeForDisplay(CourseType ct) {
 
 int SanitizeMeterForDisplay(int meter) {
   if (meter < 0) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1147: StepsDisplay reset negative meter.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay reset negative meter.");
     return 0;
   }
   if (meter > kMaxDisplayedMeter) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped oversized meter.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay clamped oversized meter.");
     return kMaxDisplayedMeter;
   }
   return meter;
@@ -66,11 +66,11 @@ int SanitizeMeterForDisplay(int meter) {
 
 int SanitizeTickCount(int value, const char* context) {
   if (value < 0) {
-    WarnStepsDisplayAuditFix(context);
+    WarnStepsDisplaySafety(context);
     return 0;
   }
   if (value > kMaxDisplayTicks) {
-    WarnStepsDisplayAuditFix(context);
+    WarnStepsDisplaySafety(context);
     return kMaxDisplayTicks;
   }
   return value;
@@ -131,8 +131,8 @@ bool IsSafeMeterFormat(const std::string& format) {
 
 std::string FormatMeterText(const std::string& format, int meter) {
   if (!IsSafeMeterFormat(format)) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1146: StepsDisplay ignored unsafe MeterFormatString.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay ignored unsafe MeterFormatString.");
     return ssprintf("%d", meter);
   }
   return ssprintf(format.c_str(), meter);
@@ -233,13 +233,13 @@ void StepsDisplay::Load(
   ResetLoadedActors();
   m_sMetricsGroup = sMetricsGroup.empty() ? "StepsDisplay" : sMetricsGroup;
   if (sMetricsGroup.empty()) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1142: StepsDisplay fell back from empty metrics "
+    WarnStepsDisplaySafety(
+        "StepsDisplay fell back from empty metrics "
         "group.");
   }
   if (THEME == nullptr) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1142: StepsDisplay refused load without THEME.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay refused load without THEME.");
     return;
   }
 
@@ -281,8 +281,8 @@ void StepsDisplay::Load(
     this->AddChild(&m_textMeter);
 
     if (!m_textMeter.HasCommand("Set")) {
-      WarnStepsDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1143: StepsDisplay meter actor has no Set command.");
+      WarnStepsDisplaySafety(
+          "StepsDisplay meter actor has no Set command.");
     }
   }
 
@@ -331,8 +331,8 @@ void StepsDisplay::Load(
 
 void StepsDisplay::SetFromGameState(PlayerNumber pn) {
   if (GAMESTATE == nullptr || !IsValidStepsDisplayPlayer(pn)) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1144: StepsDisplay ignored invalid game/player "
+    WarnStepsDisplaySafety(
+        "StepsDisplay ignored invalid game/player "
         "state.");
     SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
         StepsType_Invalid, 0, Difficulty_Invalid, CourseType_Invalid);
@@ -397,18 +397,18 @@ void StepsDisplay::Unset() { this->SetVisible(false); }
 void StepsDisplay::SetFromStepsTypeAndMeterAndDifficultyAndCourseType(
     StepsType st, int iMeter, Difficulty dc, CourseType ct) {
   if (!IsValidStepsTypeForDisplay(st)) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid StepsType.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay reset invalid StepsType.");
     st = StepsType_Invalid;
   }
   if (!IsValidDifficultyForDisplay(dc)) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid Difficulty.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay reset invalid Difficulty.");
     dc = Difficulty_Invalid;
   }
   if (!IsValidCourseTypeForDisplay(ct)) {
-    WarnStepsDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1148: StepsDisplay reset invalid CourseType.");
+    WarnStepsDisplaySafety(
+        "StepsDisplay reset invalid CourseType.");
     ct = CourseType_Invalid;
   }
   iMeter = SanitizeMeterForDisplay(iMeter);
@@ -480,10 +480,10 @@ void StepsDisplay::SetInternal(const SetParams& params) {
     std::string sNewText;
     const int maxTicks = SanitizeTickCount(
         m_iMaxTicks,
-        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped invalid MaxTicks.");
+        "StepsDisplay clamped invalid MaxTicks.");
     const int numTicks = SanitizeTickCount(
         m_iNumTicks,
-        "SRC_AUDIT_FIX SRC-1147: StepsDisplay clamped invalid NumTicks.");
+        "StepsDisplay clamped invalid NumTicks.");
     int iNumOn = std::min(maxTicks, safeParams.iMeter);
     sNewText.insert(sNewText.end(), iNumOn, on);
     int iNumOff = std::max(0, numTicks - iNumOn);
@@ -544,8 +544,8 @@ class LunaStepsDisplay : public Luna<StepsDisplay> {
   static int Load(T* p, lua_State* L) {
     std::string metricsGroup = SArg(1);
     if (metricsGroup.empty()) {
-      WarnStepsDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1149: StepsDisplay Lua Load used fallback metrics "
+      WarnStepsDisplaySafety(
+          "StepsDisplay Lua Load used fallback metrics "
           "group.");
     }
     p->Load(metricsGroup, nullptr);

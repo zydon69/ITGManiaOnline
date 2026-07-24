@@ -13,7 +13,7 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayRaveAuditFix(const char* message) {
+void WarnScoreDisplayRaveSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -40,8 +40,8 @@ ScoreDisplayRave::ScoreDisplayRave() {
 
     m_textLevel.LoadFromFont(THEME->GetPathF("ScoreDisplayRave", "level"));
   } else {
-    WarnScoreDisplayRaveAuditFix(
-        "SRC_AUDIT_FIX SRC-1112: ScoreDisplayRave constructed without THEME.");
+    WarnScoreDisplayRaveSafety(
+        "ScoreDisplayRave constructed without THEME.");
   }
   m_textLevel.SetText("1");
 }
@@ -68,8 +68,8 @@ void ScoreDisplayRave::Init(
   ResetLoadedActors();
 
   if (THEME == nullptr) {
-    WarnScoreDisplayRaveAuditFix(
-        "SRC_AUDIT_FIX SRC-1112: ScoreDisplayRave refused init without "
+    WarnScoreDisplayRaveSafety(
+        "ScoreDisplayRave refused init without "
         "THEME.");
     return;
   }
@@ -77,8 +77,8 @@ void ScoreDisplayRave::Init(
   PlayerNumber pn = PLAYER_1;
   if (pPlayerState == nullptr ||
       !IsValidScoreDisplayPlayer(pPlayerState->m_PlayerNumber)) {
-    WarnScoreDisplayRaveAuditFix(
-        "SRC_AUDIT_FIX: ScoreDisplayRave initialized with invalid "
+    WarnScoreDisplayRaveSafety(
+        "ScoreDisplayRave initialized with invalid "
         "PlayerState; using PLAYER_1 assets.");
   } else {
     pn = pPlayerState->m_PlayerNumber;
@@ -116,8 +116,8 @@ void ScoreDisplayRave::Update(float fDelta) {
 
   float fLevel = m_pPlayerState->m_fSuperMeter;
   if (!std::isfinite(fLevel)) {
-    WarnScoreDisplayRaveAuditFix(
-        "SRC_AUDIT_FIX: ScoreDisplayRave ignored non-finite super meter.");
+    WarnScoreDisplayRaveSafety(
+        "ScoreDisplayRave ignored non-finite super meter.");
     fLevel = 0.0f;
   }
   rage_clamp(fLevel, 0.0f, (float)NUM_ATTACK_LEVELS - 0.0001f);

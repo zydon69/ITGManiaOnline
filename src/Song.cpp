@@ -174,14 +174,14 @@ bool ApplySongPathFields(
   if (parts.empty()) {
     LOG->UserLog(
         "Song", path,
-        "SRC_AUDIT_FIX rejected song directory with no path components.");
+        "rejected song directory with no path components.");
     return false;
   }
 
   song.m_sSongName = parts.back();
   if (song.m_sSongName.empty()) {
     LOG->UserLog(
-        "Song", path, "SRC_AUDIT_FIX rejected song directory with no name.");
+        "Song", path, "rejected song directory with no name.");
     return false;
   }
 
@@ -189,14 +189,14 @@ bool ApplySongPathFields(
     if (parts.size() < 3) {
       LOG->UserLog(
           "Song", path,
-          "SRC_AUDIT_FIX rejected song directory outside a group folder.");
+          "rejected song directory outside a group folder.");
       return false;
     }
     song.m_sGroupName = parts[parts.size() - 2];
     if (song.m_sGroupName.empty()) {
       LOG->UserLog(
           "Song", path,
-          "SRC_AUDIT_FIX rejected song directory with empty group name.");
+          "rejected song directory with empty group name.");
       return false;
     }
   } else {
@@ -252,7 +252,7 @@ Song::~Song() {
     }
     if (!deletedSteps.insert(steps).second) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: skipped duplicate Steps pointer %p while destroying "
+          "skipped duplicate Steps pointer %p while destroying "
           "song '%s'.",
           static_cast<void*>(steps), m_sSongDir.c_str());
       return;
@@ -345,7 +345,7 @@ void Song::Reset() {
 void Song::AddBackgroundChange(BackgroundLayer iLayer, BackgroundChange seg) {
   if (!IsValidBackgroundLayer(iLayer)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring background change for invalid layer %i in "
+        "Ignoring background change for invalid layer %i in "
         "'%s'.",
         iLayer, m_sSongDir.c_str());
     return;
@@ -379,7 +379,7 @@ Steps* Song::CreateSteps() {
 void Song::InitSteps(Steps* pSteps) {
   if (pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-606: refused to initialize null steps for '%s'.",
+        "refused to initialize null steps for '%s'.",
         m_sSongDir.c_str());
     return;
   }
@@ -395,7 +395,7 @@ void Song::GetDisplayBpms(DisplayBpms& AddTo) const {
   DisplayBPM displayBPMType = m_DisplayBPMType;
   if (!IsValidDisplayBPM(displayBPMType)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-612: invalid Song DisplayBPM %d for '%s'; using "
+        "invalid Song DisplayBPM %d for '%s'; using "
         "actual BPM.",
         displayBPMType, m_sSongDir.c_str());
     displayBPMType = DISPLAY_BPM_ACTUAL;
@@ -406,7 +406,7 @@ void Song::GetDisplayBpms(DisplayBpms& AddTo) const {
     float maxBPM = m_fSpecifiedBPMMax;
     if (!IsValidBPMValue(minBPM) || !IsValidBPMValue(maxBPM)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-612: invalid Song DisplayBPM range %.6f..%.6f "
+          "invalid Song DisplayBPM range %.6f..%.6f "
           "for '%s'; using actual BPM.",
           minBPM, maxBPM, m_sSongDir.c_str());
       displayBPMType = DISPLAY_BPM_ACTUAL;
@@ -431,7 +431,7 @@ void Song::GetDisplayBpms(DisplayBpms& AddTo) const {
       AddTo.Add(fMaxBPM);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-612: actual BPM range %.6f..%.6f is invalid for "
+          "actual BPM range %.6f..%.6f is invalid for "
           "'%s'.",
           fMinBPM, fMaxBPM, m_sSongDir.c_str());
     }
@@ -443,7 +443,7 @@ const BackgroundChange& Song::GetBackgroundAtBeat(
   static const BackgroundChange empty_change;
   if (!IsValidBackgroundLayer(iLayer)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Requested background at beat %.6f for invalid layer %i "
+        "Requested background at beat %.6f for invalid layer %i "
         "in '%s'.",
         fBeat, iLayer, m_sSongDir.c_str());
     return empty_change;
@@ -452,7 +452,7 @@ const BackgroundChange& Song::GetBackgroundAtBeat(
   const auto& changes = GetBackgroundChanges(iLayer);
   if (changes.empty()) {
     LOG->Trace(
-        "SRC_AUDIT_FIX: Requested background at beat %.6f for '%s' with no "
+        "Requested background at beat %.6f for '%s' with no "
         "background changes.",
         fBeat, m_sSongDir.c_str());
     return empty_change;
@@ -474,7 +474,7 @@ std::string Song::GetCacheFilePath() const {
 const std::string& Song::GetSongFilePath() const {
   if (m_sSongFileName.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Song '%s' has no simfile path.",
+        "Song '%s' has no simfile path.",
         this->m_sMainTitle.c_str());
   }
   return m_sSongFileName;
@@ -492,7 +492,7 @@ bool Song::LoadFromSongDir(
   if (sDir.empty()) {
     LOG->UserLog(
         "Song", sDir,
-        "SRC_AUDIT_FIX rejected attempt to load from an empty directory.");
+        "rejected attempt to load from an empty directory.");
     return false;
   }
 
@@ -519,7 +519,7 @@ bool Song::LoadFromSongDir(
 
   if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-610: restoring previous song path state after "
+        "restoring previous song path state after "
         "failed load from '%s'.",
         sDir.c_str());
     restorePathFields();
@@ -564,7 +564,7 @@ bool Song::LoadFromSongDir(
       m_sSongDir = sDir;
       if (!ApplySongPathFields(*this, m_sSongDir, from_profile, use_cache)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-610: restoring previous song path state after "
+            "restoring previous song path state after "
             "failed cache fallback for '%s'.",
             sDir.c_str());
         restorePathFields();
@@ -612,7 +612,7 @@ bool Song::LoadFromSongDir(
       if (songName.empty()) {
         LOG->UserLog(
             "Song", sDir,
-            "SRC_AUDIT_FIX could not derive fallback SSC filename.");
+            "could not derive fallback SSC filename.");
         return false;
       }
       songName += ".ssc";
@@ -715,7 +715,7 @@ bool Song::ReloadFromSongDir(std::string sDir) {
   Song copy;
   if (!copy.LoadFromSongDir(sDir)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Reload of '%s' failed; keeping existing song state.",
+        "Reload of '%s' failed; keeping existing song state.",
         sDir.c_str());
     return false;
   }
@@ -867,7 +867,7 @@ bool Song::LoadAutosaveFile() {
   Song autosaveProbe;
   if (!autosaveProbe.LoadFromSongDir(dir, true)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-609: autosave probe failed for '%s'; keeping "
+        "autosave probe failed for '%s'; keeping "
         "current song state.",
         dir.c_str());
     return false;
@@ -910,7 +910,7 @@ void Song::TidyUpData(
   // We need to do this before calling any of HasMusic, HasHasCDTitle, etc.
   if (Left(m_sSongDir, 3) == "../") {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-611: refused to tidy song data with escaping "
+        "refused to tidy song data with escaping "
         "directory '%s'.",
         m_sSongDir.c_str());
     return;
@@ -1471,7 +1471,7 @@ void Song::ReCalculateStepStatsAndLastSecond(bool wipeNoteData) {
 bool Song::SongCompleteForStyle(const Style* st) const {
   if (st == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-607: SongCompleteForStyle called with null style "
+        "SongCompleteForStyle called with null style "
         "for '%s'.",
         m_sSongDir.c_str());
     return false;
@@ -1491,7 +1491,7 @@ const std::vector<Steps*>& Song::GetStepsByStepsType(StepsType st) const {
   static const std::vector<Steps*> empty;
   if (!IsPlayableStepsTypeIndex(st)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid StepsType %i requested for '%s'.", st,
+        "Invalid StepsType %i requested for '%s'.", st,
         m_sSongDir.c_str());
     return empty;
   }
@@ -1515,7 +1515,7 @@ void Song::Save(bool autosave) {
   }
   if (!SaveToCacheFile()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Failed to save cache file for '%s'.",
+        "Failed to save cache file for '%s'.",
         m_sSongDir.c_str());
   }
   // If one of the charts uses split timing, then it cannot be accurately
@@ -1523,7 +1523,7 @@ void Song::Save(bool autosave) {
   if (!AnyChartUsesSplitTiming()) {
     if (!SaveToSMFile()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Failed to save SM sidecar for '%s'.",
+          "Failed to save SM sidecar for '%s'.",
           m_sSongDir.c_str());
     }
   }
@@ -1546,7 +1546,7 @@ void Song::Save(bool autosave) {
     } else {
       if (!FILEMAN->Remove(sOldPath) && DoesFileExist(sOldPath)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Failed to remove converted legacy simfile '%s'.",
+            "Failed to remove converted legacy simfile '%s'.",
             sOldPath.c_str());
       }
     }
@@ -1556,7 +1556,7 @@ void Song::Save(bool autosave) {
 bool Song::SaveToSMFile() {
   if (m_sSongFileName.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Refusing to save SM for '%s' without a simfile path.",
+        "Refusing to save SM for '%s' without a simfile path.",
         m_sMainTitle.c_str());
     return false;
   }
@@ -1577,7 +1577,7 @@ bool Song::SaveToSMFile() {
   for (Steps* pSteps : m_vpSteps) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Refusing to save SM for '%s' with null Steps.",
+          "Refusing to save SM for '%s' with null Steps.",
           m_sSongDir.c_str());
       return false;
     }
@@ -1595,7 +1595,7 @@ bool Song::SaveToSMFile() {
   for (Steps* s : m_UnknownStyleSteps) {
     if (s == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Refusing to save SM for '%s' with null unknown "
+          "Refusing to save SM for '%s' with null unknown "
           "Steps.",
           m_sSongDir.c_str());
       return false;
@@ -1609,7 +1609,7 @@ bool Song::SaveToSMFile() {
 bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
   if (sPath.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Refusing to save SSC for '%s' without a path.",
+        "Refusing to save SSC for '%s' without a path.",
         m_sMainTitle.c_str());
     return false;
   }
@@ -1637,7 +1637,7 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
   for (Steps* pSteps : m_vpSteps) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Refusing to save SSC for '%s' with null Steps.",
+          "Refusing to save SSC for '%s' with null Steps.",
           m_sSongDir.c_str());
       return false;
     }
@@ -1655,7 +1655,7 @@ bool Song::SaveToSSCFile(std::string sPath, bool bSavingCache, bool autosave) {
   for (Steps* s : m_UnknownStyleSteps) {
     if (s == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Refusing to save SSC for '%s' with null unknown "
+          "Refusing to save SSC for '%s' with null unknown "
           "Steps.",
           m_sSongDir.c_str());
       return false;
@@ -1713,7 +1713,7 @@ bool Song::SaveToJsonFile(std::string sPath) {
 bool Song::SaveToCacheFile() {
   if (SONGMAN == nullptr || SONGINDEX == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Refusing to cache '%s' without song managers.",
+        "Refusing to cache '%s' without song managers.",
         m_sSongDir.c_str());
     return false;
   }
@@ -1723,7 +1723,7 @@ bool Song::SaveToCacheFile() {
   const std::string sPath = GetCacheFilePath();
   if (!SaveToSSCFile(sPath, true)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-601: refused to update cache index after failed "
+        "refused to update cache index after failed "
         "song cache write '%s'.",
         sPath.c_str());
     return false;
@@ -1735,7 +1735,7 @@ bool Song::SaveToCacheFile() {
 bool Song::SaveToDWIFile() {
   if (m_sSongFileName.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Refusing to save DWI for '%s' without a simfile path.",
+        "Refusing to save DWI for '%s' without a simfile path.",
         m_sMainTitle.c_str());
     return false;
   }
@@ -1769,7 +1769,7 @@ void Song::RemoveAutosave() {
     }
     if (!FILEMAN->Remove(autosave_path) && DoesFileExist(autosave_path)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Failed to remove autosave file '%s'.",
+          "Failed to remove autosave file '%s'.",
           autosave_path.c_str());
       return;
     }
@@ -1789,7 +1789,7 @@ void Song::AddAutoGenNotes() {
     StepsType st = m_vpSteps[i]->m_StepsType;
     if (!IsPlayableStepsTypeIndex(st)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Skipping autogen source with invalid StepsType %i in "
+          "Skipping autogen source with invalid StepsType %i in "
           "'%s'.",
           st, m_sSongDir.c_str());
       continue;
@@ -1940,7 +1940,7 @@ bool Song::HasBanner() const {
 bool Song::HasInstrumentTrack(InstrumentTrack it) const {
   if (!IsValidInstrumentTrackIndex(it)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid instrument track index %i requested for '%s'.",
+        "Invalid instrument track index %i requested for '%s'.",
         it, m_sSongDir.c_str());
     return false;
   }
@@ -1983,7 +1983,7 @@ const std::vector<BackgroundChange>& Song::GetBackgroundChanges(
   static const std::vector<BackgroundChange> empty;
   if (!IsValidBackgroundLayer(bl)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid background layer %i requested for '%s'.", bl,
+        "Invalid background layer %i requested for '%s'.", bl,
         m_sSongDir.c_str());
     return empty;
   }
@@ -1993,7 +1993,7 @@ std::vector<BackgroundChange>& Song::GetBackgroundChanges(BackgroundLayer bl) {
   static std::vector<BackgroundChange> ignored;
   if (!IsValidBackgroundLayer(bl)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid mutable background layer %i requested for '%s'.",
+        "Invalid mutable background layer %i requested for '%s'.",
         bl, m_sSongDir.c_str());
     ignored.clear();
     return ignored;
@@ -2120,7 +2120,7 @@ std::string Song::GetSongAssetPath(
   FixSlashesInPlace(sPath);
   if (IsAbsoluteSongAssetPath(sPath)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Rejected absolute song asset path '%s' for song '%s'.",
+        "Rejected absolute song asset path '%s' for song '%s'.",
         sPath.c_str(), sSongPath.c_str());
     return std::string();
   }
@@ -2133,7 +2133,7 @@ std::string Song::GetSongAssetPath(
   const std::string sAllowedRoot = GetSongAssetAllowedRoot(sSongRoot);
   if (!BeginsWith(sRelPath, sAllowedRoot)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-600: Rejected song asset path '%s' escaping song "
+        "Rejected song asset path '%s' escaping song "
         "asset root '%s' for song directory '%s'.",
         sPath.c_str(), sAllowedRoot.c_str(), sSongPath.c_str());
     return std::string();
@@ -2155,7 +2155,7 @@ std::string Song::GetMusicPath() const {
 std::string Song::GetInstrumentTrackPath(InstrumentTrack it) const {
   if (!IsValidInstrumentTrackIndex(it)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid instrument track path index %i requested for "
+        "Invalid instrument track path index %i requested for "
         "'%s'.",
         it, m_sSongDir.c_str());
     return std::string();
@@ -2254,7 +2254,7 @@ std::string Song::GetTranslitFullTitle() const {
 
 void Song::AddSteps(Steps* pSteps) {
   if (pSteps == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-606: refused to add null steps to '%s'.",
+    LOG->Warn("refused to add null steps to '%s'.",
               m_sSongDir.c_str());
     return;
   }
@@ -2263,7 +2263,7 @@ void Song::AddSteps(Steps* pSteps) {
   // won't delete those steps. -Kyz
   if (!IsValidStepsTypeIndex(pSteps->m_StepsType)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Treating out-of-range StepsType %i as unknown style in "
+        "Treating out-of-range StepsType %i as unknown style in "
         "'%s'.",
         pSteps->m_StepsType, m_sSongDir.c_str());
     m_UnknownStyleSteps.push_back(pSteps);
@@ -2284,7 +2284,7 @@ bool Song::OwnsSteps(const Steps* pSteps) const {
 
 void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
   if (pSteps == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring request to delete null Steps.");
+    LOG->Warn("Ignoring request to delete null Steps.");
     return;
   }
 
@@ -2295,14 +2295,14 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
       m_UnknownStyleSteps.end();
   if (!ownedByMain && !ownedByUnknown) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring request to delete Steps %p not owned by '%s'.",
+        "Ignoring request to delete Steps %p not owned by '%s'.",
         static_cast<const void*>(pSteps), m_sSongDir.c_str());
     return;
   }
 
   if (pSteps->IsAutogen()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring direct delete request for autogen Steps %p in "
+        "Ignoring direct delete request for autogen Steps %p in "
         "'%s'.",
         static_cast<const void*>(pSteps), m_sSongDir.c_str());
     return;
@@ -2326,7 +2326,7 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
   size_t removedFromTyped = 0;
   if (!IsPlayableStepsTypeIndex(pSteps->m_StepsType)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Removing Steps %p with invalid StepsType %i from '%s'.",
+        "Removing Steps %p with invalid StepsType %i from '%s'.",
         static_cast<const void*>(pSteps), pSteps->m_StepsType,
         m_sSongDir.c_str());
   } else {
@@ -2335,7 +2335,7 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
 
   if (removedFromMain + removedFromUnknown == 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Steps %p disappeared before delete in '%s'.",
+        "Steps %p disappeared before delete in '%s'.",
         static_cast<const void*>(pSteps), m_sSongDir.c_str());
     if (bReAutoGen) {
       AddAutoGenNotes();
@@ -2345,7 +2345,7 @@ void Song::DeleteSteps(const Steps* pSteps, bool bReAutoGen) {
 
   if (removedFromMain + removedFromUnknown > 1 || removedFromTyped > 1) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: removed duplicate references for Steps %p in '%s' "
+        "removed duplicate references for Steps %p in '%s' "
         "(main=%zu unknown=%zu typed=%zu).",
         static_cast<const void*>(pSteps), m_sSongDir.c_str(), removedFromMain,
         removedFromUnknown, removedFromTyped);
@@ -2443,14 +2443,14 @@ int Song::GetNumStepsLoadedFromProfile(ProfileSlot slot) const {
 bool Song::IsEditAlreadyLoaded(Steps* pSteps) const {
   if (pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-608: IsEditAlreadyLoaded called with null steps "
+        "IsEditAlreadyLoaded called with null steps "
         "for '%s'.",
         m_sSongDir.c_str());
     return false;
   }
   if (pSteps->GetDifficulty() != Difficulty_Edit) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-608: refusing to check non-edit %s chart for '%s'.",
+        "refusing to check non-edit %s chart for '%s'.",
         DifficultyToString(pSteps->GetDifficulty()).c_str(),
         this->m_sMainTitle.c_str());
     return false;
@@ -2471,7 +2471,7 @@ bool Song::IsEditAlreadyLoaded(Steps* pSteps) const {
 bool Song::IsStepsUsingDifferentTiming(Steps* pSteps) const {
   if (pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-607: IsStepsUsingDifferentTiming called with null "
+        "IsStepsUsingDifferentTiming called with null "
         "steps for '%s'.",
         m_sSongDir.c_str());
     return false;

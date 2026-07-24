@@ -74,7 +74,7 @@ class CheckedFileWriter {
     }
     m_failed = true;
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s write failed: %s", m_context,
+        "%s write failed: %s", m_context,
         m_file.GetError().c_str());
   }
 
@@ -94,7 +94,7 @@ static std::string SanitizeSSCLabelForWrite(const std::string& label) {
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SSC writer sanitized a timing label containing a "
+        "SSC writer sanitized a timing label containing a "
         "#LABELS delimiter.");
   }
   return SmEscape(sanitized);
@@ -116,7 +116,7 @@ static std::string SanitizeKeysoundForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-584 SRC-593: sanitized %s keysound filename "
+        "sanitized %s keysound filename "
         "containing MSD delimiters.",
         format);
   }
@@ -135,7 +135,7 @@ static std::string SanitizeAttackModifiersForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack modifiers "
+        "sanitized %s attack modifiers "
         "containing MSD delimiters.",
         format);
   }
@@ -154,7 +154,7 @@ static std::string SanitizeAttackStringForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-585 SRC-594: sanitized %s attack string "
+        "sanitized %s attack string "
         "containing MSD tag delimiters.",
         format);
   }
@@ -173,7 +173,7 @@ static std::string SanitizeStepMetadataForWrite(
   }
   if (changed) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-586 SRC-595: sanitized %s step metadata "
+        "sanitized %s step metadata "
         "containing MSD delimiters.",
         format);
   }
@@ -192,7 +192,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
       break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s DisplayBPM type %i for "
+          "invalid %s DisplayBPM type %i for "
           "'%s'; falling back to actual.",
           format, song.m_DisplayBPMType, song.GetSongDir().c_str());
       return DISPLAY_BPM_ACTUAL;
@@ -201,7 +201,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
   if (!std::isfinite(minBPM) || !std::isfinite(maxBPM) || minBPM <= 0.0f ||
       maxBPM <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-587 SRC-596: invalid %s specified DisplayBPM "
+        "invalid %s specified DisplayBPM "
         "%.6f:%.6f for '%s'; falling back to actual.",
         format, minBPM, maxBPM, song.GetSongDir().c_str());
     return DISPLAY_BPM_ACTUAL;
@@ -209,7 +209,7 @@ static DisplayBPM SanitizeDisplayBPMForWrite(
 
   if (minBPM > maxBPM) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-587 SRC-596: swapped inverted %s DisplayBPM range "
+        "swapped inverted %s DisplayBPM range "
         "%.6f:%.6f for '%s'.",
         format, minBPM, maxBPM, song.GetSongDir().c_str());
     std::swap(minBPM, maxBPM);
@@ -223,7 +223,7 @@ static bool IsValidTimingRowForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment at "
+      "skipped %s %s timing segment at "
       "negative row %i.",
       format, segment, row);
   return false;
@@ -236,7 +236,7 @@ static bool IsFiniteTimingValueForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "skipped %s %s timing segment with "
       "non-finite %s %.6f.",
       format, segment, valueName, value);
   return false;
@@ -250,7 +250,7 @@ static bool IsPositiveTimingValueForWrite(
     return true;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s %s timing segment with "
+      "skipped %s %s timing segment with "
       "non-positive %s %.6f.",
       format, segment, valueName, value);
   return false;
@@ -294,7 +294,7 @@ static bool ShouldWriteTimingSegment(
         return true;
       }
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s TIMESIGNATURES timing "
+          "skipped %s TIMESIGNATURES timing "
           "segment with invalid %i/%i.",
           format, ToTimeSignature(seg)->GetNum(), ToTimeSignature(seg)->GetDen());
       return false;
@@ -303,7 +303,7 @@ static bool ShouldWriteTimingSegment(
         return true;
       }
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s TICKCOUNTS timing "
+          "skipped %s TICKCOUNTS timing "
           "segment with invalid tickcount %i.",
           format, ToTickcount(seg)->GetTicks());
       return false;
@@ -312,7 +312,7 @@ static bool ShouldWriteTimingSegment(
         return true;
       }
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-588 SRC-597: skipped %s COMBOS timing segment "
+          "skipped %s COMBOS timing segment "
           "with invalid combo %i/%i.",
           format, ToCombo(seg)->GetCombo(), ToCombo(seg)->GetMissCombo());
       return false;
@@ -354,25 +354,25 @@ static std::vector<std::string> GetTimingVectorForWrite(
   switch (type) {
     case SEGMENT_BPM:
       LOG->Warn(
-          "SRC_AUDIT_FIX: SSC writer provided fallback BPM because TimingData "
+          "SSC writer provided fallback BPM because TimingData "
           "had no BPM segments.");
       out.push_back(BPMSegment(0, 60).ToString(dec));
       break;
     case SEGMENT_TIME_SIG:
       LOG->Warn(
-          "SRC_AUDIT_FIX: SSC writer provided fallback time signature because "
+          "SSC writer provided fallback time signature because "
           "TimingData had none.");
       out.push_back(TimeSignatureSegment(0).ToString(dec));
       break;
     case SEGMENT_TICKCOUNT:
       LOG->Warn(
-          "SRC_AUDIT_FIX: SSC writer provided fallback tickcount because "
+          "SSC writer provided fallback tickcount because "
           "TimingData had none.");
       out.push_back(TickcountSegment(0).ToString(dec));
       break;
     case SEGMENT_COMBO:
       LOG->Warn(
-          "SRC_AUDIT_FIX: SSC writer provided fallback combo because TimingData "
+          "SSC writer provided fallback combo because TimingData "
           "had none.");
       out.push_back(ComboSegment(0).ToString(dec));
       break;
@@ -461,7 +461,7 @@ static void GetTimingTags(
       timing.GetTimingSegments(SEGMENT_BPM);
   if (bpms.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SSC step timing writer provided fallback BPM because "
+        "SSC step timing writer provided fallback BPM because "
         "TimingData had no BPM segments.");
     BPMSegment bs(0, 60);
     w.Write(bs.GetRow(), bs.GetBPM());
@@ -516,7 +516,7 @@ static void GetTimingTags(
   w.Init("TIMESIGNATURES");
   if (tSigs.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SSC step timing writer provided fallback time "
+        "SSC step timing writer provided fallback time "
         "signature because TimingData had none.");
     TimeSignatureSegment ts(0);
     w.Write(ts.GetRow(), ts.GetNum(), ts.GetDen());
@@ -535,7 +535,7 @@ static void GetTimingTags(
   w.Init("TICKCOUNTS");
   if (ticks.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SSC step timing writer provided fallback tickcount "
+        "SSC step timing writer provided fallback tickcount "
         "because TimingData had none.");
     TickcountSegment ts(0);
     w.Write(ts.GetRow(), ts.GetTicks());
@@ -554,7 +554,7 @@ static void GetTimingTags(
   w.Init("COMBOS");
   if (combos.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SSC step timing writer provided fallback combo because "
+        "SSC step timing writer provided fallback combo because "
         "TimingData had none.");
     ComboSegment cs(0);
     w.Write(cs.GetRow(), cs.GetCombo());
@@ -719,7 +719,7 @@ static bool WriteGlobalTags(CheckedFileWriter& f, const Song& out) {
   switch (out.m_SelectionDisplay) {
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid SSC selection display %i while writing '%s'; "
+          "Invalid SSC selection display %i while writing '%s'; "
           "falling back to YES.",
           out.m_SelectionDisplay, out.GetSongDir().c_str());
       f.Write("YES");
@@ -1006,14 +1006,14 @@ bool NotesWriterSSC::Write(
   for (const Steps* pSteps : vpStepsToSave) {
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-582: refusing to write SSC '%s' with null steps.",
+          "refusing to write SSC '%s' with null steps.",
           sPath.c_str());
       return false;
     }
   }
   if (!bSavingCache && vpStepsToSave.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-590: refusing to write playable SSC '%s' without "
+        "refusing to write playable SSC '%s' without "
         "steps.",
         sPath.c_str());
     return false;
@@ -1071,7 +1071,7 @@ void NotesWriterSSC::GetEditFileContents(
   sOut = "";
   if (pSong == nullptr || pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-582: refusing to build SSC edit contents with null "
+        "refusing to build SSC edit contents with null "
         "song/steps.");
     return;
   }
@@ -1091,7 +1091,7 @@ std::string NotesWriterSSC::GetEditFileName(
     const Song* pSong, const Steps* pSteps) {
   if (pSong == nullptr || pSteps == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-582: refusing to build SSC edit filename with null "
+        "refusing to build SSC edit filename with null "
         "song/steps.");
     return std::string();
   }
@@ -1126,7 +1126,7 @@ bool NotesWriterSSC::WriteEditFileToMachine(
         "Invalid song, steps, profile manager, or file manager for SSC edit "
         "save.";
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-582: refusing to write SSC edit with null "
+        "refusing to write SSC edit with null "
         "song/steps/profile manager/file manager.");
     return false;
   }
@@ -1139,7 +1139,7 @@ bool NotesWriterSSC::WriteEditFileToMachine(
   if (sPath == sDir) {
     sErrorOut = "Could not derive SSC edit filename.";
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-582: refusing to write SSC edit without filename.");
+        "refusing to write SSC edit without filename.");
     return false;
   }
 
@@ -1177,7 +1177,7 @@ bool NotesWriterSSC::WriteEditFileToMachine(
           "Error removing old edit file '%s'.",
           pSteps->GetFilename().c_str());
       LOG->Warn(
-          "SRC_AUDIT_FIX: Failed to remove old SSC edit file '%s' after "
+          "Failed to remove old SSC edit file '%s' after "
           "writing '%s'.",
           pSteps->GetFilename().c_str(), sPath.c_str());
       return false;

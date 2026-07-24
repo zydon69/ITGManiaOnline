@@ -442,7 +442,7 @@ void Font::AddPage(FontPage* m_pPage) {
         static_cast<size_t>(it->second) >= m_pPage->m_aGlyphs.size()) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-805: skipping invalid glyph index %d for font "
+            "skipping invalid glyph index %d for font "
             "%s.",
             it->second, path.c_str());
       }

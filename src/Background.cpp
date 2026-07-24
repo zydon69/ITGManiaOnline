@@ -134,7 +134,7 @@ float SafeBackgroundRate() {
           : GAMESTATE->m_SongOptions.GetCurrent().m_fMusicRate;
   if (!std::isfinite(rate) || rate <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-697: Background used fallback rate because music "
+        "Background used fallback rate because music "
         "rate %.6f is invalid.",
         rate);
     return 1.0f;
@@ -145,7 +145,7 @@ float SafeBackgroundRate() {
 float SafeBackgroundBrightness(float brightness) {
   if (!std::isfinite(brightness)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-699: Background brightness was non-finite; using "
+        "Background brightness was non-finite; using "
         "0.");
     return 0.0f;
   }
@@ -258,7 +258,7 @@ static RageColor GetBrightnessColor(float fBrightnessPercent) {
   float fClamp = CLAMP_OUTPUT_PERCENT;
   if (!std::isfinite(fClamp)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-699: Background clamp output percent was "
+        "Background clamp output percent was "
         "non-finite; using 0.");
     fClamp = 0.0f;
   }
@@ -313,7 +313,7 @@ void BackgroundImpl::Init() {
   {
     if (!m_mapNameToTransition.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-687: Background transition map was not empty at "
+          "Background transition map was not empty at "
           "init; clearing stale entries.");
       m_mapNameToTransition.clear();
     }
@@ -321,7 +321,7 @@ void BackgroundImpl::Init() {
     BackgroundUtil::GetBackgroundTransitions("", vsPaths, vsNames);
     if (LUA == nullptr && !vsPaths.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3091: Background transitions skipped without "
+          "Background transitions skipped without "
           "LUA.");
       vsPaths.clear();
       vsNames.clear();
@@ -333,14 +333,14 @@ void BackgroundImpl::Init() {
       XNode xml;
       if (!XmlFileUtil::LoadFromFileShowErrors(xml, sPath)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-687: Failed to load background transition '%s' "
+            "Failed to load background transition '%s' "
             "from '%s'.",
             sName.c_str(), sPath.c_str());
         continue;
       }
       if (xml.GetName() != "BackgroundTransition") {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-687: Ignoring background transition '%s' "
+            "Ignoring background transition '%s' "
             "because '%s' root is not BackgroundTransition.",
             sName.c_str(), sPath.c_str());
         continue;
@@ -351,7 +351,7 @@ void BackgroundImpl::Init() {
       if (!xml.GetAttrValue("LeavesCommand", sCmdLeaves) ||
           !xml.GetAttrValue("RootCommand", sCmdRoot)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-687: Ignoring background transition '%s' "
+            "Ignoring background transition '%s' "
             "because a command attribute is missing.",
             sName.c_str());
         continue;
@@ -376,7 +376,7 @@ void BackgroundImpl::Init() {
     }
   } else {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-688: Background initialized without GAMESTATE; "
+        "Background initialized without GAMESTATE; "
         "dancing characters are disabled.");
   }
 
@@ -434,7 +434,7 @@ bool BackgroundImpl::Layer::CreateBackground(
     const Song* pSong, const BackgroundDef& bd, Actor* pParent) {
   if (m_BGAnimations.find(bd) != m_BGAnimations.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-690: Background '%s' was already loaded; skipping "
+        "Background '%s' was already loaded; skipping "
         "duplicate creation.",
         bd.m_sFile1.c_str());
     return true;
@@ -503,7 +503,7 @@ bool BackgroundImpl::Layer::CreateBackground(
       // If the main background file is missing, we failed.
       if (i == 0) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-689: Could not resolve background asset '%s'.",
+            "Could not resolve background asset '%s'.",
             sToResolve.c_str());
         return false;
       } else {
@@ -513,7 +513,7 @@ bool BackgroundImpl::Layer::CreateBackground(
 
     if (sResolved.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-690: Background asset '%s' resolved to an empty "
+          "Background asset '%s' resolved to an empty "
           "path.",
           sToResolve.c_str());
       return false;
@@ -554,7 +554,7 @@ bool BackgroundImpl::Layer::CreateBackground(
   }
   if (sEffect.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-690: Background '%s' had no usable effect.",
+        "Background '%s' had no usable effect.",
         bd.m_sFile1.c_str());
     return false;
   }
@@ -585,7 +585,7 @@ bool BackgroundImpl::Layer::CreateBackground(
   }
   if (sEffectFile.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-690: BackgroundEffect '%s' could not be resolved.",
+        "BackgroundEffect '%s' could not be resolved.",
         sEffect.c_str());
     return false;
   }
@@ -594,7 +594,7 @@ bool BackgroundImpl::Layer::CreateBackground(
 
   if (pActor == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3092: Background actor creation failed for effect "
+        "Background actor creation failed for effect "
         "'%s'.",
         sEffectFile.c_str());
     return false;
@@ -639,7 +639,7 @@ BackgroundDef BackgroundImpl::Layer::CreateRandomBGA(
     bool bSuccess = CreateBackground(pSong, bd, pParent);
     if (!bSuccess) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-690: Random background '%s' failed to load.",
+          "Random background '%s' failed to load.",
           bd.m_sFile1.c_str());
       return BackgroundDef();
     }
@@ -651,13 +651,13 @@ void BackgroundImpl::LoadFromRandom(
     float fFirstBeat, float fEndBeat, const BackgroundChange& change) {
   if (m_pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-693: Ignoring random backgrounds without a song.");
+        "Ignoring random backgrounds without a song.");
     return;
   }
   if (!std::isfinite(fFirstBeat) || !std::isfinite(fEndBeat) ||
       fEndBeat <= fFirstBeat) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-693: Ignoring random background range %.3f-%.3f.",
+        "Ignoring random background range %.3f-%.3f.",
         fFirstBeat, fEndBeat);
     return;
   }
@@ -674,7 +674,7 @@ void BackgroundImpl::LoadFromRandom(
     TimeSignatureSegment* ts = static_cast<TimeSignatureSegment*>(tSigs[i]);
     if (ts == nullptr || ts->GetNoteRowsPerMeasure() <= 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-693: Skipping invalid time signature segment for "
+          "Skipping invalid time signature segment for "
           "random backgrounds.");
       continue;
     }
@@ -689,7 +689,7 @@ void BackgroundImpl::LoadFromRandom(
         rawStepRows < 1.0 ||
         rawStepRows > static_cast<double>(std::numeric_limits<int>::max())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-692: Random background change interval %.3f "
+          "Random background change interval %.3f "
           "produced %.3f rows; skipping segment.",
           fChangeMeasures, rawStepRows);
       continue;
@@ -767,7 +767,7 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
 
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-694: Background ignored LoadFromSong(nullptr).");
+        "Background ignored LoadFromSong(nullptr).");
     return;
   }
 
@@ -781,7 +781,7 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     switch (g_RandomBackgroundMode) {
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-695: Invalid RandomBackgroundMode %i; "
+            "Invalid RandomBackgroundMode %i; "
             "disabling random backgrounds.",
             int(g_RandomBackgroundMode));
         break;
@@ -804,7 +804,7 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
         std::min(vsNames.size(), static_cast<size_t>(requestedCount));
     if (requestedCount != static_cast<int>(g_iNumBackgrounds)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3093: Negative random background count %i was "
+          "Negative random background count %i was "
           "clamped to zero.",
           static_cast<int>(g_iNumBackgrounds));
     }
@@ -907,7 +907,7 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
           mainlayer.CreateBackground(m_pSong, m_StaticBackgroundDef, this);
       if (!bSuccess) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-694: Static song background could not be "
+            "Static song background could not be "
             "loaded.");
       }
     }
@@ -944,7 +944,7 @@ void BackgroundImpl::LoadFromSong(const Song* pSong) {
     const size_t removed = static_cast<size_t>(
         mainlayer.m_aBGChanges.end() - firstEmpty);
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3094: Removing %zu empty main background "
+        "Removing %zu empty main background "
         "change(s).",
         removed);
     mainlayer.m_aBGChanges.erase(firstEmpty, mainlayer.m_aBGChanges.end());
@@ -1041,7 +1041,7 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
   if (fCurrentTime == GameState::MUSIC_SECONDS_INVALID ||
       !std::isfinite(fCurrentTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-697: Background ignored invalid music seconds "
+        "Background ignored invalid music seconds "
         "%.3f.",
         fCurrentTime);
     return;
@@ -1165,7 +1165,7 @@ void BackgroundImpl::Layer::UpdateCurBGChange(
   float fDeltaTimeNoMusicRate = std::max(fDeltaTime / fRate, 0.0f);
   if (!std::isfinite(fDeltaTimeNoMusicRate)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-697: Background clamped invalid delta time %.6f.",
+        "Background clamped invalid delta time %.6f.",
         fDeltaTimeNoMusicRate);
     fDeltaTimeNoMusicRate = 0.0f;
   }
@@ -1218,7 +1218,7 @@ void BackgroundImpl::Layer::PruneUnusedBackgrounds() {
 
 void BackgroundImpl::Update(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-698: Background ignored non-finite delta.");
+    LOG->Warn("Background ignored non-finite delta.");
     return;
   }
   ActorFrame::Update(fDeltaTime);
@@ -1297,7 +1297,7 @@ void BackgroundImpl::GetLoadedBackgroundChanges(
   FOREACH_BackgroundLayer(i) {
     if (pBackgroundChangesOut[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-700: Background changes output slot %d is null.",
+          "Background changes output slot %d is null.",
           i);
       continue;
     }

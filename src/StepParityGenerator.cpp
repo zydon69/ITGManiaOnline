@@ -31,25 +31,25 @@ bool StepParityGenerator::analyzeNoteData(const NoteData& in) {
   columnCount_ = 0;
 
   if (layout == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-639: StepParity analysis has no layout.");
+    LOG->Warn("StepParity analysis has no layout.");
     return false;
   }
   if (timing == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-643: StepParity analysis has no timing data.");
+    LOG->Warn("StepParity analysis has no timing data.");
     return false;
   }
 
   columnCount_ = in.GetNumTracks();
   if (columnCount_ <= 0 || columnCount_ > MAX_COLUMNS) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-639: StepParity analysis has invalid track count "
+        "StepParity analysis has invalid track count "
         "%d.",
         columnCount_);
     return false;
   }
   if (layout->columnCount != columnCount_) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-639: StepParity track count %d does not match "
+        "StepParity track count %d does not match "
         "layout column count %d.",
         columnCount_, layout->columnCount);
     return false;
@@ -467,7 +467,7 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
   AddRow(counter);
   if (skippedWarpedNotes > 0) {
     LOG->Trace(
-        "SRC_AUDIT_FIX: StepParity ignored %i notes inside warped timing "
+        "StepParity ignored %i notes inside warped timing "
         "rows.",
         skippedWarpedNotes);
   }
@@ -475,14 +475,14 @@ void StepParityGenerator::CreateRows(const NoteData& in) {
 
 void StepParityGenerator::AddRow(RowCounter& counter) {
   if (counter.lastColumnSecond == CLM_SECOND_INVALID) {
-    LOG->Trace("SRC_AUDIT_FIX SRC-642: skipped empty final StepParity row.");
+    LOG->Trace("skipped empty final StepParity row.");
     return;
   }
 
   Row newRow = CreateRow(counter);
   if (newRow.note_mask == 0 && newRow.hold_mask == 0) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-642: skipped StepParity row without notes or "
+        "skipped StepParity row without notes or "
         "holds.");
     return;
   }

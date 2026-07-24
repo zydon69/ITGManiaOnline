@@ -2,10 +2,10 @@
 
 Most users will find everything they need in this README. There are differences in the build process for ITGmania as compared to Stepmania, so it is recommended to stick with these ITGmania instructions. For anything not covered in this guide, you can usually refer to the original Stepmania documents [here](https://github.com/stepmania/stepmania/wiki/Compiling-StepMania), as long as you replace references to Stepmania with ITGmania.
 
-## Continuous Integration
-Pushes to the `beta` branch of the repository are built with a [GitHub Actions workflow](https://github.com/itgmania/itgmania/actions/workflows/release.yml), in which "nightly releases" are compiled for a matrix of operating systems and architectures. Full releases are built on pushses to the `release` branch.
+## Build validation
 
-By default, GitHub stores build artifacts for 90 days. People who are signed into GitHub and have read access to a repository can download workflow artifacts. They can be downloaded from the Artifacts section of the Summary page on an execution of the workflow.
+GitHub Actions are intentionally disabled for this repository. Build and test
+the source locally on every target platform before distributing a release.
 
 ## Local Development
 
@@ -19,8 +19,8 @@ Using the defaults as suggested should cause minimal problems.
 Make sure you initialize the submodules after cloning the repository. This is required.
 
 ```sh
-git clone --depth=1 https://github.com/itgmania/itgmania.git
-cd itgmania
+git clone --depth=1 https://github.com/zydon69/itgOnline.git
+cd itgOnline
 git submodule update --init --recursive
 ```
 

@@ -14,13 +14,13 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayLifeTimeAuditFix(const char* message) {
+void WarnScoreDisplayLifeTimeSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceScoreDisplayLifeTimeAuditFix(const char* message) {
+void TraceScoreDisplayLifeTimeSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -51,8 +51,8 @@ void ScoreDisplayLifeTime::Init(
   const std::string sType = "ScoreDisplayLifeTime";
 
   if (THEME == nullptr) {
-    WarnScoreDisplayLifeTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-1108: ScoreDisplayLifeTime refused init without "
+    WarnScoreDisplayLifeTimeSafety(
+        "ScoreDisplayLifeTime refused init without "
         "THEME.");
     return;
   }
@@ -90,8 +90,8 @@ void ScoreDisplayLifeTime::Update(float fDelta) {
   ScoreDisplay::Update(fDelta);
 
   if (m_pPlayerStageStats == nullptr) {
-    TraceScoreDisplayLifeTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime skipped update without "
+    TraceScoreDisplayLifeTimeSafety(
+        "ScoreDisplayLifeTime skipped update without "
         "PlayerStageStats.");
     m_textTimeRemaining.SetText(SecondsToMSSMsMs(0));
     return;
@@ -99,8 +99,8 @@ void ScoreDisplayLifeTime::Update(float fDelta) {
 
   float fSecs = m_pPlayerStageStats->m_fLifeRemainingSeconds;
   if (!std::isfinite(fSecs) || fSecs < 0.0f) {
-    TraceScoreDisplayLifeTimeAuditFix(
-        "SRC_AUDIT_FIX SRC-241: ScoreDisplayLifeTime corrected invalid life "
+    TraceScoreDisplayLifeTimeSafety(
+        "ScoreDisplayLifeTime corrected invalid life "
         "seconds.");
     fSecs = 0.0f;
   }

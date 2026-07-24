@@ -73,7 +73,7 @@ void ActiveAttackList::Init(const PlayerState* pPlayerState) {
   m_pPlayerState = pPlayerState;
   if (m_pPlayerState == nullptr) {
     WarnActiveAttackList(
-        "SRC_AUDIT_FIX SRC-1231: ActiveAttackList initialized without player "
+        "ActiveAttackList initialized without player "
         "state.");
     ClearRenderedAttackText();
   }
@@ -130,7 +130,7 @@ void ActiveAttackList::Refresh() {
     }
     if (parsedAttackItems >= MAX_ATTACK_LIST_PARSE_ITEMS) {
       WarnActiveAttackList(
-          "SRC_AUDIT_FIX SRC-2605: ActiveAttackList truncated attack modifier "
+          "ActiveAttackList truncated attack modifier "
           "parsing.");
       break;
     }
@@ -139,7 +139,7 @@ void ActiveAttackList::Refresh() {
     PlayerOptions po;
     if (attack.sModifiers.size() > MAX_ATTACK_LIST_MODIFIER_CHARS) {
       WarnActiveAttackList(
-          "SRC_AUDIT_FIX SRC-1234: ActiveAttackList skipped oversized attack "
+          "ActiveAttackList skipped oversized attack "
           "modifiers.");
       continue;
     }
@@ -150,7 +150,7 @@ void ActiveAttackList::Refresh() {
     AppendBoundedAttackMods(vsThemedMods, attackMods);
     if (vsThemedMods.size() >= MAX_ATTACK_LIST_DISPLAY_ITEMS) {
       WarnActiveAttackList(
-          "SRC_AUDIT_FIX SRC-1234: ActiveAttackList truncated displayed "
+          "ActiveAttackList truncated displayed "
           "attack modifiers.");
       break;
     }

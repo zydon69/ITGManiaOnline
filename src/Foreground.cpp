@@ -52,7 +52,7 @@ float SafeForegroundRate() {
 
   if (!std::isfinite(rate) || rate <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-719: Foreground used fallback rate because music "
+        "Foreground used fallback rate because music "
         "rate %.6f is invalid.",
         rate);
     return 1.0f;
@@ -80,7 +80,7 @@ void Foreground::LoadFromSong(const Song* pSong) {
   Unload();
   if (pSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-715: Foreground ignored LoadFromSong(nullptr).");
+        "Foreground ignored LoadFromSong(nullptr).");
     return;
   }
 
@@ -91,7 +91,7 @@ void Foreground::LoadFromSong(const Song* pSong) {
   for (const BackgroundChange& change : pSong->GetForegroundChanges()) {
     if (!std::isfinite(change.m_fStartBeat)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3106: Foreground skipped a change with "
+          "Foreground skipped a change with "
           "non-finite start beat.");
       continue;
     }
@@ -100,7 +100,7 @@ void Foreground::LoadFromSong(const Song* pSong) {
         Song::GetSongAssetPath(sBGName, pSong->GetSongDir());
     if (sForegroundPath.empty()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-717: Foreground rejected empty or unsafe asset "
+          "Foreground rejected empty or unsafe asset "
           "'%s'.",
           sBGName.c_str());
       continue;
@@ -119,7 +119,7 @@ void Foreground::LoadFromSong(const Song* pSong) {
     }
     if (bga.m_bga == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-718: Foreground failed to create actor for '%s'.",
+          "Foreground failed to create actor for '%s'.",
           sForegroundPath.c_str());
       continue;
     }
@@ -177,7 +177,7 @@ void Foreground::Update(float fDeltaTime) {
       if (!std::isfinite(fStartSecond) || !std::isfinite(tweenTime) ||
           tweenTime < 0.0f) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3106: Foreground disabled '%s' because its "
+            "Foreground disabled '%s' because its "
             "timing is invalid.",
             bga.m_bga->GetName().c_str());
         bga.m_bga->SetVisible(false);
@@ -189,7 +189,7 @@ void Foreground::Update(float fDeltaTime) {
           m_pSong->m_SongTiming.GetBeatFromElapsedTime(fStopSecond);
       if (!std::isfinite(bga.m_fStopBeat)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3106: Foreground disabled '%s' because its "
+            "Foreground disabled '%s' because its "
             "stop beat is invalid.",
             bga.m_bga->GetName().c_str());
         bga.m_bga->SetVisible(false);
@@ -206,7 +206,7 @@ void Foreground::Update(float fDeltaTime) {
     lDeltaTime = std::max(lDeltaTime, 0.0f);
     if (!std::isfinite(lDeltaTime)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-719: Foreground clamped non-finite delta time.");
+          "Foreground clamped non-finite delta time.");
       lDeltaTime = 0.0f;
     }
 

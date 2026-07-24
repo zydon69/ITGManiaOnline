@@ -141,7 +141,7 @@ void AdjustSync::SaveSyncChanges() {
   } else if (GAMESTATE->m_pCurSong && s_vpTimingDataOriginal.empty() &&
              LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX AdjustSync: save skipped song timing compare because "
+        "AdjustSync: save skipped song timing compare because "
         "original timing data is empty.");
   }
   if (s_fGlobalOffsetSecondsOriginal != PREFSMAN->m_fGlobalOffsetSeconds) {
@@ -191,7 +191,7 @@ void AdjustSync::RevertSyncChanges() {
       if (location >= s_vpTimingDataOriginal.size()) {
         if (LOG != nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX AdjustSync: revert skipped stale step timing "
+              "AdjustSync: revert skipped stale step timing "
               "snapshot %u of %zu.",
               location, s_vpTimingDataOriginal.size());
         }
@@ -202,7 +202,7 @@ void AdjustSync::RevertSyncChanges() {
     }
   } else if (GAMESTATE->m_pCurSong && LOG != nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX AdjustSync: revert skipped song timing because "
+        "AdjustSync: revert skipped song timing because "
         "original timing data is empty.");
   }
 
@@ -435,7 +435,7 @@ void AdjustSync::GetSyncChangeTextSong(std::vector<std::string>& vsAddTo) {
     if (s_vpTimingDataOriginal.empty()) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX AdjustSync: unable to compare song sync changes "
+            "AdjustSync: unable to compare song sync changes "
             "without original timing data.");
       }
       return;

@@ -216,7 +216,7 @@ void Course::SetCourseType(CourseType ct) {
 
   if (ct < COURSE_TYPE_NONSTOP || ct >= NUM_CourseType) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-125: refusing invalid course type %i for '%s'", ct,
+        "refusing invalid course type %i for '%s'", ct,
         m_sPath.c_str());
     return;
   }
@@ -259,7 +259,7 @@ PlayMode Course::GetPlayMode() const {
       return PLAY_MODE_NONSTOP;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-125: falling back from invalid course type %i for "
+          "falling back from invalid course type %i for "
           "'%s'",
           ct, m_sPath.c_str());
       return PLAY_MODE_NONSTOP;
@@ -269,13 +269,13 @@ PlayMode Course::GetPlayMode() const {
 bool Course::RevertFromDisk() {
   // trying to catch invalid an Course
   if (m_sPath.empty()) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-126: cannot revert course with empty path");
+    LOG->Warn("cannot revert course with empty path");
     return false;
   }
 
   if (!CourseLoaderCRS::LoadFromCRSFile(m_sPath, *this)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-126: failed to revert course from '%s'",
+        "failed to revert course from '%s'",
         m_sPath.c_str());
     return false;
   }
@@ -451,7 +451,7 @@ bool Course::GetTrailSorted(
       /* If we have any other difficulty, we must have Difficulty_Medium. */
       if (!bOK) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-121: course '%s' sorted by current difficulty "
+            "course '%s' sorted by current difficulty "
             "because Difficulty_Medium trail is unavailable",
             m_sPath.c_str());
         SortTrail = trail;
@@ -459,7 +459,7 @@ bool Course::GetTrailSorted(
     }
     if (trail.m_vEntries.size() != SortTrail.m_vEntries.size()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2935: course '%s' has incompatible sorted trails "
+          "course '%s' has incompatible sorted trails "
           "(%zu current, %zu medium); sorting with the current difficulty",
           m_sPath.c_str(), trail.m_vEntries.size(), SortTrail.m_vEntries.size());
       SortTrail = trail;
@@ -1017,7 +1017,7 @@ void Course::GetAllTrails(std::vector<Trail*>& AddTo) const {
 int Course::GetMeter(StepsType st, CourseDifficulty cd) const {
   if (cd < Difficulty_Beginner || cd >= NUM_Difficulty) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2936: refusing invalid course difficulty %i while "
+        "refusing invalid course difficulty %i while "
         "reading meter for '%s'",
         cd, m_sPath.c_str());
     return 0;

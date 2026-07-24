@@ -6,7 +6,7 @@
 #include "RageTextureID.h"
 
 namespace {
-void WarnRenderTargetAuditFix(const std::string& message) {
+void WarnRenderTargetSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -48,8 +48,8 @@ void RageTextureRenderTarget::Create() {
    * but some require that the resulting texture dimensions be powers of two.
    * CreateRenderTarget returns the actual resolution. */
   if (m_Param.iWidth <= 0 || m_Param.iHeight <= 0) {
-    WarnRenderTargetAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1032: RageTextureRenderTarget refused invalid "
+    WarnRenderTargetSafety(ssprintf(
+        "RageTextureRenderTarget refused invalid "
         "dimensions for '%s' requested=%dx%d.",
         GetID().filename.c_str(), m_Param.iWidth, m_Param.iHeight));
     m_iSourceWidth = m_iSourceHeight = 1;
@@ -59,7 +59,7 @@ void RageTextureRenderTarget::Create() {
     return;
   }
   if (DISPLAY == nullptr) {
-    WarnRenderTargetAuditFix(ssprintf(
+    WarnRenderTargetSafety(ssprintf(
         "RageTextureRenderTarget: failed to create render target '%s' without "
         "a display backend.",
         GetID().filename.c_str()));
@@ -83,7 +83,7 @@ void RageTextureRenderTarget::Create() {
   m_bValid =
       m_iTexHandle != 0 && m_iTextureWidth > 0 && m_iTextureHeight > 0;
   if (!m_bValid) {
-    WarnRenderTargetAuditFix(ssprintf(
+    WarnRenderTargetSafety(ssprintf(
         "RageTextureRenderTarget: failed to create render target '%s' "
         "requested=%dx%d depth=%d alpha=%d float=%d. Rendering to this "
         "target will be skipped instead of falling back to the main "
@@ -106,7 +106,7 @@ void RageTextureRenderTarget::Destroy() {
 void RageTextureRenderTarget::BeginRenderingTo(bool bPreserveTexture) {
   if (DISPLAY == nullptr || !m_bValid) {
     if (!m_bWarnedInvalidUse) {
-      WarnRenderTargetAuditFix(ssprintf(
+      WarnRenderTargetSafety(ssprintf(
           "RageTextureRenderTarget: ignoring BeginRenderingTo() for invalid "
           "render target '%s'.",
           GetID().filename.c_str()));

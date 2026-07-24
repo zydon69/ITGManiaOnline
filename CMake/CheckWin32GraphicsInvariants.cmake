@@ -10,8 +10,7 @@ file(
 foreach(REQUIRED_SNIPPET
     "DisplayNameForWin32"
     "return displayId.empty() ? nullptr : displayId.c_str();"
-    "EnumDisplaySettings(displayName, ENUM_CURRENT_SETTINGS, &dm)"
-    "SRC_AUDIT_FIX SRC-2930")
+    "EnumDisplaySettings(displayName, ENUM_CURRENT_SETTINGS, &dm)")
   string(FIND "${WIN32_GRAPHICS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(

@@ -229,11 +229,11 @@ local function safe_invoke_callback(callback, ...)
 	end
 end
 
-local function review_src_trace(message)
+local function runtime_validation_trace(message)
 	if not (PREFSMAN and PREFSMAN.GetPreference) then return end
-	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("review_src") end)
+	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("runtime_validation") end)
 	if not ok or enabled ~= true then return end
-	local line = "SRC_REVIEW_TRACE [OnlinePackSync] " .. tostring(message or "")
+	local line = "RUNTIME_VALIDATION [OnlinePackSync] " .. tostring(message or "")
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
@@ -247,7 +247,7 @@ function PackSync:DiscardPendingStatusPost(reason)
 			errorMessage = pack_text("PackStatusSuperseded", "The online status was replaced by a newer state."),
 		})
 	end
-	review_src_trace("discarded pending pack status reason=" .. tostring(reason or "unknown")
+	runtime_validation_trace("discarded pending pack status reason=" .. tostring(reason or "unknown")
 		.. " status=" .. tostring(pending.status or "nil")
 		.. " signature=" .. tostring(pending.signature or ""))
 	return true
@@ -285,7 +285,7 @@ function PackSync:QueuePendingStatusPost(signature, status, message, progress, c
 		selectedAt = tostring(selectedAt or ""),
 		callbacks = callback and { callback } or {},
 	}
-	review_src_trace("queued latest pack status while request is active status=" .. tostring(status)
+	runtime_validation_trace("queued latest pack status while request is active status=" .. tostring(status)
 		.. " room=" .. tostring(roomId or "")
 		.. " selected_at=" .. tostring(selectedAt or ""))
 end
@@ -305,7 +305,7 @@ function PackSync:FlushPendingStatusPost(reason)
 				errorMessage = pack_text("PackStatusContextChanged", "The lobby or selection changed before the status was published."),
 			})
 		end
-		review_src_trace("dropped pending pack status after context change reason=" .. tostring(reason or "unknown")
+		runtime_validation_trace("dropped pending pack status after context change reason=" .. tostring(reason or "unknown")
 			.. " queued_room=" .. tostring(pending.roomId or "")
 			.. " active_room=" .. activeRoomId
 			.. " queued_selected_at=" .. tostring(pending.selectedAt or "")
@@ -319,7 +319,7 @@ function PackSync:FlushPendingStatusPost(reason)
 			safe_invoke_callback(pendingCallback, ...)
 		end
 	end
-	review_src_trace("flushing latest queued pack status reason=" .. tostring(reason or "unknown")
+	runtime_validation_trace("flushing latest queued pack status reason=" .. tostring(reason or "unknown")
 		.. " status=" .. tostring(pending.status or "nil"))
 	self:UpdateStatus(pending.status, pending.message, pending.progress,
 		#callbacks > 0 and fan_out or nil, pending.options)
@@ -1548,7 +1548,7 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 			self.statusPostInFlightStartedAt = 0
 			self.statusPostActiveRequestToken = 0
 		else
-			review_src_trace("ignored stale pack status response status=" .. tostring(status)
+			runtime_validation_trace("ignored stale pack status response status=" .. tostring(status)
 				.. " request_token=" .. tostring(requestToken)
 				.. " active_token=" .. tostring(self.statusPostActiveRequestToken or 0)
 				.. " room=" .. tostring(requestRoomId)
@@ -2260,7 +2260,7 @@ function PackSync:FindLocalMatch(songInfo)
 	local scanKey = local_scan_key(songInfo)
 	local cachedScan = self.localScanCache and self.localScanCache[scanKey] or nil
 	if cachedScan and cachedScan.ok == true then
-		review_src_trace("reused successful local chart scan title=" .. selected_title(songInfo)
+		runtime_validation_trace("reused successful local chart scan title=" .. selected_title(songInfo)
 			.. " source=" .. tostring(cachedScan.matchSource or "unknown"))
 		self:ApplyLocalStatus(self.status.LocalChartMatchFound, cachedScan.matchMessage)
 		return {

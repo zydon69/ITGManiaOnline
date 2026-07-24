@@ -57,11 +57,11 @@ require_contains(
   "BMS measure fraction conversion is bounded and reduced")
 require_contains(
   "${notes_loader_bms_cpp}"
-  "SRC_AUDIT_FIX ignored invalid BMS measure size"
+  "ignored invalid BMS measure size"
   "BMS invalid measure sizes are logged and ignored")
 require_contains(
   "${notes_loader_bms_cpp}"
-  "SRC_AUDIT_FIX ignored invalid BMS stop"
+  "ignored invalid BMS stop"
   "BMS invalid stops are logged and ignored")
 require_contains(
   "${notes_loader_bms_cpp}"

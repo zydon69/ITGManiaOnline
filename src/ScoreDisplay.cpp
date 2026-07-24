@@ -13,7 +13,7 @@ void ScoreDisplay::Init(
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-236: ScoreDisplay initialized with "
+          "ScoreDisplay initialized with "
           "PlayerState=%p PlayerStageStats=%p.",
           pPlayerState, pPlayerStageStats);
     }

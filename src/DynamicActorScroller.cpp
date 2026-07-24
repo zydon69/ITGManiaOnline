@@ -20,7 +20,7 @@
 #include "global.h"
 
 namespace {
-void WarnDynamicActorScrollerAuditFix(const char* message) {
+void WarnDynamicActorScrollerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -33,8 +33,8 @@ DynamicActorScroller* DynamicActorScroller::Copy() const {
 
 void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-779: DynamicActorScroller ignored null XML node.");
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller ignored null XML node.");
     return;
   }
   ActorScroller::LoadFromNode(pNode);
@@ -54,8 +54,8 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
       delete extra;
     }
     if (m_SubActors.empty()) {
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-779: DynamicActorScroller created fallback "
+      WarnDynamicActorScrollerSafety(
+          "DynamicActorScroller created fallback "
           "template child.");
       AddChild(new Actor);
     }
@@ -67,16 +67,16 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     m_LoadFunction.SetFromStack(L);
     LUA->Release(L);
   } else {
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-781: DynamicActorScroller skipped LoadFunction "
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller skipped LoadFunction "
         "without LUA.");
     m_iNumItems = 0;
     return;
   }
 
   if (!m_LoadFunction.IsSet() || m_LoadFunction.IsNil()) {
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-781: DynamicActorScroller missing LoadFunction.");
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller missing LoadFunction.");
     m_iNumItems = 0;
     return;
   }
@@ -88,8 +88,8 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     if (!lua_isfunction(L, -1)) {
       lua_pop(L, 1);
       LUA->Release(L);
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller LoadFunction is not a "
+      WarnDynamicActorScrollerSafety(
+          "DynamicActorScroller LoadFunction is not a "
           "function.");
       m_iNumItems = 0;
       return;
@@ -104,8 +104,8 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
     float numItems =
         ok && lua_isnumber(L, -1) ? (float)lua_tonumber(L, -1) : 0.0f;
     if (!std::isfinite(numItems) || numItems < 0.0f) {
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced invalid item "
+      WarnDynamicActorScrollerSafety(
+          "DynamicActorScroller replaced invalid item "
           "count.");
       numItems = 0.0f;
     }
@@ -125,8 +125,8 @@ void DynamicActorScroller::LoadFromNode(const XNode* pNode) {
   for (int i = 1; i < iNumCopies; ++i) {
     std::unique_ptr<Actor> copy(m_SubActors[0]->Copy());
     if (copy == nullptr) {
-      WarnDynamicActorScrollerAuditFix(
-          "SRC_AUDIT_FIX SRC-781: DynamicActorScroller replaced null copy.");
+      WarnDynamicActorScrollerSafety(
+          "DynamicActorScroller replaced null copy.");
       copy.reset(new Actor);
     }
     copies.push_back(std::move(copy));
@@ -196,8 +196,8 @@ void DynamicActorScroller::ShiftSubActors(int iDist) {
     }
     {
       if (LUA == nullptr) {
-        WarnDynamicActorScrollerAuditFix(
-            "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped item index "
+        WarnDynamicActorScrollerSafety(
+            "DynamicActorScroller skipped item index "
             "without LUA.");
         continue;
       }
@@ -217,8 +217,8 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
     if (pActor != nullptr) {
       pActor->SetVisible(false);
     }
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped invalid "
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller skipped invalid "
         "ConfigureActor.");
     return;
   }
@@ -228,8 +228,8 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
     lua_pop(L, 1);
     LUA->Release(L);
     pActor->SetVisible(false);
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-783: DynamicActorScroller skipped non-function "
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller skipped non-function "
         "ConfigureActor.");
     return;
   }
@@ -244,8 +244,8 @@ void DynamicActorScroller::ConfigureActor(Actor* pActor, int iItem) {
   LUA->Release(L);
   if (!ok && ContainsChild(pActor)) {
     pActor->SetVisible(false);
-    WarnDynamicActorScrollerAuditFix(
-        "SRC_AUDIT_FIX SRC-2660: DynamicActorScroller hid failed item.");
+    WarnDynamicActorScrollerSafety(
+        "DynamicActorScroller hid failed item.");
   }
 }
 

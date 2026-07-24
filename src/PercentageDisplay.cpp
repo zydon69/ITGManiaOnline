@@ -23,13 +23,13 @@
 REGISTER_ACTOR_CLASS(PercentageDisplay);
 
 namespace {
-void WarnPercentageDisplayAuditFix(const char* message) {
+void WarnPercentageDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TracePercentageDisplayAuditFix(const char* message) {
+void TracePercentageDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -39,7 +39,7 @@ int ClampDancePointDigits(int digits, const char* context) {
   if (digits < 0 || digits > 12) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-271: %s clamped DancePointsDigits %i.", context,
+          "%s clamped DancePointsDigits %i.", context,
           digits);
     }
     return std::max(0, std::min(12, digits));
@@ -105,7 +105,7 @@ std::string FormatIntSafely(
   if (!IsSafeIntegerFormat(format)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX %s: ignored unsafe integer format '%s'.", context,
+          "%s: ignored unsafe integer format '%s'.", context,
           format.c_str());
     }
     return ssprintf("%d", value);
@@ -173,8 +173,8 @@ void PercentageDisplay::LoadFromNode(const XNode* pNode) {
   ResetLoadedActors();
 
   if (pNode == nullptr) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1085: PercentageDisplay ignored null XML node.");
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay ignored null XML node.");
     return;
   }
   pNode->GetAttrValue("DancePointsDigits", m_iDancePointsDigits);
@@ -189,7 +189,7 @@ void PercentageDisplay::LoadFromNode(const XNode* pNode) {
         // Not reported as an error because _fallback and default provided bad
         // examples in their [LifeMeterBattery Percent]:Format metric and nobody
         // realized it was supposed to be set to a function. -Kyz
-        TracePercentageDisplayAuditFix(
+        TracePercentageDisplaySafety(
             "Format attribute for PercentageDisplay named '%s' is not a "
             "function. Defaulting to 'FormatPercentScore'.");
         m_FormatPercentScore.SetFromExpression("FormatPercentScore");
@@ -209,8 +209,8 @@ void PercentageDisplay::LoadFromNode(const XNode* pNode) {
     if (THEME != nullptr) {
       m_textPercent.LoadFromFont(THEME->GetPathF("", "Common Normal"));
     } else {
-      WarnPercentageDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1085: PercentageDisplay could not load fallback "
+      WarnPercentageDisplaySafety(
+          "PercentageDisplay could not load fallback "
           "font without THEME.");
     }
   } else {
@@ -241,8 +241,8 @@ void PercentageDisplay::Load(
   m_pPlayerState = pPlayerState;
   m_pPlayerStageStats = pPlayerStageStats;
   if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-270: PercentageDisplay loaded without complete "
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay loaded without complete "
         "player stats.");
     return;
   }
@@ -259,8 +259,8 @@ void PercentageDisplay::Load(
   m_bAutoRefresh = bAutoRefresh;
 
   if (THEME == nullptr) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1085: PercentageDisplay refused metric load "
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay refused metric load "
         "without THEME.");
     return;
   }
@@ -284,7 +284,7 @@ void PercentageDisplay::Load(
     // Not reported as an error because _fallback and default provided bad
     // examples in their [LifeMeterBattery Percent]:Format metric and nobody
     // realized it was supposed to be set to a function. -Kyz
-    TracePercentageDisplayAuditFix(
+    TracePercentageDisplaySafety(
         "Format metric is not a function in [%s]. Defaulting to "
         "'FormatPercentScore'.");
     m_FormatPercentScore.SetFromExpression("FormatPercentScore");
@@ -294,8 +294,8 @@ void PercentageDisplay::Load(
                            m_pPlayerState->m_PlayerNumber >= PLAYER_1 &&
                            m_pPlayerState->m_PlayerNumber < NUM_PLAYERS;
   if (m_pPlayerState != nullptr && !validPlayer) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-2975: PercentageDisplay rejected invalid player "
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay rejected invalid player "
         "number.");
   }
 
@@ -328,7 +328,7 @@ void PercentageDisplay::Load(
     ActorUtil::LoadAllCommands(m_textPercentRemainder, sMetricsGroup);
     if (!m_textPercentRemainder.HasCommand("Off") && LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-273: PercentageDisplay remainder in [%s] has no "
+          "PercentageDisplay remainder in [%s] has no "
           "Off command.",
           sMetricsGroup.c_str());
     }
@@ -337,8 +337,8 @@ void PercentageDisplay::Load(
   }
 
   if (!validPlayer || m_pPlayerStageStats == nullptr) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-270: PercentageDisplay metric load missing or "
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay metric load missing or "
         "invalid player stats.");
     return;
   }
@@ -347,8 +347,8 @@ void PercentageDisplay::Load(
 
 void PercentageDisplay::Update(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnPercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1088: PercentageDisplay ignored non-finite update "
+    WarnPercentageDisplaySafety(
+        "PercentageDisplay ignored non-finite update "
         "delta.");
     return;
   }
@@ -361,8 +361,8 @@ void PercentageDisplay::Update(float fDeltaTime) {
 
 void PercentageDisplay::Refresh() {
   if (m_pPlayerStageStats == nullptr) {
-    TracePercentageDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-270: PercentageDisplay skipped refresh without "
+    TracePercentageDisplaySafety(
+        "PercentageDisplay skipped refresh without "
         "PlayerStageStats.");
     return;
   }
@@ -385,8 +385,8 @@ void PercentageDisplay::Refresh() {
   } else {
     float fPercentDancePoints = m_pPlayerStageStats->GetPercentDancePoints();
     if (!std::isfinite(fPercentDancePoints)) {
-      WarnPercentageDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-274: PercentageDisplay corrected non-finite "
+      WarnPercentageDisplaySafety(
+          "PercentageDisplay corrected non-finite "
           "percent.");
       fPercentDancePoints = 0.0f;
     }
@@ -399,9 +399,9 @@ void PercentageDisplay::Refresh() {
       int iPercentRemainder = int(
           (fPercentDancePoints * 100 - int(fPercentDancePoints * 100)) * 10);
       sNumToDisplay = FormatIntSafely(
-          m_sPercentFormat, iPercentWhole, "SRC-275 PercentageDisplay");
+          m_sPercentFormat, iPercentWhole, "PercentageDisplay");
       m_textPercentRemainder.SetText(FormatIntSafely(
-          m_sRemainderFormat, iPercentRemainder, "SRC-275 PercentageDisplay"));
+          m_sRemainderFormat, iPercentRemainder, "PercentageDisplay"));
     } else {
       if (m_FormatPercentScore.GetLuaType() == LUA_TFUNCTION) {
         if (LUA != nullptr) {

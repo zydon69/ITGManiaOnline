@@ -105,7 +105,7 @@ static void DeserializeTimingSegmentArray(
 
 static void Deserialize(TimingData& td, const Json::Value& root) {
   if (!root.isObject()) {
-    LOG->Warn("SRC_AUDIT_FIX JSON TimingData is not an object; ignored.");
+    LOG->Warn("JSON TimingData is not an object; ignored.");
     return;
   }
   if (root.isMember("Offset")) {
@@ -155,7 +155,7 @@ static void Deserialize(TapNote& o, const Json::Value& root) {
     // still represents a tap rather than an empty note.
     if (root.isMember("Type") && !root["Type"].isInt()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX JSON note has a non-integer TapNoteType; treating "
+          "JSON note has a non-integer TapNoteType; treating "
           "it as empty.");
       o = TAP_EMPTY;
       return;
@@ -167,7 +167,7 @@ static void Deserialize(TapNote& o, const Json::Value& root) {
   }
 
   if (rawType < TapNoteType_Empty || rawType >= NUM_TapNoteType) {
-    LOG->Warn("SRC_AUDIT_FIX JSON note has invalid TapNoteType %i; treating "
+    LOG->Warn("JSON note has invalid TapNoteType %i; treating "
               "it as empty.",
               rawType);
     o = TAP_EMPTY;
@@ -204,7 +204,7 @@ static void Deserialize(TapNote& o, const Json::Value& root) {
 
 static bool Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
   if (st == StepsType_Invalid) {
-    LOG->Warn("SRC_AUDIT_FIX JSON chart has invalid StepsType; notes ignored.");
+    LOG->Warn("JSON chart has invalid StepsType; notes ignored.");
     return false;
   }
 
@@ -212,7 +212,7 @@ static bool Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
   nd.SetNumTracks(iTracks);
   if (!root.isArray()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX JSON chart NoteData is not an array; notes ignored.");
+        "JSON chart NoteData is not an array; notes ignored.");
     return false;
   }
 
@@ -220,7 +220,7 @@ static bool Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
     Json::Value root2 = root[i];
     if (!root2.isArray() || root2.size() < 3) {
       LOG->Warn(
-          "SRC_AUDIT_FIX JSON chart note entry %u is malformed; skipped.", i);
+          "JSON chart note entry %u is malformed; skipped.", i);
       continue;
     }
     float fBeat = (float)root2[(unsigned)0].asDouble();
@@ -228,7 +228,7 @@ static bool Deserialize(StepsType st, NoteData& nd, const Json::Value& root) {
     int iTrack = root2[1].asInt();
     if (iTrack < 0 || iTrack >= iTracks) {
       LOG->Warn(
-          "SRC_AUDIT_FIX JSON chart note entry %u has invalid track %i for %i "
+          "JSON chart note entry %u has invalid track %i for %i "
           "tracks; "
           "skipped.",
           i, iTrack, iTracks);
@@ -277,7 +277,7 @@ static DisplayBPM DeserializeDisplayBPM(const Json::Value& root) {
     return DISPLAY_BPM_RANDOM;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX JSON has unknown DisplayBpmType '%s'; using Actual.",
+      "JSON has unknown DisplayBpmType '%s'; using Actual.",
       sDisplayBPMType.c_str());
   return DISPLAY_BPM_ACTUAL;
 }
@@ -286,7 +286,7 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
   o.m_StepsType = GAMEMAN->StringToStepsType(root["StepsType"].asString());
   if (o.m_StepsType == StepsType_Invalid) {
     LOG->Warn(
-        "SRC_AUDIT_FIX JSON chart has unknown StepsType '%s'; chart ignored.",
+        "JSON chart has unknown StepsType '%s'; chart ignored.",
         root["StepsType"].asString().c_str());
     return false;
   }
@@ -324,7 +324,7 @@ static bool Deserialize(Steps& o, const Json::Value& root) {
 
 static bool Deserialize(Song& out, const Json::Value& root) {
   if (!root.isObject()) {
-    LOG->Warn("SRC_AUDIT_FIX JSON song root is not an object; load rejected.");
+    LOG->Warn("JSON song root is not an object; load rejected.");
     return false;
   }
   out.SetSongDir(root["SongDir"].asString());
@@ -387,7 +387,7 @@ static bool Deserialize(Song& out, const Json::Value& root) {
   const Json::Value& charts = root["Charts"];
   if (!charts.isArray()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX JSON song has no Charts array; load rejected.");
+        "JSON song has no Charts array; load rejected.");
     return false;
   }
   for (unsigned i = 0; i < charts.size(); ++i) {
@@ -399,7 +399,7 @@ static bool Deserialize(Song& out, const Json::Value& root) {
     }
   }
   if (out.GetAllSteps().empty()) {
-    LOG->Warn("SRC_AUDIT_FIX JSON song has no loadable charts; load rejected.");
+    LOG->Warn("JSON song has no loadable charts; load rejected.");
     return false;
   }
   return true;

@@ -208,7 +208,7 @@ static void DWIcharToNoteCol(
     if (col == mapDanceNoteToNoteDataColumn.end()) {
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX ignored DWI note character '%c' because it targets a "
+          "ignored DWI note character '%c' because it targets a "
           "column not present in this chart style.",
           c);
       col1Out = -1;
@@ -224,7 +224,7 @@ static void DWIcharToNoteCol(
     if (col == mapDanceNoteToNoteDataColumn.end()) {
       LOG->UserLog(
           "Song file", sPath,
-          "SRC_AUDIT_FIX ignored DWI note character '%c' because it targets a "
+          "ignored DWI note character '%c' because it targets a "
           "column not present in this chart style.",
           c);
       col2Out = -1;
@@ -364,7 +364,7 @@ static NoteData ParseNoteData(
     default:
       LOG->UserLog(
           "Song file", path,
-          "SRC_AUDIT_FIX has unsupported DWI StepsType %i. Chart ignored.",
+          "has unsupported DWI StepsType %i. Chart ignored.",
           out.m_StepsType);
       return NoteData();
   }
@@ -443,7 +443,7 @@ static NoteData ParseNoteData(
             if (i >= sStepData.size()) {
               LOG->UserLog(
                   "Song file", path,
-                  "SRC_AUDIT_FIX has a truncated DWI jump marker in \"%s\". "
+                  "has a truncated DWI jump marker in \"%s\". "
                   "Corrupt jump ignored.",
                   DifficultyToString(out.GetDifficulty()).c_str());
               break;
@@ -484,7 +484,7 @@ static NoteData ParseNoteData(
               if (i >= sStepData.size()) {
                 LOG->UserLog(
                     "Song file", path,
-                    "SRC_AUDIT_FIX has a truncated DWI hold marker in \"%s\" "
+                    "has a truncated DWI hold marker in \"%s\" "
                     "at row %i. Hold ignored.",
                     DifficultyToString(out.GetDifficulty()).c_str(), iIndex);
                 break;
@@ -582,7 +582,7 @@ static bool LoadFromDWITokens(
   if (out.m_StepsType == StepsType_Invalid) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX has an unsupported DWI chart mode \"%s\". Skipping "
+        "has an unsupported DWI chart mode \"%s\". Skipping "
         "chart.",
         sMode.c_str());
     return false;
@@ -601,7 +601,7 @@ static bool LoadFromDWITokens(
   if (noteData.GetNumTracks() <= 0) {
     LOG->UserLog(
         "Song file", sPath,
-        "SRC_AUDIT_FIX produced no DWI tracks for chart %s:%s:%s. Skipping "
+        "produced no DWI tracks for chart %s:%s:%s. Skipping "
         "chart.",
         sMode.c_str(), sDescription.c_str(), sNumFeet.c_str());
     out.m_StepsType = StepsType_Invalid;
@@ -688,7 +688,7 @@ bool DWILoader::LoadNoteDataFromSimfile(const std::string& path, Steps& out) {
       if (noteData.GetNumTracks() <= 0) {
         LOG->UserLog(
             "Song file", path,
-            "SRC_AUDIT_FIX produced no DWI tracks while loading cached note "
+            "produced no DWI tracks while loading cached note "
             "data. Chart ignored.");
         return false;
       }
@@ -715,7 +715,7 @@ bool DWILoader::LoadFromDir(
   if (aFileNames.empty()) {
     LOG->UserLog(
         "Song", sPath_,
-        "SRC_AUDIT_FIX found no applicable DWI simfile for direct LoadFromDir.");
+        "found no applicable DWI simfile for direct LoadFromDir.");
     return false;
   }
   const std::string sPath = sPath_ + aFileNames[0];
@@ -845,7 +845,7 @@ bool DWILoader::LoadFromDir(
                 arrayFreezeValues[1], freezeMilliseconds)) {
           LOG->UserLog(
               "Song file", sPath,
-              "SRC_AUDIT_FIX has a non-numeric or non-finite FREEZE '%s'.",
+              "has a non-numeric or non-finite FREEZE '%s'.",
               arrayFreezeExpressions[f].c_str());
           continue;
         }
@@ -854,7 +854,7 @@ bool DWILoader::LoadFromDir(
         if (iFreezeRow < 0 || fFreezeSeconds <= 0.0f) {
           LOG->UserLog(
               "Song file", sPath,
-              "SRC_AUDIT_FIX has an invalid FREEZE at row %i, seconds %f.",
+              "has an invalid FREEZE at row %i, seconds %f.",
               iFreezeRow, fFreezeSeconds);
           continue;
         }
@@ -887,7 +887,7 @@ bool DWILoader::LoadFromDir(
             !ParseFiniteDWIValue(arrayBPMChangeValues[1], fBPM)) {
           LOG->UserLog(
               "Song file", sPath,
-              "SRC_AUDIT_FIX has a non-numeric or non-finite BPM change "
+              "has a non-numeric or non-finite BPM change "
               "'%s'.",
               arrayBPMChangeExpressions[b].c_str());
           continue;

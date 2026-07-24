@@ -34,7 +34,7 @@ namespace {
 
 void WarnScreenEnding(const std::string& message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenEnding: %s", message.c_str());
+    LOG->Warn("ScreenEnding: %s", message.c_str());
   }
 }
 

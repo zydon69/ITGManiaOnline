@@ -56,7 +56,7 @@ std::map<RageTexture*, RageTextureID> m_texture_ids_by_pointer;
 Preference<int> g_iTextureGCMaxDeletesPerScreenChange(
     "TextureGCMaxDeletesPerScreenChange", 48);
 
-void WarnTextureManagerAuditFix(const char* message) {
+void WarnTextureManagerSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -88,8 +88,8 @@ RageTextureManager::~RageTextureManager() {
 
 void RageTextureManager::Update(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1016: RageTextureManager ignored invalid update "
+    WarnTextureManagerSafety(
+        "RageTextureManager ignored invalid update "
         "delta.");
     return;
   }
@@ -138,8 +138,8 @@ bool RageTextureManager::IsTextureRegistered(RageTextureID ID) const {
 void RageTextureManager::RegisterTexture(
     RageTextureID ID, RageTexture* pTexture) {
   if (pTexture == nullptr) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1017: RageTextureManager ignored null texture "
+    WarnTextureManagerSafety(
+        "RageTextureManager ignored null texture "
         "registration.");
     return;
   }
@@ -151,8 +151,8 @@ void RageTextureManager::RegisterTexture(
   std::map<RageTextureID, RageTexture*>::iterator p =
       m_mapPathToTexture.find(ID);
   if (p != m_mapPathToTexture.end()) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1017: RageTextureManager rejected duplicate custom "
+    WarnTextureManagerSafety(
+        "RageTextureManager rejected duplicate custom "
         "texture registration.");
     if (p->second != pTexture) {
       RageUtil::SafeDelete(pTexture);
@@ -168,8 +168,8 @@ void RageTextureManager::RegisterTextureForUpdating(
     RageTextureID id, RageTexture* tex) {
   if (tex == nullptr) {
     m_textures_to_update.erase(id);
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1018: RageTextureManager ignored null update "
+    WarnTextureManagerSafety(
+        "RageTextureManager ignored null update "
         "texture.");
     return;
   }
@@ -236,8 +236,8 @@ RageTexture* RageTextureManager::LoadTextureInternal(RageTextureID ID) {
     pTexture = new RageBitmapTexture(ID);
   }
   if (pTexture == nullptr) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1019: RageTextureManager fell back after null "
+    WarnTextureManagerSafety(
+        "RageTextureManager fell back after null "
         "texture factory result.");
     pTexture = new RageTexture_Default;
   }
@@ -259,8 +259,8 @@ RageTexture* RageTextureManager::LoadTexture(RageTextureID ID) {
 
 RageTexture* RageTextureManager::CopyTexture(RageTexture* pCopy) {
   if (pCopy == nullptr) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1020: RageTextureManager refused to copy null "
+    WarnTextureManagerSafety(
+        "RageTextureManager refused to copy null "
         "texture.");
     return nullptr;
   }
@@ -284,8 +284,8 @@ void RageTextureManager::UnloadTexture(RageTexture* t) {
   }
 
   if (t->m_iRefCount <= 0) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1021: RageTextureManager refused refcount "
+    WarnTextureManagerSafety(
+        "RageTextureManager refused refcount "
         "underflow during unload.");
     return;
   }
@@ -323,8 +323,8 @@ void RageTextureManager::DeleteTexture(RageTexture* t) {
     return;
   }
   if (t->m_iRefCount != 0) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1022: RageTextureManager refused to delete "
+    WarnTextureManagerSafety(
+        "RageTextureManager refused to delete "
         "referenced texture.");
     return;
   }
@@ -348,14 +348,14 @@ void RageTextureManager::DeleteTexture(RageTexture* t) {
       RageUtil::SafeDelete(t);
       return;
     }
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1022: RageTextureManager found stale texture "
+    WarnTextureManagerSafety(
+        "RageTextureManager found stale texture "
         "pointer registration.");
     return;
   }
 
-  WarnTextureManagerAuditFix(
-      "SRC_AUDIT_FIX SRC-1022: RageTextureManager ignored unknown texture "
+  WarnTextureManagerSafety(
+      "RageTextureManager ignored unknown texture "
       "delete request.");
 }
 
@@ -400,8 +400,8 @@ void RageTextureManager::GarbageCollect(GCType type) {
           bDeleteThis = true;
           break;
         default:
-          WarnTextureManagerAuditFix(
-              "SRC_AUDIT_FIX SRC-1023: RageTextureManager deleted texture with "
+          WarnTextureManagerSafety(
+              "RageTextureManager deleted texture with "
               "invalid policy.");
           bDeleteThis = true;
       }
@@ -466,14 +466,14 @@ void RageTextureManager::InvalidateTextures() {
 
 bool RageTextureManager::SetPrefs(RageTextureManagerPrefs prefs) {
   if (prefs.m_iTextureColorDepth != 16 && prefs.m_iTextureColorDepth != 32) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1024: RageTextureManager clamped invalid texture "
+    WarnTextureManagerSafety(
+        "RageTextureManager clamped invalid texture "
         "color depth.");
     prefs.m_iTextureColorDepth = 32;
   }
   if (prefs.m_iMovieColorDepth != 16 && prefs.m_iMovieColorDepth != 32) {
-    WarnTextureManagerAuditFix(
-        "SRC_AUDIT_FIX SRC-1024: RageTextureManager clamped invalid movie color "
+    WarnTextureManagerSafety(
+        "RageTextureManager clamped invalid movie color "
         "depth.");
     prefs.m_iMovieColorDepth = 32;
   }

@@ -12,7 +12,7 @@
 #include "global.h"
 
 namespace {
-void WarnTexturePreloaderAuditFix(const char* message) {
+void WarnTexturePreloaderSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -29,8 +29,8 @@ RageTexturePreloader& RageTexturePreloader::operator=(
 
   for (unsigned i = 0; i < rhs.m_apTextures.size(); ++i) {
     if (TEXTUREMAN == nullptr) {
-      WarnTexturePreloaderAuditFix(
-          "SRC_AUDIT_FIX SRC-1025: RageTexturePreloader skipped copy without "
+      WarnTexturePreloaderSafety(
+          "RageTexturePreloader skipped copy without "
           "texture manager.");
       break;
     }
@@ -45,8 +45,8 @@ RageTexturePreloader& RageTexturePreloader::operator=(
 
 void RageTexturePreloader::Load(const RageTextureID& ID) {
   if (TEXTUREMAN == nullptr) {
-    WarnTexturePreloaderAuditFix(
-        "SRC_AUDIT_FIX SRC-1025: RageTexturePreloader ignored load without "
+    WarnTexturePreloaderSafety(
+        "RageTexturePreloader ignored load without "
         "texture manager.");
     return;
   }

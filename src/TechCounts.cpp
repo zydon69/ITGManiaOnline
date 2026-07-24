@@ -60,7 +60,7 @@ static bool ValidateLayoutColumns(
   for (int column : columns) {
     if (!IsValidLayoutColumn(layout, column)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-649: TechCounts layout has invalid %s column %d.",
+          "TechCounts layout has invalid %s column %d.",
           label, column);
       return false;
     }
@@ -72,13 +72,13 @@ static bool ValidateTechCountsInput(
     const std::vector<StepParity::Row>& rows,
     const StepParity::StageLayout* layout) {
   if (layout == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-649: TechCounts requested without layout.");
+    LOG->Warn("TechCounts requested without layout.");
     return false;
   }
   if (layout->columnCount <= 0 ||
       layout->columns.size() != static_cast<size_t>(layout->columnCount)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-649: TechCounts layout column count mismatch "
+        "TechCounts layout column count mismatch "
         "(columnCount=%d, columns=%zu).",
         layout->columnCount, layout->columns.size());
     return false;
@@ -94,21 +94,21 @@ static bool ValidateTechCountsInput(
     if (!std::isfinite(row.second) || !std::isfinite(row.beat) ||
         (rowIndex > 0 && row.second < rows[rowIndex - 1].second)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: TechCounts row %zu has invalid/non-monotonic "
+          "TechCounts row %zu has invalid/non-monotonic "
           "timing (beat=%.6f second=%.6f).",
           rowIndex, row.beat, row.second);
       return false;
     }
     if (row.columns.size() != static_cast<size_t>(layout->columnCount)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has %zu columns; "
+          "TechCounts row %zu has %zu columns; "
           "expected %d.",
           rowIndex, row.columns.size(), layout->columnCount);
       return false;
     }
     if (row.whereTheFeetAre.size() < StepParity::NUM_Foot) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has %zu foot "
+          "TechCounts row %zu has %zu foot "
           "placements; expected at least %d.",
           rowIndex, row.whereTheFeetAre.size(), StepParity::NUM_Foot);
       return false;
@@ -116,7 +116,7 @@ static bool ValidateTechCountsInput(
     for (StepParity::Foot foot : StepParity::FEET) {
       if (!IsValidFootColumn(layout, row.whereTheFeetAre[foot])) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-649: TechCounts row %zu has invalid foot "
+            "TechCounts row %zu has invalid foot "
             "placement column %d.",
             rowIndex, row.whereTheFeetAre[foot]);
         return false;
@@ -164,7 +164,7 @@ float& TechCounts::InvalidMutableValue(int cat) {
   thread_local float invalidValue = TECHCOUNTS_VAL_UNKNOWN;
   invalidValue = TECHCOUNTS_VAL_UNKNOWN;
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-638: invalid mutable TechCounts index %d.", cat);
+      "invalid mutable TechCounts index %d.", cat);
   return invalidValue;
 }
 
@@ -178,7 +178,7 @@ float& TechCounts::operator[](TechCountsCategory cat) {
 
 float TechCounts::operator[](int cat) const {
   if (!IsValidCategoryIndex(cat)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-638: invalid TechCounts index %d.", cat);
+    LOG->Warn("invalid TechCounts index %d.", cat);
     return TECHCOUNTS_VAL_UNKNOWN;
   }
   return m_Values[cat];
@@ -212,7 +212,7 @@ void TechCounts::FromString(std::string sTechCounts) {
   MakeUnknown();
   if (saValues.size() != NUM_TechCountsCategory) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-637: TechCounts cache has %zu values; expected %d.",
+        "TechCounts cache has %zu values; expected %d.",
         saValues.size(), NUM_TechCountsCategory);
   }
 
@@ -222,13 +222,13 @@ void TechCounts::FromString(std::string sTechCounts) {
     float value = TECHCOUNTS_VAL_UNKNOWN;
     if (!StringConversion::FromString<float>(saValues[i], value)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-637: invalid TechCounts value '%s' at index %zu.",
+          "invalid TechCounts value '%s' at index %zu.",
           saValues[i].c_str(), i);
       continue;
     }
     if (!std::isfinite(value) || value < TECHCOUNTS_VAL_UNKNOWN) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: invalid non-finite/out-of-range TechCounts value "
+          "invalid non-finite/out-of-range TechCounts value "
           "'%s' at index %zu.",
           saValues[i].c_str(), i);
       continue;
@@ -434,7 +434,7 @@ bool TechCounts::isFootswitch(
     const StepParity::Row& previousRow, float elapsedTime) {
   if (!IsValidRowColumn(currentRow, c) || !IsValidRowColumn(previousRow, c)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-649: footswitch check received invalid column %d.",
+        "footswitch check received invalid column %d.",
         c);
     return false;
   }

@@ -38,11 +38,11 @@ static bool CompareCoursePointersByName(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   std::string sName1 = pCourse1->GetDisplayFullTitle();
@@ -56,11 +56,11 @@ static bool CompareCoursePointersByAutogen(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   int b1 = pCourse1->m_bIsAutogen;
@@ -80,11 +80,11 @@ static bool CompareCoursePointersByDifficulty(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   int iNum1 = pCourse1->GetEstimatedNumStages();
@@ -104,11 +104,11 @@ static bool CompareCoursePointersByTotalDifficulty(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   int iNum1 = pCourse1->m_SortOrder_TotalDifficulty;
@@ -126,11 +126,11 @@ static bool MovePlayersBestToEnd(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   bool C1HasBest = pCourse1->CourseHasBestOrWorst();
@@ -153,11 +153,11 @@ static bool CompareRandom(const Course* pCourse1, const Course* pCourse2) {
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   return (pCourse1->AllSongsAreFixed() && !pCourse2->AllSongsAreFixed());
@@ -169,11 +169,11 @@ static bool CompareCoursePointersByRanking(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   int iNum1 = pCourse1->m_SortOrder_Ranking;
@@ -188,7 +188,7 @@ static bool CompareCoursePointersByRanking(
 static bool GetCurrentCourseStepsType(StepsType& stOut, const char* sContext) {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3086: %s requested without GAMESTATE; falling back "
+        "%s requested without GAMESTATE; falling back "
         "to title sort.",
         sContext);
     return false;
@@ -196,7 +196,7 @@ static bool GetCurrentCourseStepsType(StepsType& stOut, const char* sContext) {
   const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
   if (pStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-134: %s requested without a current style; falling "
+        "%s requested without a current style; falling "
         "back to title sort",
         sContext);
     return false;
@@ -222,7 +222,7 @@ void CourseUtil::SortCoursePointerArrayByRanking(
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
     if (vpCoursesInOut[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-667: skipped null course while updating ranking "
+          "skipped null course while updating ranking "
           "sort stats.");
       continue;
     }
@@ -243,7 +243,7 @@ void CourseUtil::SortCoursePointerArrayByTotalDifficulty(
   for (unsigned i = 0; i < vpCoursesInOut.size(); i++) {
     if (vpCoursesInOut[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-667: skipped null course while updating total "
+          "skipped null course while updating total "
           "difficulty sort stats.");
       continue;
     }
@@ -287,11 +287,11 @@ static bool CompareCoursePointersByType(
     return false;
   }
   if (pCourse1 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return false;
   }
   if (pCourse2 == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-666: null course sorted after valid courses.");
+    LOG->Warn("null course sorted after valid courses.");
     return true;
   }
   return pCourse1->GetPlayMode() < pCourse2->GetPlayMode();
@@ -374,7 +374,7 @@ void CourseUtil::SortCoursePointerArrayByAvgDifficulty(
   for (unsigned i = 0; i < vpCoursesInOut.size(); ++i) {
     if (vpCoursesInOut[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-667: skipped null course while computing average "
+          "skipped null course while computing average "
           "difficulty sort value.");
       course_sort_val[vpCoursesInOut[i]] = std::string();
       continue;
@@ -398,7 +398,7 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
     std::vector<Course*>& vpCoursesInOut, ProfileSlot slot, bool bDescending) {
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-669: course play-count sort requested without "
+        "course play-count sort requested without "
         "PROFILEMAN; falling back to title sort.");
     SortCoursePointerArrayByTitle(vpCoursesInOut);
     return;
@@ -415,7 +415,7 @@ void CourseUtil::SortCoursePointerArrayByNumPlays(
     bool bDescending) {
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-669: course play-count sort requested without "
+        "course play-count sort requested without "
         "profile; falling back to title sort.");
     SortCoursePointerArrayByTitle(vpCoursesInOut);
     return;
@@ -440,7 +440,7 @@ void CourseUtil::SortByMostRecentlyPlayedForMachine(
       PROFILEMAN == nullptr ? nullptr : PROFILEMAN->GetMachineProfile();
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-669: recent course sort requested without machine "
+        "recent course sort requested without machine "
         "profile; falling back to title sort.");
     SortCoursePointerArrayByTitle(vpCoursesInOut);
     return;
@@ -470,7 +470,7 @@ void CourseUtil::MakeDefaultEditCourseEntry(CourseEntry& out) {
       GAMESTATE == nullptr ? nullptr : GAMESTATE->GetDefaultSong();
   if (pDefaultSong == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-670: default edit course entry requested without "
+        "default edit course entry requested without "
         "default song.");
   }
   out.songID.FromSong(pDefaultSong);
@@ -486,14 +486,14 @@ void CourseUtil::AutogenEndlessFromGroup(
   out = Course();
   if (SONGMAN == nullptr || THEME == nullptr || !THEME->IsThemeLoaded()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-671: cannot autogen endless course for group '%s' "
+        "cannot autogen endless course for group '%s' "
         "without SONGMAN or THEME.",
         sGroupName.c_str());
     return;
   }
   if (diff < Difficulty_Beginner || diff >= NUM_Difficulty) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-671: invalid autogen difficulty %i for group '%s'; "
+        "invalid autogen difficulty %i for group '%s'; "
         "using Medium.",
         diff, sGroupName.c_str());
     diff = Difficulty_Medium;
@@ -535,7 +535,7 @@ void CourseUtil::AutogenNonstopFromGroup(
 
   if (out.m_vEntries.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-128: skipped nonstop autogen entries for empty group "
+        "skipped nonstop autogen entries for empty group "
         "'%s'",
         sGroupName.c_str());
     return;
@@ -561,14 +561,14 @@ void CourseUtil::AutogenOniFromArtist(
       std::remove(aSongs.begin(), aSongs.end(), nullptr), aSongs.end());
   if (sArtistName.empty() || aSongs.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-672: skipped artist oni autogen for artist '%s' "
+        "skipped artist oni autogen for artist '%s' "
         "with %zu valid songs.",
         sArtistName.c_str(), aSongs.size());
     return;
   }
   if (dc < Difficulty_Beginner || dc >= NUM_Difficulty) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-672: invalid artist oni difficulty %i for '%s'; "
+        "invalid artist oni difficulty %i for '%s'; "
         "using Medium.",
         dc, sArtistName.c_str());
     dc = Difficulty_Medium;
@@ -653,7 +653,7 @@ void CourseUtil::WarnOnInvalidMods(std::string sMods) {
   if (!invalidMods.empty()) {
     std::string sDialogText = join("\n", invalidMods);
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-673: reporting %zu invalid course mods through the "
+        "reporting %zu invalid course mods through the "
         "global dialog/log policy.",
         invalidMods.size());
     Dialog::OK(sDialogText, "INVALID_PLAYER_OPTION_WARNING");
@@ -668,7 +668,7 @@ bool EditCourseUtil::s_bNewCourseNeedsName = false;
 
 bool EditCourseUtil::Save(Course* pCourse) {
   if (pCourse == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to save a null course");
+    LOG->Warn("refusing to save a null course");
     return false;
   }
   return EditCourseUtil::RenameAndSave(pCourse, pCourse->GetDisplayFullTitle());
@@ -676,7 +676,7 @@ bool EditCourseUtil::Save(Course* pCourse) {
 
 bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   if (pCourse == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to rename/save a null course");
+    LOG->Warn("refusing to rename/save a null course");
     return false;
   }
   Trim(sNewName);
@@ -688,14 +688,14 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   if (sNewName.empty() || sNewName == "." || sNewName == ".." ||
       hasUnsafeFileCharacter || !utf8_is_valid(sNewName)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3087: refusing to save course with unsafe name "
+        "refusing to save course with unsafe name "
         "'%s'.",
         sNewName.c_str());
     return false;
   }
   if (FILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3087: refusing to save course '%s' without "
+        "refusing to save course '%s' without "
         "FILEMAN.",
         sNewName.c_str());
     return false;
@@ -709,7 +709,7 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   if (pCourse->IsAnEdit()) {
     if (PROFILEMAN == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-3087: refusing to save edit course '%s' without "
+          "refusing to save edit course '%s' without "
           "PROFILEMAN.",
           sNewName.c_str());
       return false;
@@ -717,7 +717,7 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
     const ProfileSlot slot = pCourse->GetLoadedFromProfileSlot();
     if (!PROFILEMAN->IsPersistentProfile(slot)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-130: cannot save edit course '%s' because profile "
+          "cannot save edit course '%s' because profile "
           "slot %i is not persistent",
           sNewName.c_str(), slot);
       return false;
@@ -734,7 +734,7 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   pCourse->m_sPath = sNewFilePath;
   if (!CourseWriterCRS::Write(*pCourse, pCourse->m_sPath, false)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-129: failed to save course '%s' to '%s'; keeping "
+        "failed to save course '%s' to '%s'; keeping "
         "old path '%s'",
         sNewName.c_str(), sNewFilePath.c_str(), sOldFilePath.c_str());
     pCourse->m_sMainTitle = sOldName;
@@ -746,7 +746,7 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
   if (!sOldFilePath.empty() && sNewFilePath != sOldFilePath &&
       !FILEMAN->Remove(sOldFilePath)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-129: saved renamed course '%s' but could not remove "
+        "saved renamed course '%s' but could not remove "
         "old file '%s'",
         sNewFilePath.c_str(), sOldFilePath.c_str());
   }
@@ -755,25 +755,25 @@ bool EditCourseUtil::RenameAndSave(Course* pCourse, std::string sNewName) {
 
 bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
   if (pCourse == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-135: refusing to delete a null course");
+    LOG->Warn("refusing to delete a null course");
     return false;
   }
   if (FILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-674: refusing to delete course '%s' without FILEMAN.",
+        "refusing to delete course '%s' without FILEMAN.",
         pCourse->m_sPath.c_str());
     return false;
   }
   if (SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3088: refusing to delete course '%s' without "
+        "refusing to delete course '%s' without "
         "SONGMAN.",
         pCourse->m_sPath.c_str());
     return false;
   }
   if (pCourse->IsAnEdit() && PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3088: refusing to delete edit course '%s' without "
+        "refusing to delete edit course '%s' without "
         "PROFILEMAN.",
         pCourse->m_sPath.c_str());
     return false;
@@ -783,20 +783,20 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
   if (std::find(loadedCourses.begin(), loadedCourses.end(), pCourse) ==
       loadedCourses.end()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3088: refusing to delete foreign course '%s'.",
+        "refusing to delete foreign course '%s'.",
         pCourse->m_sPath.c_str());
     return false;
   }
   if (!FILEMAN->Remove(pCourse->m_sPath)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-674: failed to delete course file '%s'.",
+        "failed to delete course file '%s'.",
         pCourse->m_sPath.c_str());
     return false;
   }
   const std::string sCachePath = pCourse->GetCacheFilePath();
   if (!sCachePath.empty() && !FILEMAN->Remove(sCachePath)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-674: deleted course '%s' but could not remove cache "
+        "deleted course '%s' but could not remove cache "
         "'%s'.",
         pCourse->m_sPath.c_str(), sCachePath.c_str());
   }
@@ -809,7 +809,7 @@ bool EditCourseUtil::RemoveAndDeleteFile(Course* pCourse) {
       SONGMAN->LoadCourseEditsFromProfileDir(sProfileDir, slot);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-131: deleted edit course '%s' but profile slot %i "
+          "deleted edit course '%s' but profile slot %i "
           "is not persistent, so edits were not reloaded",
           pCourse->m_sPath.c_str(), slot);
     }
@@ -851,7 +851,7 @@ bool EditCourseUtil::ValidateEditCourseName(
   for (const Course* p : vpCourses) {
     if (p == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-675: skipped null course while validating edit "
+          "skipped null course while validating edit "
           "course name.");
       continue;
     }
@@ -871,14 +871,14 @@ bool EditCourseUtil::ValidateEditCourseName(
 void EditCourseUtil::UpdateAndSetTrail() {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-676: cannot update edit course trail without "
+        "cannot update edit course trail without "
         "GAMESTATE.");
     return;
   }
   const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
   if (pStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-676: cannot update edit course trail without current "
+        "cannot update edit course trail without current "
         "style.");
     GAMESTATE->m_pCurTrail[PLAYER_1].Set(nullptr);
     return;
@@ -894,7 +894,7 @@ void EditCourseUtil::UpdateAndSetTrail() {
 void EditCourseUtil::PrepareForPlay() {
   if (GAMESTATE == nullptr || PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-676: cannot prepare edit course play without "
+        "cannot prepare edit course play without "
         "GAMESTATE or PROFILEMAN.");
     return;
   }
@@ -902,14 +902,14 @@ void EditCourseUtil::PrepareForPlay() {
   Course* pCourse = GAMESTATE->m_pCurCourse;
   if (pProfile == nullptr || pCourse == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-676: cannot prepare edit course play without player "
+        "cannot prepare edit course play without player "
         "profile or current course.");
     return;
   }
   if (!std::isfinite(pCourse->m_fGoalSeconds) ||
       pCourse->m_fGoalSeconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3089: cannot prepare edit course with invalid goal "
+        "cannot prepare edit course with invalid goal "
         "seconds %.3f.",
         pCourse->m_fGoalSeconds);
     return;
@@ -931,14 +931,14 @@ void EditCourseUtil::PrepareForPlay() {
 void EditCourseUtil::GetAllEditCourses(std::vector<Course*>& vpCoursesOut) {
   if (SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-677: cannot collect edit courses without SONGMAN.");
+        "cannot collect edit courses without SONGMAN.");
     return;
   }
   std::vector<Course*> vpCoursesTemp;
   SONGMAN->GetAllCourses(vpCoursesTemp, false);
   for (Course* c : vpCoursesTemp) {
     if (c == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-677: skipped null course in edit course list.");
+      LOG->Warn("skipped null course in edit course list.");
       continue;
     }
     if (c->GetLoadedFromProfileSlot() != ProfileSlot_Invalid) {
@@ -964,7 +964,7 @@ void EditCourseUtil::LoadDefaults(Course& out) {
         std::any_of(vpCourses.begin(), vpCourses.end(), [&](const Course* p) {
           if (p == nullptr) {
             LOG->Warn(
-                "SRC_AUDIT_FIX SRC-677: skipped null course while picking "
+                "skipped null course while picking "
                 "default edit course name.");
             return false;
           }
@@ -978,14 +978,14 @@ void EditCourseUtil::LoadDefaults(Course& out) {
   if (!bFoundName) {
     out.m_sMainTitle = "Workout";
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-677: exhausted default edit course names; using "
+        "exhausted default edit course names; using "
         "'Workout'.");
   }
 
   std::vector<Song*> vpSongs;
   if (SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-677: cannot seed default edit course entries without "
+        "cannot seed default edit course entries without "
         "SONGMAN.");
     return;
   }
@@ -993,7 +993,7 @@ void EditCourseUtil::LoadDefaults(Course& out) {
   for (int i = 0; i < (int)vpSongs.size() && i < 6; i++) {
     if (vpSongs[i] == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-677: skipped null song while seeding default edit "
+          "skipped null song while seeding default edit "
           "course.");
       continue;
     }
@@ -1033,7 +1033,7 @@ void CourseID::FromCourse(const Course* p) {
 Course* CourseID::ToCourse() const {
   if (SONGMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-678: CourseID lookup requested without SONGMAN.");
+        "CourseID lookup requested without SONGMAN.");
     return nullptr;
   }
 
@@ -1076,7 +1076,7 @@ void CourseID::LoadFromNode(const XNode* pNode) {
   sPath = std::string();
   if (pNode == nullptr || pNode->GetName() != "Course") {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-136: ignored invalid CourseID XML node '%s'",
+        "ignored invalid CourseID XML node '%s'",
         pNode == nullptr ? "(null)" : pNode->GetName().c_str());
     return;
   }

@@ -16,7 +16,7 @@ RageSoundMixBuffer::~RageSoundMixBuffer() {}
  * two. */
 bool RageSoundMixBuffer::SetWriteOffset(int iOffset) {
   if (iOffset < 0) {
-    return SetError("SRC_AUDIT_FIX SRC-2761: negative mix write offset");
+    return SetError("negative mix write offset");
   }
 
   m_iOffset = static_cast<size_t>(iOffset);
@@ -26,7 +26,7 @@ bool RageSoundMixBuffer::SetWriteOffset(int iOffset) {
 
 bool RageSoundMixBuffer::Extend(size_t iSamples) {
   if (iSamples > std::numeric_limits<size_t>::max() - m_iOffset) {
-    return SetError("SRC_AUDIT_FIX SRC-2763: mix buffer size overflow");
+    return SetError("mix buffer size overflow");
   }
 
   const size_t realsize = iSamples + m_iOffset;
@@ -38,7 +38,7 @@ bool RageSoundMixBuffer::Extend(size_t iSamples) {
   try {
     m_pMixbuf.resize(realsize, 0.0f);
   } catch (const std::bad_alloc&) {
-    return SetError("SRC_AUDIT_FIX SRC-2763: mix buffer allocation failed");
+    return SetError("mix buffer allocation failed");
   }
 
   m_sError.clear();
@@ -52,24 +52,24 @@ bool RageSoundMixBuffer::write(
     return true;
   }
   if (pBuf == nullptr) {
-    return SetError("SRC_AUDIT_FIX SRC-2764: null mix source buffer");
+    return SetError("null mix source buffer");
   }
   if (iSourceStride <= 0 || iDestStride <= 0) {
-    return SetError("SRC_AUDIT_FIX SRC-2762: invalid mix buffer stride");
+    return SetError("invalid mix buffer stride");
   }
 
   // iSize = 3, iDestStride = 2 uses 4 frames.  Don't allocate the stride of the
   // last sample.
   const size_t destStride = static_cast<size_t>(iDestStride);
   if (iSize - 1 > (std::numeric_limits<size_t>::max() - 1) / destStride) {
-    return SetError("SRC_AUDIT_FIX SRC-2762: mix write span overflow");
+    return SetError("mix write span overflow");
   }
   const size_t writeSpan = (iSize - 1) * destStride + 1;
   if (!Extend(writeSpan)) {
     return false;
   }
   if (m_iOffset >= m_pMixbuf.size()) {
-    return SetError("SRC_AUDIT_FIX SRC-2763: mix write offset out of range");
+    return SetError("mix write offset out of range");
   }
 
   // Load the audio at m_iOffset into the buffer.
@@ -87,7 +87,7 @@ bool RageSoundMixBuffer::write(
 
 bool RageSoundMixBuffer::read(int16_t* pBuf) {
   if (pBuf == nullptr && !m_pMixbuf.empty()) {
-    return SetError("SRC_AUDIT_FIX SRC-2764: null int16 mix output buffer");
+    return SetError("null int16 mix output buffer");
   }
   for (size_t iPos = 0; iPos < m_pMixbuf.size(); ++iPos) {
     // do the read
@@ -103,7 +103,7 @@ bool RageSoundMixBuffer::read(int16_t* pBuf) {
 
 bool RageSoundMixBuffer::read(float* pBuf) {
   if (pBuf == nullptr && !m_pMixbuf.empty()) {
-    return SetError("SRC_AUDIT_FIX SRC-2764: null float mix output buffer");
+    return SetError("null float mix output buffer");
   }
   // ensure volume is within expected levels to prevent clipping
   std::transform(m_pMixbuf.begin(), m_pMixbuf.end(), pBuf, [](float s) {
@@ -115,19 +115,19 @@ bool RageSoundMixBuffer::read(float* pBuf) {
 
 bool RageSoundMixBuffer::read_deinterlace(float** pBufs, int channels) {
   if (channels <= 0) {
-    return SetError("SRC_AUDIT_FIX SRC-2765: invalid deinterlace channel count");
+    return SetError("invalid deinterlace channel count");
   }
   if (pBufs == nullptr && !m_pMixbuf.empty()) {
-    return SetError("SRC_AUDIT_FIX SRC-2765: null deinterlace output buffers");
+    return SetError("null deinterlace output buffers");
   }
   if (m_pMixbuf.size() % static_cast<size_t>(channels) != 0) {
-    return SetError("SRC_AUDIT_FIX SRC-2765: deinterlace buffer is unaligned");
+    return SetError("deinterlace buffer is unaligned");
   }
 
   const size_t frames = m_pMixbuf.size() / static_cast<size_t>(channels);
   for (int ch = 0; ch < channels; ++ch) {
     if (pBufs[ch] == nullptr && frames > 0) {
-      return SetError("SRC_AUDIT_FIX SRC-2765: null deinterlace output plane");
+      return SetError("null deinterlace output plane");
     }
   }
 

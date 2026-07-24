@@ -27,7 +27,7 @@ bool ValidateLayoutColumnPair(
   if (!IsValidLayoutColumn(layout, leftIndex) ||
       !IsValidLayoutColumn(layout, rightIndex)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-644: %s received invalid columns %d/%d "
+        "%s received invalid columns %d/%d "
         "(columnCount=%d, columns=%zu).",
         context, leftIndex, rightIndex, layout.columnCount,
         layout.columns.size());
@@ -103,7 +103,7 @@ float StageLayout::getXDifference(int leftIndex, int rightIndex) const {
   float distance = sqrt(dx * dx + dy * dy);
   if (!std::isfinite(distance) || distance <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: getXDifference received coincident/non-finite stage "
+        "getXDifference received coincident/non-finite stage "
         "points for columns %d/%d.",
         leftIndex, rightIndex);
     return 0;
@@ -135,7 +135,7 @@ float StageLayout::getYDifference(int leftIndex, int rightIndex) const {
   float distance = sqrt(dx * dx + dy * dy);
   if (!std::isfinite(distance) || distance <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: getYDifference received coincident/non-finite stage "
+        "getYDifference received coincident/non-finite stage "
         "points for columns %d/%d.",
         leftIndex, rightIndex);
     return 0;
@@ -254,7 +254,7 @@ void StageLayout::preGeneratePermutations() {
       columnCount >=
           static_cast<int>(std::numeric_limits<unsigned int>::digits)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-645: refusing to pre-generate permutations for "
+        "refusing to pre-generate permutations for "
         "invalid column count %d.",
         columnCount);
     return;
@@ -342,7 +342,7 @@ std::vector<FootPlacement> StageLayout::PermuteFootPlacements(
   std::vector<FootPlacement> permutations;
   if (column >= std::numeric_limits<unsigned int>::digits) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-645: refusing permutation shift for column %lu.",
+        "refusing permutation shift for column %lu.",
         column);
     return permutations;
   }
@@ -377,7 +377,7 @@ StagePoint StageLayout::averagePoint(int leftIndex, int rightIndex) const {
   if (leftIndex == INVALID_COLUMN) {
     if (!IsValidLayoutColumn(*this, rightIndex)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-644: averagePoint received invalid right column "
+          "averagePoint received invalid right column "
           "%d.",
           rightIndex);
       return {0, 0};
@@ -387,7 +387,7 @@ StagePoint StageLayout::averagePoint(int leftIndex, int rightIndex) const {
   if (rightIndex == INVALID_COLUMN) {
     if (!IsValidLayoutColumn(*this, leftIndex)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-644: averagePoint received invalid left column "
+          "averagePoint received invalid left column "
           "%d.",
           leftIndex);
       return {0, 0};
@@ -421,7 +421,7 @@ float StageLayout::getPlayerAngle(
 // Row
 void Row::setFootPlacement(const StepParity::State* state) {
   if (state == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-646: setFootPlacement received null state.");
+    LOG->Warn("setFootPlacement received null state.");
     return;
   }
 
@@ -431,7 +431,7 @@ void Row::setFootPlacement(const StepParity::State* state) {
   if (safeColumnCount != columnCount ||
       whereTheFeetAre.size() < StepParity::NUM_Foot) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-646: row foot placement has incompatible sizes "
+        "row foot placement has incompatible sizes "
         "(columnCount=%d, notes=%zu, columns=%zu, feet=%zu).",
         columnCount, notes.size(), columns.size(), whereTheFeetAre.size());
     return;
@@ -442,7 +442,7 @@ void Row::setFootPlacement(const StepParity::State* state) {
       const StepParity::Foot foot = state->combinedColumns[c];
       if (foot <= StepParity::NONE || foot >= StepParity::NUM_Foot) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-646: ignoring invalid foot placement %d at "
+            "ignoring invalid foot placement %d at "
             "column %d.",
             static_cast<int>(foot), c);
         continue;

@@ -110,7 +110,7 @@ std::string BackgroundChange::ToString() const {
       return value;
     }
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-1033: sanitized non-finite BGChange %s.", field);
+        "BackgroundUtil: sanitized non-finite BGChange %s.", field);
     return fallback;
   };
   const auto sanitizeField = [](std::string value, const char* field) {
@@ -123,7 +123,7 @@ std::string BackgroundChange::ToString() const {
     }
     if (changed) {
       BACKGROUND_UTIL_WARN(
-          "SRC_AUDIT_FIX SRC-583 SRC-592: sanitized BGChange %s containing "
+          "BackgroundUtil BackgroundUtil: sanitized BGChange %s containing "
           "MSD delimiters.",
           field);
     }
@@ -171,7 +171,7 @@ static bool IsSafeBackgroundMatch(
   if (sMatch[0] == '/' || sMatch[0] == '\\' ||
       sMatch.find(':') != std::string::npos) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX %s: rejected absolute background match '%s'.",
+        "%s: rejected absolute background match '%s'.",
         context, sMatch.c_str());
     return false;
   }
@@ -180,7 +180,7 @@ static bool IsSafeBackgroundMatch(
   std::replace(normalized.begin(), normalized.end(), '\\', '/');
   if (!bAllowSubdirectories && normalized.find('/') != std::string::npos) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX %s: rejected background match with subdirectory '%s'.",
+        "%s: rejected background match with subdirectory '%s'.",
         context, sMatch.c_str());
     return false;
   }
@@ -189,7 +189,7 @@ static bool IsSafeBackgroundMatch(
   split(normalized, "/", parts, true);
   if (std::find(parts.begin(), parts.end(), "..") != parts.end()) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX %s: rejected background match escaping base dir '%s'.",
+        "%s: rejected background match escaping base dir '%s'.",
         context, sMatch.c_str());
     return false;
   }
@@ -211,7 +211,7 @@ static bool IsSafeBackgroundDirectoryComponent(
       sName.find('\\') != std::string::npos ||
       sName.find(':') != std::string::npos) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX %s: rejected unsafe background directory component '%s'.",
+        "%s: rejected unsafe background directory component '%s'.",
         context, sName.c_str());
     return false;
   }
@@ -223,7 +223,7 @@ static bool HasBackgroundFileManager(const char* context) {
     return true;
   }
   BACKGROUND_UTIL_WARN(
-      "SRC_AUDIT_FIX SRC-3090: %s ignored without FILEMAN.", context);
+      "BackgroundUtil: %s ignored without FILEMAN.", context);
   return false;
 }
 
@@ -232,7 +232,7 @@ static void StripCvsAndSvn(
     std::vector<std::string>& vsNamesToStrip) {
   if (vsPathsToStrip.size() != vsNamesToStrip.size()) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-679: path/name listing size mismatch (%zu/%zu); "
+        "BackgroundUtil: path/name listing size mismatch (%zu/%zu); "
         "trimming to the shortest list.",
         vsPathsToStrip.size(), vsNamesToStrip.size());
     const size_t size = std::min(vsPathsToStrip.size(), vsNamesToStrip.size());
@@ -279,7 +279,7 @@ void BackgroundUtil::SortBackgroundChangesArray(
     const size_t removed =
         static_cast<size_t>(vBackgroundChanges.end() - firstInvalid);
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-680: removed %zu BGChange(s) with non-finite start "
+        "BackgroundUtil: removed %zu BGChange(s) with non-finite start "
         "beats.",
         removed);
     vBackgroundChanges.erase(firstInvalid, vBackgroundChanges.end());
@@ -293,7 +293,7 @@ void BackgroundUtil::AddBackgroundChange(
     std::vector<BackgroundChange>& vBackgroundChanges, BackgroundChange seg) {
   if (!HasFiniteBackgroundChangeTiming(seg)) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-680: rejected BGChange with non-finite start beat "
+        "BackgroundUtil: rejected BGChange with non-finite start beat "
         "%f.",
         seg.m_fStartBeat);
     return;
@@ -317,7 +317,7 @@ void BackgroundUtil::GetBackgroundEffects(
     vsNamesOut.clear();
     return;
   }
-  if (!IsSafeBackgroundAssetName(sName, "SRC-1034")) {
+  if (!IsSafeBackgroundAssetName(sName, "BackgroundUtil")) {
     vsPathsOut.clear();
     vsNamesOut.clear();
     return;
@@ -347,7 +347,7 @@ void BackgroundUtil::GetBackgroundTransitions(
     vsNamesOut.clear();
     return;
   }
-  if (!IsSafeBackgroundAssetName(sName, "SRC-1034")) {
+  if (!IsSafeBackgroundAssetName(sName, "BackgroundUtil")) {
     vsPathsOut.clear();
     vsNamesOut.clear();
     return;
@@ -377,14 +377,14 @@ void BackgroundUtil::GetSongBGAnimations(
   vsNamesOut.clear();
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-681: song BG animation listing requested without "
+        "BackgroundUtil: song BG animation listing requested without "
         "song.");
     return;
   }
   if (!HasBackgroundFileManager("song BG animation listing")) {
     return;
   }
-  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+  if (!IsSafeBackgroundMatch(sMatch, true, "BackgroundUtil")) {
     return;
   }
   if (sMatch.empty()) {
@@ -408,13 +408,13 @@ void BackgroundUtil::GetSongMovies(
   vsNamesOut.clear();
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-681: song movie listing requested without song.");
+        "BackgroundUtil: song movie listing requested without song.");
     return;
   }
   if (!HasBackgroundFileManager("song movie listing")) {
     return;
   }
-  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+  if (!IsSafeBackgroundMatch(sMatch, true, "BackgroundUtil")) {
     return;
   }
   if (sMatch.empty()) {
@@ -440,13 +440,13 @@ void BackgroundUtil::GetSongBitmaps(
   vsNamesOut.clear();
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-681: song bitmap listing requested without song.");
+        "BackgroundUtil: song bitmap listing requested without song.");
     return;
   }
   if (!HasBackgroundFileManager("song bitmap listing")) {
     return;
   }
-  if (!IsSafeBackgroundMatch(sMatch, true, "SRC-681")) {
+  if (!IsSafeBackgroundMatch(sMatch, true, "BackgroundUtil")) {
     return;
   }
   if (sMatch.empty()) {
@@ -471,7 +471,7 @@ static void GetFilterToFileNames(
 
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-682: background mapping requested without song.");
+        "BackgroundUtil: background mapping requested without song.");
     return;
   }
   if (!HasBackgroundFileManager("background mapping")) {
@@ -483,12 +483,12 @@ static void GetFilterToFileNames(
 
   if (pSong->m_sGroupName.empty()) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-682: background mapping requested for song '%s' "
+        "BackgroundUtil: background mapping requested for song '%s' "
         "without group.",
         pSong->GetSongDir().c_str());
     return;
   }
-  if (!IsSafeBackgroundDirectoryComponent(pSong->m_sGroupName, "SRC-1035")) {
+  if (!IsSafeBackgroundDirectoryComponent(pSong->m_sGroupName, "BackgroundUtil")) {
     return;
   }
   IniFile ini;
@@ -500,7 +500,7 @@ static void GetFilterToFileNames(
 
   if (!ini.ReadFile(sPath)) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-682: failed to read background mapping '%s'.",
+        "BackgroundUtil: failed to read background mapping '%s'.",
         sPath.c_str());
     return;
   }
@@ -515,7 +515,7 @@ static void GetFilterToFileNames(
   XNode* pSection = ini.GetChild(sSection);
   if (pSection == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-682: background mapping '%s' refers to missing "
+        "BackgroundUtil: background mapping '%s' refers to missing "
         "section '%s'.",
         sPath.c_str(), sSection.c_str());
     return;
@@ -533,7 +533,7 @@ void BackgroundUtil::GetGlobalBGAnimations(
   if (!HasBackgroundFileManager("global BG animation listing")) {
     return;
   }
-  if (!IsSafeBackgroundMatch(sMatch, false, "SRC-683")) {
+  if (!IsSafeBackgroundMatch(sMatch, false, "BackgroundUtil")) {
     return;
   }
   GetDirListing(BG_ANIMS_DIR + sMatch + "*", vsPathsOut, true, true);
@@ -558,13 +558,13 @@ void GetGlobalRandomMoviePaths(
     bool bTryInsideOfSongGroupAndGenreFirst, bool bTryInsideOfSongGroupFirst) {
   // Check for an exact match
   if (!sMatch.empty()) {
-    if (!IsSafeBackgroundMatch(sMatch, false, "SRC-684")) {
+    if (!IsSafeBackgroundMatch(sMatch, false, "BackgroundUtil")) {
       return;
     }
     const bool hasGroup = pSong != nullptr && !pSong->m_sGroupName.empty();
     const bool hasSafeGroup =
         hasGroup && IsSafeBackgroundDirectoryComponent(
-                        pSong->m_sGroupName, "SRC-1035");
+                        pSong->m_sGroupName, "BackgroundUtil");
     if (hasSafeGroup) {
       GetDirListing(
           SONG_MOVIES_DIR + pSong->m_sGroupName + "/" + sMatch, vsPathsOut,
@@ -588,12 +588,12 @@ void GetGlobalRandomMoviePaths(
   const bool hasGroup = pSong != nullptr && !pSong->m_sGroupName.empty();
   const bool hasSafeGroup =
       hasGroup &&
-      IsSafeBackgroundDirectoryComponent(pSong->m_sGroupName, "SRC-1035");
+      IsSafeBackgroundDirectoryComponent(pSong->m_sGroupName, "BackgroundUtil");
   if (bTryInsideOfSongGroupFirst && hasSafeGroup) {
     vsDirsToTry.push_back(RANDOMMOVIES_DIR + pSong->m_sGroupName + "/");
   } else if (bTryInsideOfSongGroupFirst && pSong != nullptr && !hasGroup) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-684: random movie lookup for song '%s' has no group; "
+        "BackgroundUtil: random movie lookup for song '%s' has no group; "
         "skipping group-specific directory.",
         pSong->GetSongDir().c_str());
   }
@@ -652,7 +652,7 @@ void BackgroundUtil::GetGlobalRandomMovies(
       sName = Right(s, s.size() - SONG_MOVIES_DIR.size());
     } else {
       BACKGROUND_UTIL_WARN(
-          "SRC_AUDIT_FIX SRC-685: random movie path '%s' is outside known "
+          "BackgroundUtil: random movie path '%s' is outside known "
           "movie roots; using basename.",
           s.c_str());
       sName = Basename(s);
@@ -665,7 +665,7 @@ void BackgroundUtil::GetGlobalRandomMovies(
 void BackgroundUtil::BakeAllBackgroundChanges(Song* pSong) {
   if (pSong == nullptr) {
     BACKGROUND_UTIL_WARN(
-        "SRC_AUDIT_FIX SRC-686: refused to bake background changes without "
+        "BackgroundUtil: refused to bake background changes without "
         "song.");
     return;
   }

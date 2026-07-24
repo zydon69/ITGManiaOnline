@@ -83,13 +83,13 @@ static std::map<std::string, RageSurface*> g_ImagePathToImage;
 static int g_iDemandRefcount = 0;
 
 namespace {
-void WarnImageCacheAuditFix(const char* message) {
+void WarnImageCacheSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void WarnImageCacheAuditFix(const std::string& message) {
+void WarnImageCacheSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -167,8 +167,8 @@ void ImageCache::Demand(std::string sImageDir) {
 /* Release images loaded on demand. */
 void ImageCache::Undemand(std::string sImageDir) {
   if (g_iDemandRefcount <= 0) {
-    WarnImageCacheAuditFix(
-        "SRC_AUDIT_FIX SRC-1040: ImageCache ignored unmatched Undemand().");
+    WarnImageCacheSafety(
+        "ImageCache ignored unmatched Undemand().");
     g_iDemandRefcount = 0;
     return;
   }
@@ -368,8 +368,8 @@ struct ImageTexture : public RageTexture {
 
   void Create() {
     if (DISPLAY == nullptr || !IsValidCachedSurface(m_pImage)) {
-      WarnImageCacheAuditFix(
-          "SRC_AUDIT_FIX SRC-1041: ImageTexture refused invalid cached "
+      WarnImageCacheSafety(
+          "ImageTexture refused invalid cached "
           "surface.");
       m_iSourceWidth = m_iSourceHeight = 1;
       m_iTextureWidth = m_iTextureHeight = 1;
@@ -395,15 +395,15 @@ struct ImageTexture : public RageTexture {
      * Only resize if the max texture size requires it; since these images
      * are already scaled down, this shouldn't happen often. */
     if (m_pImage->w > iMaxTextureSize || m_pImage->h > iMaxTextureSize) {
-      WarnImageCacheAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-1041: Converted cached image '%s' at runtime.",
+      WarnImageCacheSafety(ssprintf(
+          "Converted cached image '%s' at runtime.",
           GetID().filename.c_str()));
       int iWidth = std::min(m_pImage->w, iMaxTextureSize);
       int iHeight = std::min(m_pImage->h, iMaxTextureSize);
       RageSurfaceUtils::Zoom(m_pImage, iWidth, iHeight);
       if (!IsValidCachedSurface(m_pImage)) {
-        WarnImageCacheAuditFix(
-            "SRC_AUDIT_FIX SRC-1041: ImageTexture zoom produced invalid "
+        WarnImageCacheSafety(
+            "ImageTexture zoom produced invalid "
             "surface.");
         m_iSourceWidth = m_iSourceHeight = 1;
         m_iTextureWidth = m_iTextureHeight = 1;
@@ -417,15 +417,15 @@ struct ImageTexture : public RageTexture {
      * reach this path. */
     if (m_pImage->w != power_of_two(m_pImage->w) ||
         m_pImage->h != power_of_two(m_pImage->h)) {
-      WarnImageCacheAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-1041: ImageTexture repaired non-power-of-two "
+      WarnImageCacheSafety(ssprintf(
+          "ImageTexture repaired non-power-of-two "
           "cached image '%s'.",
           GetID().filename.c_str()));
       RageSurfaceUtils::Zoom(
           m_pImage, power_of_two(m_pImage->w), power_of_two(m_pImage->h));
       if (!IsValidCachedSurface(m_pImage)) {
-        WarnImageCacheAuditFix(
-            "SRC_AUDIT_FIX SRC-1041: ImageTexture repair produced invalid "
+        WarnImageCacheSafety(
+            "ImageTexture repair produced invalid "
             "surface.");
         m_iSourceWidth = m_iSourceHeight = 1;
         m_iTextureWidth = m_iTextureHeight = 1;
@@ -451,8 +451,8 @@ struct ImageTexture : public RageTexture {
       pf = RagePixelFormat_RGBA8;
     }
     if (!DISPLAY->SupportsTextureFormat(pf)) {
-      WarnImageCacheAuditFix(
-          "SRC_AUDIT_FIX SRC-1041: ImageTexture found no supported cached "
+      WarnImageCacheSafety(
+          "ImageTexture found no supported cached "
           "texture format.");
       CreateFrameRects();
       return;
@@ -460,8 +460,8 @@ struct ImageTexture : public RageTexture {
 
     m_uTexHandle = DISPLAY->CreateTexture(pf, m_pImage, false);
     if (m_uTexHandle == 0) {
-      WarnImageCacheAuditFix(
-          "SRC_AUDIT_FIX SRC-1041: ImageTexture failed to create GPU texture.");
+      WarnImageCacheSafety(
+          "ImageTexture failed to create GPU texture.");
     }
 
     CreateFrameRects();
@@ -521,8 +521,8 @@ RageTextureID ImageCache::LoadCachedImage(
    * only have to convert once. */
   RageSurface*& pImage = g_ImagePathToImage[sImagePath];
   if (!IsValidCachedSurface(pImage)) {
-    WarnImageCacheAuditFix(
-        "SRC_AUDIT_FIX SRC-1041: ImageCache ignored invalid loaded cached "
+    WarnImageCacheSafety(
+        "ImageCache ignored invalid loaded cached "
         "surface.");
     delete pImage;
     g_ImagePathToImage.erase(sImagePath);
@@ -537,8 +537,8 @@ RageTextureID ImageCache::LoadCachedImage(
     return ID;
   }
   if (TEXTUREMAN == nullptr) {
-    WarnImageCacheAuditFix(
-        "SRC_AUDIT_FIX SRC-1042: ImageCache cannot register cached texture "
+    WarnImageCacheSafety(
+        "ImageCache cannot register cached texture "
         "without texture manager.");
     return ID;
   }
@@ -647,8 +647,8 @@ void ImageCache::CacheImageInternal(
 
   RageSurfaceUtils::Zoom(pImage, iWidth, iHeight);
   if (!IsValidCachedSurface(pImage)) {
-    WarnImageCacheAuditFix(
-        "SRC_AUDIT_FIX SRC-1043: ImageCache aborted after invalid resize "
+    WarnImageCacheSafety(
+        "ImageCache aborted after invalid resize "
         "result.");
     delete pImage;
     return;
@@ -674,8 +674,8 @@ void ImageCache::CacheImageInternal(
     if (pImage->fmt.BytesPerPixel != 1) {
       RageSurfaceUtils::Palettize(pImage);
       if (!IsValidCachedSurface(pImage)) {
-        WarnImageCacheAuditFix(
-            "SRC_AUDIT_FIX SRC-1043: ImageCache aborted after failed "
+        WarnImageCacheSafety(
+            "ImageCache aborted after failed "
             "palettize.");
         delete pImage;
         return;
@@ -687,8 +687,8 @@ void ImageCache::CacheImageInternal(
     RageSurface* dst =
         CreateSurface(pImage->w, pImage->h, 16, 0x7C00, 0x03E0, 0x001F, 0x8000);
     if (dst == nullptr) {
-      WarnImageCacheAuditFix(
-          "SRC_AUDIT_FIX SRC-1043: ImageCache kept source after dither surface "
+      WarnImageCacheSafety(
+          "ImageCache kept source after dither surface "
           "allocation failure.");
     } else {
 
@@ -702,8 +702,8 @@ void ImageCache::CacheImageInternal(
 
   const std::string sCachePath = GetImageCachePath(sImageDir, sImagePath);
   if (!RageSurfaceUtils::SaveSurface(pImage, sCachePath)) {
-    WarnImageCacheAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1044: ImageCache failed to save cache surface '%s'.",
+    WarnImageCacheSafety(ssprintf(
+        "ImageCache failed to save cache surface '%s'.",
         sCachePath.c_str()));
     delete pImage;
     return;
@@ -726,8 +726,8 @@ void ImageCache::CacheImageInternal(
         g_ImagePathToImage.erase(sImagePath);
       } else if (PREFSMAN != nullptr &&
                  PREFSMAN->m_ImageCache == IMGCACHE_LOW_RES_PRELOAD) {
-        WarnImageCacheAuditFix(
-            "SRC_AUDIT_FIX SRC-1045: ImageCache kept old in-memory surface "
+        WarnImageCacheSafety(
+            "ImageCache kept old in-memory surface "
             "because a texture still references it.");
       }
     }
@@ -759,8 +759,8 @@ void ImageCache::CacheImageInternal(
 void ImageCache::WriteToDisk() {
   LockMut(g_ImageCacheMutex);
   if (!ImageData.WriteFile(IMAGE_CACHE_INDEX)) {
-    WarnImageCacheAuditFix(
-        "SRC_AUDIT_FIX SRC-1044: ImageCache failed to write image cache index.");
+    WarnImageCacheSafety(
+        "ImageCache failed to write image cache index.");
   }
 }
 

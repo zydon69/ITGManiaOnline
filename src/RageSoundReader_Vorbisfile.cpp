@@ -30,8 +30,8 @@
 #include <new>
 #include <string>
 
-static void TraceReviewSrcError(const std::string& sError) {
-  LogReviewSrcDiagnostics("%s", sError.c_str());
+static void TraceRuntimeValidationError(const std::string& sError) {
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
 }
 
 static size_t OggRageFile_read_func(
@@ -149,9 +149,9 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
     newVf = new OggVorbis_File;
   } catch (const std::bad_alloc&) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2802: Vorbis reader allocation failed";
+        "Vorbis reader allocation failed";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     m_pFile = nullptr;
     return OPEN_FATAL_ERROR;
   }
@@ -181,10 +181,10 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_Vorbisfile::Open(
   read_offset = ov_pcm_tell(vf);
   if (read_offset < 0) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
+        "Vorbis stream position unavailable after "
         "open";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     ResetDecoderState();
     return OPEN_FATAL_ERROR;
   }
@@ -249,10 +249,10 @@ int RageSoundReader_Vorbisfile::SetPosition(int iFrame) {
   read_offset = ov_pcm_tell(vf);
   if (read_offset < 0) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable after "
+        "Vorbis stream position unavailable after "
         "seek";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     return -1;
   }
 
@@ -285,10 +285,10 @@ int RageSoundReader_Vorbisfile::Read(float* buf, int iFrames) {
       const ogg_int64_t curofs = ov_pcm_tell(vf);
       if (curofs < 0) {
         const std::string error =
-            "SRC_AUDIT_FIX SRC-2803: Vorbis stream position unavailable during "
+            "Vorbis stream position unavailable during "
             "read";
         SetError(error);
-        TraceReviewSrcError(error);
+        TraceRuntimeValidationError(error);
         return ERROR;
       }
       if (curofs < read_offset) {
@@ -490,8 +490,8 @@ RageSoundReader_Vorbisfile* RageSoundReader_Vorbisfile::Copy() const {
   }
   if (pFile->Seek(0) == -1) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-3320: Vorbis copy could not rewind its file";
-    TraceReviewSrcError(error);
+        "Vorbis copy could not rewind its file";
+    TraceRuntimeValidationError(error);
     delete pFile;
     return nullptr;
   }

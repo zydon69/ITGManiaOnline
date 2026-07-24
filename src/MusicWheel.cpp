@@ -255,7 +255,7 @@ void MusicWheel::MarkAllWheelItemDatasInvalid() {
 
 void MusicWheel::Load(std::string sType) {
   if (THEME == nullptr) {
-    WarnMusicWheel("SRC_AUDIT_FIX SRC-1334: Load called without THEME.");
+    WarnMusicWheel("Load called without THEME.");
     WheelBase::Load(sType);
     return;
   }
@@ -301,7 +301,7 @@ void MusicWheel::Load(std::string sType) {
   WheelBase::Load(sType);
 
   if (SONGMAN == nullptr) {
-    WarnMusicWheel("SRC_AUDIT_FIX SRC-1334: Load called without SONGMAN.");
+    WarnMusicWheel("Load called without SONGMAN.");
     MarkAllWheelItemDatasInvalid();
     return;
   }
@@ -326,7 +326,7 @@ void MusicWheel::Load(std::string sType) {
 void MusicWheel::BeginScreen() {
   if (GAMESTATE == nullptr || SONGMAN == nullptr) {
     WarnMusicWheel(
-        "SRC_AUDIT_FIX SRC-1338: BeginScreen called before managers exist.");
+        "BeginScreen called before managers exist.");
     WheelBase::BeginScreen();
     SetOpenSection("");
     return;
@@ -409,7 +409,7 @@ void MusicWheel::BeginScreen() {
         GAMESTATE->m_pCurSong.Set(vTemp[0]);
       } else {
         WarnMusicWheel(
-            ssprintf("SRC_AUDIT_FIX SRC-1339: preferred group '%s' has no "
+            ssprintf("preferred group '%s' has no "
                      "selectable songs.",
                      GAMESTATE->m_sPreferredSongGroup.Get().c_str()));
       }
@@ -835,7 +835,7 @@ void MusicWheel::BuildWheelItemDatas(
   arrayWheelItemDatas.clear();
   if (!IsValidSortOrderForWheel(so)) {
     WarnMusicWheel(
-        ssprintf("SRC_AUDIT_FIX SRC-1361: invalid sort order %i ignored.", so));
+        ssprintf("invalid sort order %i ignored.", so));
     return;
   }
 
@@ -1021,7 +1021,7 @@ void MusicWheel::BuildWheelItemDatas(
           break;
         default:
           WarnMusicWheel(
-              ssprintf("SRC_AUDIT_FIX SRC-1354: unhandled song sort %i.", so));
+              ssprintf("unhandled song sort %i.", so));
           return;
       }
 
@@ -1425,7 +1425,7 @@ void MusicWheel::BuildWheelItemDatas(
           break;
         default:
           WarnMusicWheel(
-              ssprintf("SRC_AUDIT_FIX SRC-1354: wrong course sort %i.", so));
+              ssprintf("wrong course sort %i.", so));
           return;
       }
 
@@ -1461,7 +1461,7 @@ void MusicWheel::BuildWheelItemDatas(
           CourseUtil::SortCoursePointerArrayByRanking(apCourses);
           break;
         default:
-          WarnMusicWheel("SRC_AUDIT_FIX SRC-1354: invalid course sort order.");
+          WarnMusicWheel("invalid course sort order.");
           return;
       }
 
@@ -1571,7 +1571,7 @@ void MusicWheel::BuildWheelItemDatas(
 std::vector<MusicWheelItemData*>& MusicWheel::getWheelItemsData(SortOrder so) {
   if (!IsValidSortOrderForWheel(so)) {
     WarnMusicWheel(ssprintf(
-        "SRC_AUDIT_FIX SRC-1361: getWheelItemsData rejected sort %i.", so));
+        "getWheelItemsData rejected sort %i.", so));
     m_EmptyWheelItems.clear();
     return m_EmptyWheelItems;
   }
@@ -1954,7 +1954,7 @@ void MusicWheel::UpdateSwitch() {
       break;
     default:
       WarnMusicWheel(
-          ssprintf("SRC_AUDIT_FIX SRC-1367: invalid wheel state %i.",
+          ssprintf("invalid wheel state %i.",
                    m_WheelState));
       m_WheelState = STATE_SELECTING;
       m_fTimeLeftInState = 0;
@@ -2008,7 +2008,7 @@ bool MusicWheel::ChangeSort(
 {
   if (!IsValidSortOrderForWheel(new_so) || GAMESTATE == nullptr) {
     WarnMusicWheel(
-        ssprintf("SRC_AUDIT_FIX SRC-1369: rejected sort %i.", new_so));
+        ssprintf("rejected sort %i.", new_so));
     return false;
   }
   // Reset LastOpenSection as sections differ between sorts
@@ -2255,7 +2255,7 @@ void MusicWheel::StartRandom() {
 
   Song* selection = GetPreferredSelectionForRandomOrPortal();
   if (selection == nullptr || !SelectSong(selection)) {
-    WarnMusicWheel("SRC_AUDIT_FIX SRC-1376: random found no selectable song.");
+    WarnMusicWheel("random found no selectable song.");
     m_WheelState = STATE_SELECTING;
     return;
   }

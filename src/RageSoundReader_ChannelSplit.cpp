@@ -82,9 +82,9 @@ bool FrameRangeEnd(int iStartFrame, int iFrames, int* pEndFrame) {
   return true;
 }
 
-void WarnAuditFix(const char* sFinding, const std::string& sMessage) {
+void WarnSafety(const char* sFinding, const std::string& sMessage) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX %s: %s", sFinding, sMessage.c_str());
+    LOG->Warn("%s: %s", sFinding, sMessage.c_str());
   }
 }
 }  // namespace
@@ -95,7 +95,7 @@ class RageSoundSplitterImpl {
       : m_pSource(pSource), m_iBufferPositionFrames(0) {
     if (pSource == nullptr) {
       SetErrorLocked("RageSoundSplitter created without a source reader");
-      WarnAuditFix("SRC-2755", m_sError);
+      WarnSafety("ChannelSplit", m_sError);
     }
   }
 
@@ -196,8 +196,8 @@ RageSoundReader_Split::~RageSoundReader_Split() {
 }
 
 RageSoundReader_Split* RageSoundReader_Split::Copy() const {
-  WarnAuditFix(
-      "SRC-2759",
+  WarnSafety(
+      "ChannelSplit",
       "RageSoundReader_Split cannot be copied safely because split readers "
       "share source position and buffer state.");
   return nullptr;
@@ -212,7 +212,7 @@ int RageSoundReader_Split::SetPosition(int iFrame) {
   if (iFrame < 0) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::SetPosition rejected a negative frame");
-    WarnAuditFix("SRC-2758", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return RageSoundReader::ERROR;
   }
   m_iPositionFrame = iFrame;
@@ -235,7 +235,7 @@ bool RageSoundReader_Split::SetProperty(
   if (!impl->HasSourceLocked()) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::SetProperty has no source reader");
-    WarnAuditFix("SRC-2755", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return false;
   }
   return impl->m_pSource->SetProperty(sProperty, fValue);
@@ -254,25 +254,25 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
   if (pBuf == nullptr) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::Read called with a null output buffer");
-    WarnAuditFix("SRC-2756", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return RageSoundReader::ERROR;
   }
   int iEndFrame = 0;
   if (!FrameRangeEnd(m_iPositionFrame, iFrames, &iEndFrame)) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::Read frame range is invalid or overflowing");
-    WarnAuditFix("SRC-2758", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return RageSoundReader::ERROR;
   }
   if (!impl->HasSourceLocked()) {
     impl->SetErrorLocked("RageSoundReader_Split::Read has no source reader");
-    WarnAuditFix("SRC-2755", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return RageSoundReader::ERROR;
   }
   if (m_iNumOutputChannels <= 0 || m_aChannels.empty()) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::Read has no output channel mapping");
-    WarnAuditFix("SRC-2757", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return RageSoundReader::ERROR;
   }
 
@@ -283,7 +283,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
   if (sourceChannels == 0) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::Read source reports zero channels");
-    WarnAuditFix("SRC-2755", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     m_iRequestFrames = 0;
     return RageSoundReader::ERROR;
   }
@@ -296,7 +296,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
     if (!FramesToSamples(iSkipFrames, sourceChannels, &iComputedSkip)) {
       impl->SetErrorLocked(
           "RageSoundReader_Split::Read skip sample count overflow");
-      WarnAuditFix("SRC-2758", impl->m_sError);
+      WarnSafety("ChannelSplit", impl->m_sError);
       m_iRequestFrames = 0;
       return RageSoundReader::ERROR;
     }
@@ -324,7 +324,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
       static_cast<size_t>(std::numeric_limits<unsigned>::max())) {
     impl->SetErrorLocked(
         "RageSoundReader_Split::Read frame count exceeds mixer range");
-    WarnAuditFix("SRC-2758", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     m_iRequestFrames = 0;
     return RageSoundReader::ERROR;
   }
@@ -339,7 +339,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
           chan.m_iToChannel < 0 || chan.m_iToChannel >= m_iNumOutputChannels) {
         impl->SetErrorLocked(
             "RageSoundReader_Split::Read found an invalid channel mapping");
-        WarnAuditFix("SRC-2757", impl->m_sError);
+        WarnSafety("ChannelSplit", impl->m_sError);
         m_iRequestFrames = 0;
         return RageSoundReader::ERROR;
       }
@@ -352,7 +352,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
       if (!mixed) {
         impl->SetErrorLocked("RageSoundReader_Split::Read mix failed: " +
                              mix.GetError());
-        WarnAuditFix("SRC-2766", impl->m_sError);
+        WarnSafety("ChannelSplit", impl->m_sError);
         m_iRequestFrames = 0;
         return RageSoundReader::ERROR;
       }
@@ -361,7 +361,7 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
     if (!mix.read(pBuf)) {
       impl->SetErrorLocked("RageSoundReader_Split::Read mix output failed: " +
                            mix.GetError());
-      WarnAuditFix("SRC-2766", impl->m_sError);
+      WarnSafety("ChannelSplit", impl->m_sError);
       m_iRequestFrames = 0;
       return RageSoundReader::ERROR;
     }
@@ -379,14 +379,14 @@ int RageSoundReader_Split::Read(float* pBuf, int iFrames) {
 int RageSoundSplitterImpl::ReadBufferLocked() {
   if (!HasSourceLocked()) {
     SetErrorLocked("RageSoundSplitterImpl::ReadBuffer has no source reader");
-    WarnAuditFix("SRC-2755", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
 
   const unsigned sourceChannels = SourceChannelsLocked();
   if (sourceChannels == 0) {
     SetErrorLocked("RageSoundSplitterImpl source reports zero channels");
-    WarnAuditFix("SRC-2755", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
   if (m_apSounds.empty()) {
@@ -403,7 +403,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
             snd->m_iPositionFrame, snd->m_iRequestFrames, &iEndFrame)) {
       SetErrorLocked(
           "RageSoundSplitterImpl::ReadBuffer found an invalid reader range");
-      WarnAuditFix("SRC-2758", m_sError);
+      WarnSafety("ChannelSplit", m_sError);
       return RageSoundReader::ERROR;
     }
     iMinFrameRequested = std::min(
@@ -424,7 +424,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
         static_cast<int64_t>(iEraseFrames);
     if (iNewBufferPosition > std::numeric_limits<int>::max()) {
       SetErrorLocked("RageSoundSplitterImpl buffer position overflow");
-      WarnAuditFix("SRC-2758", m_sError);
+      WarnSafety("ChannelSplit", m_sError);
       return RageSoundReader::ERROR;
     }
     m_iBufferPositionFrames = static_cast<int>(iNewBufferPosition);
@@ -434,7 +434,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
     if (iMinFrameRequested < 0 ||
         iMinFrameRequested > std::numeric_limits<int>::max()) {
       SetErrorLocked("RageSoundSplitterImpl cannot seek to invalid frame");
-      WarnAuditFix("SRC-2758", m_sError);
+      WarnSafety("ChannelSplit", m_sError);
       return RageSoundReader::ERROR;
     }
     int iSeekRet = m_pSource->SetPosition(static_cast<int>(iMinFrameRequested));
@@ -457,7 +457,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
   }
   if (iFramesToRead64 > std::numeric_limits<int>::max()) {
     SetErrorLocked("RageSoundSplitterImpl read request is too large");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
   const int iFramesToRead = static_cast<int>(iFramesToRead64);
@@ -465,21 +465,21 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
   size_t iSamplesToRead = 0;
   if (!FramesToSamples(iFramesToRead, sourceChannels, &iSamplesToRead)) {
     SetErrorLocked("RageSoundSplitterImpl read sample count overflow");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
   const size_t iOldSizeSamples = m_sBuffer.size();
   if (iSamplesToRead >
       std::numeric_limits<size_t>::max() - iOldSizeSamples) {
     SetErrorLocked("RageSoundSplitterImpl buffer resize overflow");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
   try {
     m_sBuffer.resize(iOldSizeSamples + iSamplesToRead);
   } catch (const std::bad_alloc&) {
     SetErrorLocked("RageSoundSplitterImpl could not allocate read buffer");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
 
@@ -492,7 +492,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
   if (iGotFrames > iFramesToRead) {
     m_sBuffer.resize(iOldSizeSamples);
     SetErrorLocked("RageSoundSplitterImpl source returned too many frames");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
 
@@ -500,7 +500,7 @@ int RageSoundSplitterImpl::ReadBufferLocked() {
   if (!FramesToSamples(iGotFrames, sourceChannels, &iGotSamples)) {
     m_sBuffer.resize(iOldSizeSamples);
     SetErrorLocked("RageSoundSplitterImpl returned sample count overflow");
-    WarnAuditFix("SRC-2758", m_sError);
+    WarnSafety("ChannelSplit", m_sError);
     return RageSoundReader::ERROR;
   }
   m_sBuffer.resize(iOldSizeSamples + iGotSamples);
@@ -521,7 +521,7 @@ void RageSoundReader_Split::AddSourceChannelToSound(
     impl->SetErrorLocked(
         "RageSoundReader_Split::AddSourceChannelToSound rejected an invalid "
         "channel mapping");
-    WarnAuditFix("SRC-2757", impl->m_sError);
+    WarnSafety("ChannelSplit", impl->m_sError);
     return;
   }
 
@@ -544,7 +544,7 @@ RageSoundReader_Split* RageSoundSplitter::CreateSound() {
     std::lock_guard<std::mutex> lock(m_pImpl->m_Mutex);
     if (!m_pImpl->HasSourceLocked()) {
       m_pImpl->SetErrorLocked("RageSoundSplitter::CreateSound has no source");
-      WarnAuditFix("SRC-2755", m_pImpl->m_sError);
+      WarnSafety("ChannelSplit", m_pImpl->m_sError);
       return nullptr;
     }
   }

@@ -50,7 +50,7 @@ DrainType NormalizeDrainType(DrainType dtype, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX %s: invalid DrainType %i; using normal drain.",
+      "%s: invalid DrainType %i; using normal drain.",
       context, dtype);
   return DrainType_Normal;
 }
@@ -61,7 +61,7 @@ float NormalizeLifeDifficulty(float difficulty, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX %s: invalid life difficulty %f; using 1.0.",
+      "%s: invalid life difficulty %f; using 1.0.",
       context, difficulty);
   return 1.0f;
 }
@@ -86,7 +86,7 @@ LifeMeterBar::LifeMeterBar() {
 
   if (THEME == nullptr || PREFSMAN == nullptr || GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBar constructed without complete runtime "
+        "LifeMeterBar constructed without complete runtime "
         "managers.");
     return;
   }
@@ -141,7 +141,7 @@ void LifeMeterBar::Load(
 
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-243: LifeMeterBar loaded without complete player "
+        "LifeMeterBar loaded without complete player "
         "state.");
     m_fLifePercentage = INITIAL_VALUE;
     if (m_pStream != nullptr) {
@@ -153,14 +153,14 @@ void LifeMeterBar::Load(
   PlayerNumber pn = pPlayerState->m_PlayerNumber;
   if (!IsValidPlayerNumber(pn) || GAMESTATE == nullptr || PREFSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-243: LifeMeterBar refused load with invalid "
+        "LifeMeterBar refused load with invalid "
         "player or missing managers.");
     return;
   }
 
   DrainType dtype = NormalizeDrainType(
       pPlayerState->m_PlayerOptions.GetStage().m_DrainType,
-      "SRC-243 LifeMeterBar::Load");
+      "LifeMeterBar::Load");
   switch (dtype) {
     case DrainType_Normal:
       m_fLifePercentage = INITIAL_VALUE;
@@ -183,7 +183,7 @@ void LifeMeterBar::Load(
       PREFSMAN->m_bMercifulBeginner;
   if (!hasValidSteps && IsValidPlayerNumber(pn)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-243: LifeMeterBar skipped merciful beginner check "
+        "LifeMeterBar skipped merciful beginner check "
         "without current steps for player %i.",
         pn);
   }
@@ -194,13 +194,13 @@ void LifeMeterBar::Load(
 void LifeMeterBar::ChangeLife(TapNoteScore score) {
   if (!IsValidTapNoteScore(score)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-244: LifeMeterBar ignored invalid TapNoteScore %i.",
+        "LifeMeterBar ignored invalid TapNoteScore %i.",
         score);
     return;
   }
   if (m_pPlayerState == nullptr || PREFSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-244: LifeMeterBar ignored tap score without "
+        "LifeMeterBar ignored tap score without "
         "complete runtime state.");
     return;
   }
@@ -253,7 +253,7 @@ void LifeMeterBar::ChangeLife(TapNoteScore score) {
 
   switch (NormalizeDrainType(
       m_pPlayerState->m_PlayerOptions.GetSong().m_DrainType,
-      "SRC-244 LifeMeterBar::ChangeLife(TapNoteScore)")) {
+      "LifeMeterBar::ChangeLife(TapNoteScore)")) {
     case DrainType_Normal:
       break;
     case DrainType_NoRecover:
@@ -276,7 +276,7 @@ void LifeMeterBar::ChangeLife(TapNoteScore score) {
 void LifeMeterBar::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
   if (!IsValidHoldNoteScore(score)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-245: LifeMeterBar ignored invalid HoldNoteScore "
+        "LifeMeterBar ignored invalid HoldNoteScore "
         "%i.",
         score);
     return;
@@ -286,7 +286,7 @@ void LifeMeterBar::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
   }
   if (m_pPlayerState == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-245: LifeMeterBar ignored hold score without "
+        "LifeMeterBar ignored hold score without "
         "PlayerState.");
     return;
   }
@@ -294,7 +294,7 @@ void LifeMeterBar::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
   float fDeltaLife = 0.f;
   DrainType dtype = NormalizeDrainType(
       m_pPlayerState->m_PlayerOptions.GetSong().m_DrainType,
-      "SRC-245 LifeMeterBar::ChangeLife(HoldNoteScore)");
+      "LifeMeterBar::ChangeLife(HoldNoteScore)");
   switch (dtype) {
     case DrainType_Normal:
       switch (score) {
@@ -355,20 +355,20 @@ void LifeMeterBar::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
 void LifeMeterBar::ChangeLife(float fDeltaLife) {
   if (!std::isfinite(fDeltaLife)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-246: LifeMeterBar ignored non-finite life delta "
+        "LifeMeterBar ignored non-finite life delta "
         "%f.",
         fDeltaLife);
     return;
   }
   if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-248: LifeMeterBar ignored life change without "
+        "LifeMeterBar ignored life change without "
         "complete player state.");
     return;
   }
   if (PREFSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBar ignored life change without PrefsManager.");
+        "LifeMeterBar ignored life change without PrefsManager.");
     return;
   }
 
@@ -395,7 +395,7 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
         progressiveDelta < -std::numeric_limits<float>::max() ||
         progressiveDelta > std::numeric_limits<float>::max()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: LifeMeterBar saturated progressive life delta.");
+          "LifeMeterBar saturated progressive life delta.");
       fDeltaLife = progressiveDelta < 0.0
                        ? -std::numeric_limits<float>::max()
                        : std::numeric_limits<float>::max();
@@ -428,11 +428,11 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
   }
 
   m_fLifeDifficulty =
-      NormalizeLifeDifficulty(m_fLifeDifficulty, "SRC-246 LifeMeterBar");
+      NormalizeLifeDifficulty(m_fLifeDifficulty, "LifeMeterBar");
 
   switch (NormalizeDrainType(
       m_pPlayerState->m_PlayerOptions.GetSong().m_DrainType,
-      "SRC-246 LifeMeterBar::ChangeLife(float)")) {
+      "LifeMeterBar::ChangeLife(float)")) {
     case DrainType_Normal:
     case DrainType_NoRecover:
       if (fDeltaLife > 0) {
@@ -456,7 +456,7 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
   m_fLifePercentage += fDeltaLife;
   if (!std::isfinite(m_fLifePercentage)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-246: LifeMeterBar corrected non-finite life %f.",
+        "LifeMeterBar corrected non-finite life %f.",
         m_fLifePercentage);
     m_fLifePercentage = 0.0f;
   }
@@ -467,7 +467,7 @@ void LifeMeterBar::ChangeLife(float fDeltaLife) {
 void LifeMeterBar::SetLife(float value) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-246: LifeMeterBar ignored non-finite SetLife %f.",
+        "LifeMeterBar ignored non-finite SetLife %f.",
         value);
     return;
   }
@@ -491,7 +491,7 @@ void LifeMeterBar::AfterLifeChanged() {
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber) ||
       MESSAGEMAN == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-248: LifeMeterBar skipped LifeChanged broadcast "
+        "LifeMeterBar skipped LifeChanged broadcast "
         "without PlayerState.");
     return;
   }
@@ -518,7 +518,7 @@ bool LifeMeterBar::IsFailing() const {
       m_pPlayerState->m_PlayerOptions.GetCurrent().m_fPassmark;
   if (!std::isfinite(passmark)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-248: LifeMeterBar treated non-finite passmark as "
+        "LifeMeterBar treated non-finite passmark as "
         "0.");
     return m_fLifePercentage <= 0.0f;
   }
@@ -530,13 +530,13 @@ void LifeMeterBar::Update(float fDeltaTime) {
   LifeMeter::Update(fDeltaTime);
   if (m_pStream == nullptr || m_pPlayerState == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-248: LifeMeterBar skipped update without stream or "
+        "LifeMeterBar skipped update without stream or "
         "PlayerState.");
     return;
   }
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBar ignored invalid update delta %f.",
+        "LifeMeterBar ignored invalid update delta %f.",
         fDeltaTime);
     return;
   }
@@ -560,7 +560,7 @@ void LifeMeterBar::Update(float fDeltaTime) {
 void LifeMeterBar::UpdateNonstopLifebar() {
   if (GAMESTATE == nullptr || PREFSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-247: LifeMeterBar skipped progressive update "
+        "LifeMeterBar skipped progressive update "
         "without managers.");
     return;
   }
@@ -580,7 +580,7 @@ void LifeMeterBar::UpdateNonstopLifebar() {
     case PLAY_MODE_NONSTOP:
       if (GAMESTATE->m_pCurCourse == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-247: LifeMeterBar skipped progressive nonstop "
+            "LifeMeterBar skipped progressive nonstop "
             "without current course.");
         return;
       }
@@ -594,11 +594,11 @@ void LifeMeterBar::UpdateNonstopLifebar() {
 
   if (iTotal <= 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-247: LifeMeterBar ignored progressive lifebar with "
+        "LifeMeterBar ignored progressive lifebar with "
         "total stages %i.",
         iTotal);
     m_fLifeDifficulty =
-        NormalizeLifeDifficulty(m_fBaseLifeDifficulty, "SRC-247 LifeMeterBar");
+        NormalizeLifeDifficulty(m_fBaseLifeDifficulty, "LifeMeterBar");
     return;
   }
 
@@ -609,7 +609,7 @@ void LifeMeterBar::UpdateNonstopLifebar() {
 
     m_iProgressiveLifebar = 0;
     m_fLifeDifficulty = NormalizeLifeDifficulty(
-        EXTRA_STAGE_LIFE_DIFFICULTY, "SRC-247 LifeMeterBar extra stage");
+        EXTRA_STAGE_LIFE_DIFFICULTY, "LifeMeterBar extra stage");
     return;
   }
 
@@ -622,10 +622,10 @@ void LifeMeterBar::UpdateNonstopLifebar() {
           : static_cast<double>(iProgressiveLifebarDifficulty);
   if (!std::isfinite(progressiveAdjustment)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-247: LifeMeterBar ignored non-finite progressive "
+        "LifeMeterBar ignored non-finite progressive "
         "adjustment.");
     m_fLifeDifficulty = NormalizeLifeDifficulty(
-        m_fBaseLifeDifficulty, "SRC-247 LifeMeterBar");
+        m_fBaseLifeDifficulty, "LifeMeterBar");
     return;
   }
 
@@ -635,7 +635,7 @@ void LifeMeterBar::UpdateNonstopLifebar() {
 
   if (m_fLifeDifficulty >= 0.4f) {
     m_fLifeDifficulty =
-        NormalizeLifeDifficulty(m_fLifeDifficulty, "SRC-247 LifeMeterBar");
+        NormalizeLifeDifficulty(m_fLifeDifficulty, "LifeMeterBar");
     return;
   }
 
@@ -669,7 +669,7 @@ void LifeMeterBar::UpdateNonstopLifebar() {
   int iLifeDifficulty = int((1.8f - m_fLifeDifficulty) / 0.2f);
   if (iLifeDifficulty < 0) {
     m_fLifeDifficulty =
-        NormalizeLifeDifficulty(m_fBaseLifeDifficulty, "SRC-247 LifeMeterBar");
+        NormalizeLifeDifficulty(m_fBaseLifeDifficulty, "LifeMeterBar");
     return;
   }
 
@@ -692,14 +692,14 @@ void LifeMeterBar::FillForHowToPlay(int NumW2s, int NumMisses) {
   m_iProgressiveLifebar = 0;  // disable progressive lifebar
 
   m_fLifeDifficulty =
-      NormalizeLifeDifficulty(m_fLifeDifficulty, "SRC-246 LifeMeterBar HTP");
+      NormalizeLifeDifficulty(m_fLifeDifficulty, "LifeMeterBar HTP");
   float AmountForW2 = NumW2s * m_fLifeDifficulty * 0.008f;
   float AmountForMiss = NumMisses / m_fLifeDifficulty * 0.08f;
 
   m_fLifePercentage = AmountForMiss - AmountForW2;
   if (!std::isfinite(m_fLifePercentage)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-246: LifeMeterBar corrected non-finite HTP life "
+        "LifeMeterBar corrected non-finite HTP life "
         "%f.",
         m_fLifePercentage);
     m_fLifePercentage = 0.0f;

@@ -54,7 +54,7 @@ WheelNotifyIcon::WheelNotifyIcon() : m_fCycleTime(0), m_iCurrentIcon(0) {
   // Load( THEME->GetPathG("MusicWheelItem","WheelNotifyIcon") );
   if (THEME == nullptr) {
     WarnWheelNotifyIcon(
-        "SRC_AUDIT_FIX SRC-1273: WheelNotifyIcon loaded without theme "
+        "WheelNotifyIcon loaded without theme "
         "manager.");
     return;
   }
@@ -100,7 +100,7 @@ void WheelNotifyIcon::SetFlags(Flags flags) {
     m_vIconsToShow.push_back(marathon);
   } else if (flags.iStagesForSong < 0) {
     WarnWheelNotifyIcon(
-        "SRC_AUDIT_FIX SRC-1274: WheelNotifyIcon ignored negative stage "
+        "WheelNotifyIcon ignored negative stage "
         "count.");
   }
 

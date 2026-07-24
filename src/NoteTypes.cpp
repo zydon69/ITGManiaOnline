@@ -102,7 +102,7 @@ float NoteTypeToBeat(NoteType nt) {
       return 1.0f / 48;
     default:
       LOG->Trace(
-          "SRC_AUDIT_FIX NoteTypeToBeat used 192nd fallback for invalid type %i.",
+          "NoteTypeToBeat used 192nd fallback for invalid type %i.",
           int(nt));
       return 1.0f / 48;
   }
@@ -131,7 +131,7 @@ int NoteTypeToRow(NoteType nt) {
       return 1;
     default:
       LOG->Trace(
-          "SRC_AUDIT_FIX NoteTypeToRow used one-row fallback for invalid type %i.",
+          "NoteTypeToRow used one-row fallback for invalid type %i.",
           int(nt));
       return 1;
   }
@@ -200,7 +200,7 @@ void TapNoteResult::LoadFromNode(const XNode* pNode) {
   *this = TapNoteResult();
   if (pNode == nullptr || pNode->GetName() != "TapNoteResult") {
     LOG->Trace(
-        "SRC_AUDIT_FIX TapNoteResult ignored invalid XML node while loading.");
+        "TapNoteResult ignored invalid XML node while loading.");
     return;
   }
 
@@ -211,7 +211,7 @@ void TapNoteResult::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("TapNoteOffset", fTapNoteOffset);
   if (!std::isfinite(fTapNoteOffset)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX TapNoteResult corrected non-finite tap offset %f.",
+        "TapNoteResult corrected non-finite tap offset %f.",
         fTapNoteOffset);
     fTapNoteOffset = 0.f;
   }
@@ -226,7 +226,7 @@ void HoldNoteResult::LoadFromNode(const XNode* pNode) {
   *this = HoldNoteResult();
   if (pNode == nullptr || pNode->GetName() != "HoldNoteResult") {
     LOG->Trace(
-        "SRC_AUDIT_FIX HoldNoteResult ignored invalid XML node while loading.");
+        "HoldNoteResult ignored invalid XML node while loading.");
     return;
   }
 
@@ -240,7 +240,7 @@ void HoldNoteResult::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("CheckpointsMissed", iCheckpointsMissed);
   if (!std::isfinite(fLife)) {
     LOG->Trace(
-        "SRC_AUDIT_FIX HoldNoteResult corrected non-finite hold life %f.",
+        "HoldNoteResult corrected non-finite hold life %f.",
         fLife);
     fLife = 0.f;
   }
@@ -262,7 +262,7 @@ XNode* TapNote::CreateNode() const {
 void TapNote::LoadFromNode(const XNode* pNode) {
   Init();
   if (pNode == nullptr || pNode->GetName() != "TapNote") {
-    LOG->Trace("SRC_AUDIT_FIX TapNote ignored invalid XML node while loading.");
+    LOG->Trace("TapNote ignored invalid XML node while loading.");
     return;
   }
 

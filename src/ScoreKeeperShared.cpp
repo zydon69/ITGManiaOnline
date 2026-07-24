@@ -35,7 +35,7 @@ ScoreKeeperShared::ScoreKeeperShared(
 bool ScoreKeeperShared::IsMasterScoreKeeper() const {
   if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback with incomplete "
+        "ScoreKeeperShared ignored callback with incomplete "
         "scoring state: PlayerState=%p PlayerStageStats=%p.",
         static_cast<void*>(m_pPlayerState),
         static_cast<void*>(m_pPlayerStageStats));
@@ -43,7 +43,7 @@ bool ScoreKeeperShared::IsMasterScoreKeeper() const {
   }
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: ScoreKeeperShared ignored callback because GAMESTATE "
+        "ScoreKeeperShared ignored callback because GAMESTATE "
         "is null.");
     return false;
   }
@@ -51,7 +51,7 @@ bool ScoreKeeperShared::IsMasterScoreKeeper() const {
   const PlayerNumber master = GAMESTATE->GetMasterPlayerNumber();
   if (!IsValidSharedScorePlayer(pn) || !IsValidSharedScorePlayer(master)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2066: ScoreKeeperShared ignored callback for "
+        "ScoreKeeperShared ignored callback for "
         "player %i master %i.",
         pn, master);
     return false;

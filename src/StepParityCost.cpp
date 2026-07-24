@@ -16,14 +16,14 @@ constexpr float MIN_ELAPSED_TIME = 0.0001f;
 template <typename T>
 bool isEmpty(const std::vector<T>& vec, int columnCount) {
   if (columnCount < 0) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-647: negative column count %d.", columnCount);
+    LOG->Warn("negative column count %d.", columnCount);
     return true;
   }
   const int safeColumnCount =
       std::min(columnCount, static_cast<int>(vec.size()));
   if (safeColumnCount != columnCount) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-647: vector has %zu values but %d columns were "
+        "vector has %zu values but %d columns were "
         "requested.",
         vec.size(), columnCount);
   }
@@ -41,7 +41,7 @@ float SafeElapsedTime(float elapsedTime) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX SRC-641: invalid StepParity elapsed time %.6f; using "
+      "invalid StepParity elapsed time %.6f; using "
       "%.6f for cost calculation.",
       elapsedTime, MIN_ELAPSED_TIME);
   return MIN_ELAPSED_TIME;

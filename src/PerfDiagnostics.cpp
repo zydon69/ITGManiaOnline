@@ -34,7 +34,7 @@ static Preference<bool> g_bLogGlobalOffsetDiagnostics(
     "LogGlobalOffsetDiagnostics", false);
 static Preference<bool> g_bLogWindowsEventDiagnostics(
     "LogWindowsEventDiagnostics", false);
-static Preference<bool> g_bReviewSrc("review_src", true);
+static Preference<bool> g_bRuntimeValidation("runtime_validation", false);
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -49,7 +49,7 @@ static std::atomic<bool> g_bLogContentLoadDiagnosticsCached{false};
 static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
 static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
 static std::atomic<bool> g_bLogWindowsEventDiagnosticsCached{false};
-static std::atomic<bool> g_bReviewSrcCached{true};
+static std::atomic<bool> g_bRuntimeValidationCached{false};
 
 static bool EnvFlagEnabled(const char* name) {
   if (name == nullptr) {
@@ -76,8 +76,9 @@ static const bool g_bEnvLogGlobalOffset =
     EnvFlagEnabled("ITG_LOG_GLOBAL_OFFSET");
 static const bool g_bEnvWindowsEvents =
     EnvFlagEnabled("ITG_LOG_WINDOWS_EVENTS");
-static const bool g_bEnvReviewSrc = EnvFlagEnabled("ITG_REVIEW_SRC") ||
-                                    EnvFlagEnabled("ITG_LOG_REVIEW_SRC");
+static const bool g_bEnvRuntimeValidation =
+    EnvFlagEnabled("ITG_RUNTIME_VALIDATION") ||
+    EnvFlagEnabled("ITG_LOG_RUNTIME_VALIDATION");
 static const bool g_bEnvLegacyTraceGlUploads =
     EnvFlagEnabled("ITG_TRACE_GL_UPLOADS");
 static const bool g_bEnvLegacyTraceResourceSnapshots =
@@ -113,7 +114,8 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogGlobalOffsetDiagnostics.Get(), std::memory_order_release);
   g_bLogWindowsEventDiagnosticsCached.store(
       g_bLogWindowsEventDiagnostics.Get(), std::memory_order_release);
-  g_bReviewSrcCached.store(g_bReviewSrc.Get(), std::memory_order_release);
+  g_bRuntimeValidationCached.store(
+      g_bRuntimeValidation.Get(), std::memory_order_release);
 }
 
 /*
@@ -206,12 +208,14 @@ bool LogWindowsEventDiagnosticsEnabled() {
          g_bEnvWindowsEvents;
 }
 
-bool ReviewSrcDiagnosticsEnabled() {
-  return g_bReviewSrcCached.load(std::memory_order_acquire) || g_bEnvReviewSrc;
+bool RuntimeValidationDiagnosticsEnabled() {
+  return g_bRuntimeValidationCached.load(std::memory_order_acquire) ||
+         g_bEnvRuntimeValidation;
 }
 
-void LogReviewSrcDiagnostics(const char* fmt, ...) {
-  if (!ReviewSrcDiagnosticsEnabled() || fmt == nullptr || LOG == nullptr) {
+void LogRuntimeValidationDiagnostics(const char* fmt, ...) {
+  if (!RuntimeValidationDiagnosticsEnabled() || fmt == nullptr ||
+      LOG == nullptr) {
     return;
   }
 
@@ -220,11 +224,11 @@ void LogReviewSrcDiagnostics(const char* fmt, ...) {
   const std::string message = vssprintf(fmt, va);
   va_end(va);
 
-  LOG->Trace("SRC_REVIEW_TRACE %s", message.c_str());
+  LOG->Trace("RUNTIME_VALIDATION %s", message.c_str());
 }
 
 bool RoutineCoupleDiagnosticsEnabled() {
-  return ReviewSrcDiagnosticsEnabled();
+  return RuntimeValidationDiagnosticsEnabled();
 }
 
 void LogRoutineCoupleDiagnostics(const char* fmt, ...) {

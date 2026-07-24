@@ -14,7 +14,7 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayNormalAuditFix(const char* message) {
+void WarnScoreDisplayNormalSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -36,8 +36,8 @@ ScoreDisplayNormal::ScoreDisplayNormal() {
       this->AddChild(m_sprFrame);
     }
   } else {
-    WarnScoreDisplayNormalAuditFix(
-        "SRC_AUDIT_FIX SRC-1096: ScoreDisplayNormal constructed without "
+    WarnScoreDisplayNormalSafety(
+        "ScoreDisplayNormal constructed without "
         "THEME.");
   }
 
@@ -59,13 +59,13 @@ void ScoreDisplayNormal::Init(
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    WarnScoreDisplayNormalAuditFix(
-        "SRC_AUDIT_FIX SRC-236: ScoreDisplayNormal ignored null init state.");
+    WarnScoreDisplayNormalSafety(
+        "ScoreDisplayNormal ignored null init state.");
     return;
   }
   if (LUA == nullptr) {
-    WarnScoreDisplayNormalAuditFix(
-        "SRC_AUDIT_FIX SRC-1097: ScoreDisplayNormal skipped Lua Load message "
+    WarnScoreDisplayNormalSafety(
+        "ScoreDisplayNormal skipped Lua Load message "
         "without LUA.");
     return;
   }

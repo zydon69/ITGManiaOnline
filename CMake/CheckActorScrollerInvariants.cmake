@@ -200,7 +200,3 @@ require_contains(
   "${dynamic_scroller_cpp}"
   "pActor->SetVisible(false);"
   "DynamicActorScroller hides stale content on configure failure")
-require_contains(
-  "${dynamic_scroller_cpp}"
-  "SRC_AUDIT_FIX SRC-2660"
-  "DynamicActorScroller logs failed item hiding")

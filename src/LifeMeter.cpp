@@ -20,7 +20,7 @@ void LifeMeter::Load(
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-236: LifeMeter loaded with PlayerState=%p "
+          "LifeMeter loaded with PlayerState=%p "
           "PlayerStageStats=%p.",
           pPlayerState, pPlayerStageStats);
     }
@@ -40,7 +40,7 @@ LifeMeter* LifeMeter::MakeLifeMeter(LifeType t) {
     default:
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-235: Invalid LifeMeter type %i; using Bar.", t);
+            "Invalid LifeMeter type %i; using Bar.", t);
       }
       return new LifeMeterBar;
   }

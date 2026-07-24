@@ -24,7 +24,7 @@ REGISTER_ACTOR_CLASS(MeterDisplay);
 REGISTER_ACTOR_CLASS(SongMeterDisplay);
 
 namespace {
-void WarnMeterDisplayAuditFix(const char* message) {
+void WarnMeterDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -117,8 +117,8 @@ void MeterDisplay::LoadFromNode(const XNode* pNode) {
   ResetLoadedActors();
 
   if (pNode == nullptr) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1122: MeterDisplay ignored null XML node.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay ignored null XML node.");
     return;
   }
   if (LOG != nullptr) {
@@ -157,16 +157,16 @@ void MeterDisplay::LoadFromNode(const XNode* pNode) {
 
 void MeterDisplay::SetPercent(float fPercent) {
   if (!std::isfinite(fPercent)) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1124: MeterDisplay reset non-finite percent.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay reset non-finite percent.");
     fPercent = 0.0f;
   }
   rage_clamp(fPercent, 0.0f, 1.0f);
   m_fPercent = fPercent;
 
   if (!m_sprStream.IsLoaded()) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1124: MeterDisplay ignored percent without stream.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay ignored percent without stream.");
     return;
   }
   m_sprStream->SetCropRight(1 - fPercent);
@@ -179,20 +179,20 @@ void MeterDisplay::SetPercent(float fPercent) {
 
 void MeterDisplay::SetStreamWidth(float fStreamWidth) {
   if (!std::isfinite(fStreamWidth) || fStreamWidth < 0.0f) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1125: MeterDisplay reset invalid stream width.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay reset invalid stream width.");
     fStreamWidth = 0.0f;
   }
   m_fStreamWidth = fStreamWidth;
   if (!m_sprStream.IsLoaded()) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1125: MeterDisplay ignored width without stream.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay ignored width without stream.");
     return;
   }
   float unzoomedWidth = m_sprStream->GetUnzoomedWidth();
   if (!std::isfinite(unzoomedWidth) || unzoomedWidth <= 0.0f) {
-    WarnMeterDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1125: MeterDisplay used fallback stream width.");
+    WarnMeterDisplaySafety(
+        "MeterDisplay used fallback stream width.");
     unzoomedWidth = 1.0f;
   }
   if (m_fStreamWidth <= 0.0f) {
@@ -233,8 +233,8 @@ void SongMeterDisplay::Update(float fDeltaTime) {
           fSongEndSeconds, 0.0f, 1.0f);
       rage_clamp(fPercentPositionSong, 0.0f, 1.0f);
     } else {
-      WarnMeterDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1126: SongMeterDisplay ignored invalid song "
+      WarnMeterDisplaySafety(
+          "SongMeterDisplay ignored invalid song "
           "timing.");
     }
 

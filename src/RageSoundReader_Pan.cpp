@@ -55,7 +55,7 @@ int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
         static_cast<size_t>(iRequestedFrames) * GetNumChannels();
     if (!RageSoundUtil::ConvertMonoToStereoInPlace(
             pBuf, static_cast<size_t>(iFrames), stereoCapacity)) {
-      SetError("SRC_AUDIT_FIX SRC-2907: pan reader mono to stereo expansion "
+      SetError("pan reader mono to stereo expansion "
                "failed");
       return RageSoundReader::ERROR;
     }
@@ -65,7 +65,7 @@ int RageSoundReader_Pan::Read(float* pBuf, int iFrames) {
   if (GetNumChannels() == 2 && m_fPan != 0.0) {
     if (!RageSoundUtil::Pan(
             pBuf, static_cast<size_t>(iFrames), GetNumChannels(), m_fPan)) {
-      SetError("SRC_AUDIT_FIX SRC-2908: pan reader refused non-stereo pan");
+      SetError("pan reader refused non-stereo pan");
       return RageSoundReader::ERROR;
     }
   }
@@ -104,7 +104,7 @@ std::string RageSoundReader_Pan::GetError() const {
 }
 
 void RageSoundReader_Pan::SetError(const std::string& sError) {
-  // SRC_AUDIT_FIX SRC-2754: keep filter-owned failures diagnosable instead
+  // keep filter-owned failures diagnosable instead
   // of reporting an unrelated source-reader error.
   m_sError = sError;
 }

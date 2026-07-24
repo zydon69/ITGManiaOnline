@@ -9,7 +9,7 @@ set "PATH="
 set "Path=%_ORIGINAL_PATH%"
 
 set "BUILD_DIR=Build\release"
-set "DEST=%USERPROFILE%\Desktop\ITGManiaOnline-Windows-x64"
+set "DEST=%USERPROFILE%\Desktop\ITGOnline-Windows-x64"
 
 echo [1/5] Cleaning build folder...
 if exist Build rmdir /s /q Build || goto fail
@@ -43,7 +43,7 @@ copy /y LICENSE "%DEST%\" >nul || goto fail
 copy /y README.md "%DEST%\" >nul || goto fail
 type nul > "%DEST%\Portable.ini" || goto fail
 (
-  echo ITGManiaOnline - Windows x64
+  echo ITG Online - Windows x64
   echo.
   echo Lance le jeu avec:
   echo Program\ITGmania.exe

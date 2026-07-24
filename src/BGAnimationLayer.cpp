@@ -73,7 +73,7 @@ constexpr float MAX_LAYER_NUMERIC_MAGNITUDE = 1000000.0f;
 float SafeFinite(float value, float fallback, const char* context) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer replaced non-finite %s with "
+        "BGAnimationLayer replaced non-finite %s with "
         "%.3f.",
         context, fallback);
     return fallback;
@@ -86,7 +86,7 @@ float SafeBoundedFinite(float value, float fallback, const char* context) {
   if (std::abs(value) > MAX_LAYER_NUMERIC_MAGNITUDE) {
     const float bounded = std::copysign(MAX_LAYER_NUMERIC_MAGNITUDE, value);
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-3099: BGAnimationLayer bounded %s %.3f to %.3f.",
+        "BGAnimationLayer bounded %s %.3f to %.3f.",
         context, value, bounded);
     return bounded;
   }
@@ -97,7 +97,7 @@ float SafePositive(float value, float fallback, const char* context) {
   value = SafeBoundedFinite(value, fallback, context);
   if (value <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer replaced non-positive %s "
+        "BGAnimationLayer replaced non-positive %s "
         "%.3f with %.3f.",
         context, value, fallback);
     return fallback;
@@ -112,7 +112,7 @@ void SetRandomStateIfPossible(Actor* actor, const char* context) {
   const int states = actor->GetNumStates();
   if (states <= 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-709: BGAnimationLayer skipped random state for %s "
+        "BGAnimationLayer skipped random state for %s "
         "because it has %d states.",
         context, states);
     return;
@@ -209,7 +209,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
       sSongBGPath = THEME->GetPathG("Common", "fallback background");
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-706: BGAnimationLayer could not resolve "
+          "BGAnimationLayer could not resolve "
           "usesongbg fallback.");
       return;
     }
@@ -361,7 +361,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
       if (!std::isfinite(fSpriteWidth) || !std::isfinite(fSpriteHeight) ||
           fSpriteWidth <= 0.0f || fSpriteHeight <= 0.0f) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-707: BGAnimationLayer skipped particles for "
+            "BGAnimationLayer skipped particles for "
             "'%s' because the source sprite has invalid size %.3fx%.3f.",
             sPath.c_str(), fSpriteWidth, fSpriteHeight);
         return;
@@ -371,7 +371,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
       if (!std::isfinite(spriteArea) || spriteArea < 1.0 ||
           spriteArea > static_cast<double>(std::numeric_limits<int>::max())) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-3097: BGAnimationLayer skipped particles for "
+            "BGAnimationLayer skipped particles for "
             "'%s' because sprite area %.3f is unsupported.",
             sPath.c_str(), spriteArea);
         return;
@@ -429,7 +429,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
             break;
           default:
             LOG->Warn(
-                "SRC_AUDIT_FIX SRC-714: BGAnimationLayer ignored "
+                "BGAnimationLayer ignored "
                 "unrecognized particle effect %i.",
                 effect);
             return;
@@ -454,7 +454,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
       if (!std::isfinite(fTileWidth) || !std::isfinite(fTileHeight) ||
           fTileWidth <= 0.0f || fTileHeight <= 0.0f) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-708: BGAnimationLayer skipped tiles for '%s' "
+            "BGAnimationLayer skipped tiles for '%s' "
             "because the source sprite has invalid size %.3fx%.3f.",
             sPath.c_str(), fTileWidth, fTileHeight);
         return;
@@ -499,7 +499,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
               break;
             default:
               LOG->Warn(
-                  "SRC_AUDIT_FIX SRC-714: BGAnimationLayer ignored "
+                  "BGAnimationLayer ignored "
                   "unrecognized tile effect %i.",
                   effect);
               return;
@@ -509,7 +509,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
     } break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-714: BGAnimationLayer ignored unrecognized layer "
+          "BGAnimationLayer ignored unrecognized layer "
           "effect %i.",
           effect);
       return;
@@ -552,7 +552,7 @@ void BGAnimationLayer::LoadFromAniLayerFile(const std::string& sPath) {
 
 void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-710: BGAnimationLayer ignored null node.");
+    LOG->Warn("BGAnimationLayer ignored null node.");
     return;
   }
   ResetLayerState();
@@ -604,7 +604,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       m_Type = TYPE_TILES;
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-710: BGAnimationLayer type '%s' is invalid; "
+          "BGAnimationLayer type '%s' is invalid; "
           "using sprite.",
           type.c_str());
       m_Type = TYPE_SPRITE;
@@ -670,7 +670,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       SafeBoundedFinite(fOverrideSpeed, 0.0f, "OverrideSpeed");
   if (fOverrideSpeed < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer converted negative "
+        "BGAnimationLayer converted negative "
         "OverrideSpeed %.3f to positive.",
         fOverrideSpeed);
     fOverrideSpeed = -fOverrideSpeed;
@@ -680,7 +680,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
   pNode->GetAttrValue("NumParticles", iNumParticles);
   if (iNumParticles < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer clamped negative "
+        "BGAnimationLayer clamped negative "
         "NumParticles %d.",
         iNumParticles);
     iNumParticles = 0;
@@ -708,7 +708,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       Actor* pActor = ActorUtil::LoadFromNode(pNode, this);
       if (pActor == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-711: BGAnimationLayer sprite actor failed to "
+            "BGAnimationLayer sprite actor failed to "
             "load.");
         return;
       }
@@ -725,7 +725,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       CollapsePath(sFile);
       if (sFile.empty()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-712: BGAnimationLayer particles missing File "
+            "BGAnimationLayer particles missing File "
             "attribute.");
         return;
       }
@@ -766,7 +766,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       CollapsePath(sFile);
       if (sFile.empty()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-708: BGAnimationLayer tiles missing File "
+            "BGAnimationLayer tiles missing File "
             "attribute.");
         return;
       }
@@ -775,7 +775,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
       s.Load(sFile);
       if (!s.IsLoaded()) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-708: BGAnimationLayer could not load tile "
+            "BGAnimationLayer could not load tile "
             "source '%s'.",
             sFile.c_str());
         return;
@@ -798,7 +798,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
         std::unique_ptr<Actor> pSprite(ActorUtil::MakeActor(sFile, this));
         if (!pSprite) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-3098: BGAnimationLayer discarded partial "
+              "BGAnimationLayer discarded partial "
               "tile grid after actor %u of %u failed to load.",
               i, NumSprites);
           ResetLayerState();
@@ -812,7 +812,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
     } break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-714: BGAnimationLayer ignored unrecognized type "
+          "BGAnimationLayer ignored unrecognized type "
           "%i.",
           m_Type);
       return;
@@ -830,7 +830,7 @@ void BGAnimationLayer::LoadFromNode(const XNode* pNode) {
 void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer ignored non-finite delta.");
+        "BGAnimationLayer ignored non-finite delta.");
     return;
   }
   ActorFrame::UpdateInternal(fDeltaTime);
@@ -838,7 +838,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
   fDeltaTime *= m_fUpdateRate;
   if (!std::isfinite(fDeltaTime)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-710: BGAnimationLayer ignored non-finite scaled "
+        "BGAnimationLayer ignored non-finite scaled "
         "delta.");
     return;
   }
@@ -850,7 +850,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
           Sprite* pSprite = dynamic_cast<Sprite*>(m_SubActors[i]);
           if (pSprite == nullptr) {
             LOG->Warn(
-                "SRC_AUDIT_FIX SRC-711: BGAnimationLayer skipped texcoord "
+                "BGAnimationLayer skipped texcoord "
                 "scroll on non-sprite actor.");
             continue;
           }
@@ -864,7 +864,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
       for (unsigned i = 0; i < m_SubActors.size(); i++) {
         if (i >= m_vParticleVelocity.size()) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-712: BGAnimationLayer particle actor/vector "
+              "BGAnimationLayer particle actor/vector "
               "count mismatch; stopping particle update.");
           break;
         }
@@ -917,7 +917,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
           !std::isfinite(m_fTilesSpacingX) ||
           !std::isfinite(m_fTilesSpacingY)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-713: BGAnimationLayer skipped tile update "
+            "BGAnimationLayer skipped tile update "
             "because grid dimensions are invalid.");
         return;
       }
@@ -929,7 +929,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
       if (fTotalWidth <= 0.0 || fTotalHeight <= 0.0 ||
           !std::isfinite(fTotalWidth) || !std::isfinite(fTotalHeight)) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-713: BGAnimationLayer skipped tile update "
+            "BGAnimationLayer skipped tile update "
             "because total dimensions are invalid.");
         return;
       }
@@ -937,7 +937,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
       const int expectedTiles = m_iNumTilesWide * m_iNumTilesHigh;
       if (static_cast<int>(m_SubActors.size()) < expectedTiles) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-713: BGAnimationLayer has %zu tile actors but "
+            "BGAnimationLayer has %zu tile actors but "
             "expected %d.",
             m_SubActors.size(), expectedTiles);
       }
@@ -978,7 +978,7 @@ void BGAnimationLayer::UpdateInternal(float fDeltaTime) {
     } break;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-714: BGAnimationLayer skipped update for "
+          "BGAnimationLayer skipped update for "
           "unrecognized type %i.",
           m_Type);
       return;

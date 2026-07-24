@@ -11,8 +11,8 @@
 namespace {
 void TraceInvalid(
     const char* finding, const char* operation, const char* reason) {
-  LogReviewSrcDiagnostics(
-      "SRC_AUDIT_FIX %s RageSoundUtil::%s refused invalid input: %s",
+  LogRuntimeValidationDiagnostics(
+      "%s RageSoundUtil::%s refused invalid input: %s",
       finding, operation, reason);
 }
 
@@ -21,8 +21,8 @@ void TraceSanitizedSamples(
   if (count == 0) {
     return;
   }
-  LogReviewSrcDiagnostics(
-      "SRC_AUDIT_FIX %s RageSoundUtil::%s sanitized %zu non-finite samples",
+  LogRuntimeValidationDiagnostics(
+      "%s RageSoundUtil::%s sanitized %zu non-finite samples",
       finding, operation, count);
 }
 
@@ -32,8 +32,8 @@ float SanitizeControl(
   if (std::isfinite(value)) {
     return value;
   }
-  LogReviewSrcDiagnostics(
-      "SRC_AUDIT_FIX %s RageSoundUtil::%s replaced non-finite %s with 0",
+  LogRuntimeValidationDiagnostics(
+      "%s RageSoundUtil::%s replaced non-finite %s with 0",
       finding, operation, name);
   return 0.0f;
 }
@@ -60,16 +60,16 @@ bool RageSoundUtil::Attenuate(float* pBuf, size_t iSamples, float fVolume) {
     return true;
   }
   if (pBuf == nullptr) {
-    TraceInvalid("SRC-2913", "Attenuate", "null buffer");
+    TraceInvalid("RageSoundUtil", "Attenuate", "null buffer");
     return false;
   }
 
-  fVolume = SanitizeControl(fVolume, "SRC-2912", "Attenuate", "volume");
+  fVolume = SanitizeControl(fVolume, "RageSoundUtil", "Attenuate", "volume");
   size_t sanitized = 0;
   for (size_t i = 0; i < iSamples; ++i) {
     pBuf[i] = SanitizeSample(pBuf[i], sanitized) * fVolume;
   }
-  TraceSanitizedSamples("SRC-2912", "Attenuate", sanitized);
+  TraceSanitizedSamples("RageSoundUtil", "Attenuate", sanitized);
   return true;
 }
 
@@ -80,27 +80,27 @@ bool RageSoundUtil::Pan(
     return true;
   }
   if (buffer == nullptr) {
-    TraceInvalid("SRC-2913", "Pan", "null buffer");
+    TraceInvalid("RageSoundUtil", "Pan", "null buffer");
     return false;
   }
   if (channels != 2) {
-    TraceInvalid("SRC-2908", "Pan", "pan requires a stereo buffer");
+    TraceInvalid("RageSoundUtil", "Pan", "pan requires a stereo buffer");
     return false;
   }
   size_t samples = 0;
   if (!CheckedMul(frames, static_cast<size_t>(channels), samples)) {
-    TraceInvalid("SRC-2906", "Pan", "sample count overflow");
+    TraceInvalid("RageSoundUtil", "Pan", "sample count overflow");
     return false;
   }
 
-  fPos = SanitizeControl(fPos, "SRC-2912", "Pan", "pan");
+  fPos = SanitizeControl(fPos, "RageSoundUtil", "Pan", "pan");
   fPos = std::clamp(fPos, -1.0f, 1.0f);
   if (fPos == 0.0f) {
     size_t sanitized = 0;
     for (size_t i = 0; i < samples; ++i) {
       buffer[i] = SanitizeSample(buffer[i], sanitized);
     }
-    TraceSanitizedSamples("SRC-2912", "Pan", sanitized);
+    TraceSanitizedSamples("RageSoundUtil", "Pan", sanitized);
     return true;
   }
 
@@ -128,7 +128,7 @@ bool RageSoundUtil::Pan(
     buffer[1] = r;
     buffer += 2;
   }
-  TraceSanitizedSamples("SRC-2912", "Pan", sanitized);
+  TraceSanitizedSamples("RageSoundUtil", "Pan", sanitized);
   return true;
 }
 
@@ -139,29 +139,29 @@ bool RageSoundUtil::Fade(
     return true;
   }
   if (pBuffer == nullptr) {
-    TraceInvalid("SRC-2913", "Fade", "null buffer");
+    TraceInvalid("RageSoundUtil", "Fade", "null buffer");
     return false;
   }
   if (iChannels == 0) {
-    TraceInvalid("SRC-2910", "Fade", "zero channels");
+    TraceInvalid("RageSoundUtil", "Fade", "zero channels");
     return false;
   }
   size_t samples = 0;
   if (!CheckedMul(iFrames, static_cast<size_t>(iChannels), samples)) {
-    TraceInvalid("SRC-2906", "Fade", "sample count overflow");
+    TraceInvalid("RageSoundUtil", "Fade", "sample count overflow");
     return false;
   }
 
   fStartVolume =
-      SanitizeControl(fStartVolume, "SRC-2912", "Fade", "start volume");
-  fEndVolume = SanitizeControl(fEndVolume, "SRC-2912", "Fade", "end volume");
+      SanitizeControl(fStartVolume, "RageSoundUtil", "Fade", "start volume");
+  fEndVolume = SanitizeControl(fEndVolume, "RageSoundUtil", "Fade", "end volume");
   /* If the whole buffer is full volume, skip. */
   if (fStartVolume > .9999f && fEndVolume > .9999f) {
     size_t sanitized = 0;
     for (size_t i = 0; i < samples; ++i) {
       pBuffer[i] = SanitizeSample(pBuffer[i], sanitized);
     }
-    TraceSanitizedSamples("SRC-2912", "Fade", sanitized);
+    TraceSanitizedSamples("RageSoundUtil", "Fade", sanitized);
     return true;
   }
 
@@ -180,7 +180,7 @@ bool RageSoundUtil::Fade(
       pBuffer++;
     }
   }
-  TraceSanitizedSamples("SRC-2912", "Fade", sanitized);
+  TraceSanitizedSamples("RageSoundUtil", "Fade", sanitized);
   return true;
 }
 
@@ -191,18 +191,18 @@ bool RageSoundUtil::ConvertMonoToStereoInPlace(
     return true;
   }
   if (data == nullptr) {
-    TraceInvalid("SRC-2913", "ConvertMonoToStereoInPlace", "null buffer");
+    TraceInvalid("RageSoundUtil", "ConvertMonoToStereoInPlace", "null buffer");
     return false;
   }
   size_t requiredSamples = 0;
   if (!CheckedMul(iFrames, static_cast<size_t>(2), requiredSamples)) {
     TraceInvalid(
-        "SRC-2907", "ConvertMonoToStereoInPlace", "output size overflow");
+        "RageSoundUtil", "ConvertMonoToStereoInPlace", "output size overflow");
     return false;
   }
   if (iOutputSamplesCapacity < requiredSamples) {
     TraceInvalid(
-        "SRC-2907", "ConvertMonoToStereoInPlace",
+        "RageSoundUtil", "ConvertMonoToStereoInPlace",
         "output capacity is smaller than stereo expansion");
     return false;
   }
@@ -226,7 +226,7 @@ bool RageSoundUtil::ConvertNativeInt16ToFloat(
     return true;
   }
   if (pFrom == nullptr || pTo == nullptr) {
-    TraceInvalid("SRC-2913", "ConvertNativeInt16ToFloat", "null buffer");
+    TraceInvalid("RageSoundUtil", "ConvertNativeInt16ToFloat", "null buffer");
     return false;
   }
   for (size_t i = 0; i < iSamples; ++i) {
@@ -241,7 +241,7 @@ bool RageSoundUtil::ConvertFloatToNativeInt16(
     return true;
   }
   if (pFrom == nullptr || pTo == nullptr) {
-    TraceInvalid("SRC-2913", "ConvertFloatToNativeInt16", "null buffer");
+    TraceInvalid("RageSoundUtil", "ConvertFloatToNativeInt16", "null buffer");
     return false;
   }
   size_t sanitized = 0;
@@ -252,7 +252,7 @@ bool RageSoundUtil::ConvertFloatToNativeInt16(
         sample <= -1.0f ? -32768L : std::lround(sample * 32767.0f);
     pTo[i] = static_cast<int16_t>(std::clamp<long>(iOut, -32768, 32767));
   }
-  TraceSanitizedSamples("SRC-2912", "ConvertFloatToNativeInt16", sanitized);
+  TraceSanitizedSamples("RageSoundUtil", "ConvertFloatToNativeInt16", sanitized);
   return true;
 }
 

@@ -20,8 +20,8 @@
 #include "global.h"
 #include "mad.h"
 
-static void TraceReviewSrcError(const std::string& sError) {
-  LogReviewSrcDiagnostics("%s", sError.c_str());
+static void TraceRuntimeValidationError(const std::string& sError) {
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
 }
 
 // ID3 code from libid3:
@@ -389,9 +389,9 @@ int RageSoundReader_MP3::fill_buffer() {
         reinterpret_cast<std::uintptr_t>(mad->Stream.next_frame) >
             reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
       const std::string error =
-          "SRC_AUDIT_FIX SRC-2810: invalid MP3 stream buffer pointers";
+          "invalid MP3 stream buffer pointers";
       SetError(error);
-      TraceReviewSrcError(error);
+      TraceRuntimeValidationError(error);
       return -1;
     }
 
@@ -401,9 +401,9 @@ int RageSoundReader_MP3::fill_buffer() {
         remaining >
             static_cast<ptrdiff_t>(sizeof(mad->inbuf) - MAD_BUFFER_GUARD)) {
       const std::string error =
-          "SRC_AUDIT_FIX SRC-2810: invalid MP3 buffer carry length";
+          "invalid MP3 buffer carry length";
       SetError(error);
-      TraceReviewSrcError(error);
+      TraceRuntimeValidationError(error);
       return -1;
     }
     inbytes = static_cast<int>(remaining);
@@ -502,9 +502,9 @@ int RageSoundReader_MP3::do_mad_frame_decode(bool headers_only) {
           reinterpret_cast<std::uintptr_t>(mad->Stream.this_frame) >
               reinterpret_cast<std::uintptr_t>(mad->Stream.bufend)) {
         const std::string error =
-            "SRC_AUDIT_FIX SRC-2810: invalid MP3 sync buffer pointers";
+            "invalid MP3 sync buffer pointers";
         SetError(error);
-        TraceReviewSrcError(error);
+        TraceRuntimeValidationError(error);
         return -1;
       }
 
@@ -596,9 +596,9 @@ bool RageSoundReader_MP3::synth_output() {
   mad_synth_frame(&mad->Synth, &mad->Frame);
   if (this->Channels <= 0) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2815: MP3 synth output has invalid channels";
+        "MP3 synth output has invalid channels";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     mad->outleft = mad->outpos = 0;
     return false;
   }
@@ -606,9 +606,9 @@ bool RageSoundReader_MP3::synth_output() {
       static_cast<size_t>(mad->Synth.pcm.length) * this->Channels;
   if (outputSamples > sizeof(mad->outbuf) / sizeof(mad->outbuf[0])) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2815: MP3 synth output exceeded buffer";
+        "MP3 synth output exceeded buffer";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     mad->outleft = mad->outpos = 0;
     return false;
   }
@@ -636,12 +636,10 @@ int RageSoundReader_MP3::seek_stream_to_byte(std::int64_t byte) {
   if (seekResult == -1) {
     std::string error = m_pFile->GetError();
     if (error.empty()) {
-      error = "SRC_AUDIT_FIX SRC-2816: MP3 seek failed without file error";
+      error = "MP3 seek failed without file error";
     }
     SetError(error);
-    if (error.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
-      TraceReviewSrcError(error);
-    }
+    TraceRuntimeValidationError(error);
     return 0;
   }
   byte = seekResult;
@@ -878,10 +876,10 @@ int RageSoundReader_MP3::Read(float* buf, int iFrames) {
     if (mad->outleft == 0) {
       if (++emptyDecodedFrames >= 1024) {
         const std::string error =
-            "SRC_AUDIT_FIX SRC-3172: MP3 decoder produced too many empty "
+            "MP3 decoder produced too many empty "
             "frames";
         SetError(error);
-        TraceReviewSrcError(error);
+        TraceRuntimeValidationError(error);
         return ERROR;
       }
     } else {
@@ -1063,9 +1061,9 @@ int RageSoundReader_MP3::SetPosition_estimate(int iFrame) {
       seekMs > (std::numeric_limits<std::int64_t>::max() - mad->header_bytes) /
                    bytesPerMs) {
     const std::string error =
-        "SRC_AUDIT_FIX SRC-2812: MP3 seek estimate overflowed";
+        "MP3 seek estimate overflowed";
     SetError(error);
-    TraceReviewSrcError(error);
+    TraceRuntimeValidationError(error);
     return ERROR;
   }
   std::int64_t seekpos = seekMs * bytesPerMs;

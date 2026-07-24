@@ -49,7 +49,7 @@ int NormalizeBatteryLives(int lives, const char* context) {
   }
 
   LOG->Warn(
-      "SRC_AUDIT_FIX %s: corrected negative battery lives %i to 0.",
+      "%s: corrected negative battery lives %i to 0.",
       context, lives);
   return 0;
 }
@@ -58,7 +58,7 @@ int AddBatteryLives(int current, int delta, const char* context) {
   const int64_t sum = static_cast<int64_t>(std::max(current, 0)) +
                       static_cast<int64_t>(std::max(delta, 0));
   if (sum > std::numeric_limits<int>::max()) {
-    LOG->Warn("SRC_AUDIT_FIX %s: saturated battery lives addition.", context);
+    LOG->Warn("%s: saturated battery lives addition.", context);
     return std::numeric_limits<int>::max();
   }
   return static_cast<int>(sum);
@@ -68,7 +68,7 @@ int FloatToBatteryLives(float value, const char* context) {
   if (!std::isfinite(value) || value <= 0.0f) {
     if (!std::isfinite(value)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX %s: corrected non-finite battery life value.",
+          "%s: corrected non-finite battery life value.",
           context);
     }
     return 0;
@@ -137,7 +137,7 @@ void LifeMeterBattery::Load(
 
   if (m_pPlayerState == nullptr || pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-249: LifeMeterBattery loaded without complete "
+        "LifeMeterBattery loaded without complete "
         "player state.");
     return;
   }
@@ -147,14 +147,14 @@ void LifeMeterBattery::Load(
   const bool validPlayer = IsValidPlayerNumber(pn);
   if (!validPlayer) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-249: LifeMeterBattery loaded with invalid player "
+        "LifeMeterBattery loaded with invalid player "
         "%i.",
         pn);
     return;
   }
   if (THEME == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBattery refused load without ThemeManager.");
+        "LifeMeterBattery refused load without ThemeManager.");
     return;
   }
 
@@ -171,7 +171,7 @@ void LifeMeterBattery::Load(
 
   m_iLivesLeft = NormalizeBatteryLives(
       m_pPlayerState->m_PlayerOptions.GetStage().m_BatteryLives,
-      "SRC-249 LifeMeterBattery::Load");
+      "LifeMeterBattery::Load");
   if (MAX_LIVES > 0) {
     m_iLivesLeft = std::min(m_iLivesLeft, MAX_LIVES.GetValue());
   }
@@ -222,14 +222,14 @@ void LifeMeterBattery::Load(
 void LifeMeterBattery::OnSongEnded() {
   if (m_pPlayerState == nullptr || m_pPlayerStageStats == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery ignored OnSongEnded without "
+        "LifeMeterBattery ignored OnSongEnded without "
         "complete player state.");
     return;
   }
   if (GAMESTATE == nullptr ||
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBattery ignored OnSongEnded without valid "
+        "LifeMeterBattery ignored OnSongEnded without valid "
         "game/player state.");
     return;
   }
@@ -239,7 +239,7 @@ void LifeMeterBattery::OnSongEnded() {
 
   const int totalLives = NormalizeBatteryLives(
       m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-      "SRC-251 LifeMeterBattery::OnSongEnded");
+      "LifeMeterBattery::OnSongEnded");
   if (m_iLivesLeft < totalLives) {
     m_iTrailingLivesLeft = m_iLivesLeft;
     PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
@@ -257,7 +257,7 @@ void LifeMeterBattery::OnSongEnded() {
                       static_cast<size_t>(courseSongIndex) >=
                           pCourse->m_vEntries.size())) {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-250: LifeMeterBattery ignored out-of-range "
+            "LifeMeterBattery ignored out-of-range "
             "course song index %i of %zu.",
             courseSongIndex, pCourse->m_vEntries.size());
       }
@@ -326,7 +326,7 @@ void LifeMeterBattery::AddLives(int iLives) {
         m_iLivesLeft,
         NormalizeBatteryLives(
             m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-            "SRC-251 LifeMeterBattery::AddLives"));
+            "LifeMeterBattery::AddLives"));
   }
   if (m_iLivesLeft == m_iTrailingLivesLeft) {
     return;
@@ -350,7 +350,7 @@ void LifeMeterBattery::ChangeLives(int iLifeDiff) {
 void LifeMeterBattery::ChangeLife(TapNoteScore score) {
   if (!IsValidTapNoteScore(score)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-251: LifeMeterBattery ignored invalid TapNoteScore "
+        "LifeMeterBattery ignored invalid TapNoteScore "
         "%i.",
         score);
     return;
@@ -363,7 +363,7 @@ void LifeMeterBattery::ChangeLife(TapNoteScore score) {
   TapNoteScore minScoreToKeepLife = MIN_SCORE_TO_KEEP_LIFE;
   if (!IsValidTapNoteScore(minScoreToKeepLife)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBattery replaced invalid MinScoreToKeepLife "
+        "LifeMeterBattery replaced invalid MinScoreToKeepLife "
         "%i with W3.",
         minScoreToKeepLife);
     minScoreToKeepLife = TNS_W3;
@@ -385,7 +385,7 @@ void LifeMeterBattery::ChangeLife(TapNoteScore score) {
 void LifeMeterBattery::ChangeLife(HoldNoteScore score, TapNoteScore tscore) {
   if (!IsValidHoldNoteScore(score)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-251: LifeMeterBattery ignored invalid "
+        "LifeMeterBattery ignored invalid "
         "HoldNoteScore %i.",
         score);
     return;
@@ -413,7 +413,7 @@ void LifeMeterBattery::SetLife(float value) {
         new_lives,
         NormalizeBatteryLives(
             m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-            "SRC-251 LifeMeterBattery::SetLife"));
+            "LifeMeterBattery::SetLife"));
   }
   bool lost = (new_lives < m_iLivesLeft);
   m_iLivesLeft = new_lives;
@@ -426,7 +426,7 @@ void LifeMeterBattery::BroadcastLifeChanged(bool lost_life) {
       !IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber) ||
       MESSAGEMAN == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery skipped LifeChanged "
+        "LifeMeterBattery skipped LifeChanged "
         "broadcast without PlayerState.");
     return;
   }
@@ -455,7 +455,7 @@ bool LifeMeterBattery::IsHot() const {
   return m_iLivesLeft ==
          NormalizeBatteryLives(
              m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-             "SRC-252 LifeMeterBattery::IsHot");
+             "LifeMeterBattery::IsHot");
 }
 
 bool LifeMeterBattery::IsFailing() const { return m_iLivesLeft == 0; }
@@ -466,7 +466,7 @@ float LifeMeterBattery::GetLife() const {
   }
   const int totalLives = NormalizeBatteryLives(
       m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-      "SRC-251 LifeMeterBattery::GetLife");
+      "LifeMeterBattery::GetLife");
   if (!totalLives) {
     return 1;
   }
@@ -489,7 +489,7 @@ void LifeMeterBattery::Refresh() {
       LIVES_FORMAT.IsLoaded() ? LIVES_FORMAT.GetValue() : "x%d";
   if (!IsSafeLivesFormat(format)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: LifeMeterBattery ignored unsafe NumLivesFormat.");
+        "LifeMeterBattery ignored unsafe NumLivesFormat.");
     m_textNumLives.SetText(ssprintf("x%d", m_iLivesLeft));
   } else {
     m_textNumLives.SetText(ssprintf(format.c_str(), m_iLivesLeft));
@@ -500,13 +500,13 @@ void LifeMeterBattery::Refresh() {
 int LifeMeterBattery::GetTotalLives() {
   if (m_pPlayerState == nullptr) {
     LOG->Trace(
-        "SRC_AUDIT_FIX SRC-252: LifeMeterBattery GetTotalLives without "
+        "LifeMeterBattery GetTotalLives without "
         "PlayerState.");
     return 0;
   }
   return NormalizeBatteryLives(
       m_pPlayerState->m_PlayerOptions.GetSong().m_BatteryLives,
-      "SRC-252 LifeMeterBattery::GetTotalLives");
+      "LifeMeterBattery::GetTotalLives");
 }
 
 void LifeMeterBattery::Update(float fDeltaTime) {

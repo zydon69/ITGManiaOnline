@@ -1036,11 +1036,11 @@ local function online_flow_trace(message)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
 
-local function review_src_trace(message)
+local function runtime_validation_trace(message)
 	if not (PREFSMAN and PREFSMAN.GetPreference) then return end
-	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("review_src") end)
+	local ok, enabled = pcall(function() return PREFSMAN:GetPreference("runtime_validation") end)
 	if not ok or enabled ~= true then return end
-	local line = "SRC_REVIEW_TRACE [ITGOnline] session=" .. safe_log_text(ITGOnline and ITGOnline.logSessionId or "none", 64)
+	local line = "RUNTIME_VALIDATION [ITGOnline] session=" .. safe_log_text(ITGOnline and ITGOnline.logSessionId or "none", 64)
 		.. " " .. safe_log_text(message, 4096)
 	if Trace then Trace(line) elseif Warn then Warn(line) end
 end
@@ -13965,7 +13965,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 				.. " retryCount=" .. tostring(activityRetryCount))
 		end
 		if not ok and errorCode ~= "" then
-			review_src_trace("heartbeat rejected error=" .. tostring(errorCode)
+			runtime_validation_trace("heartbeat rejected error=" .. tostring(errorCode)
 				.. " status=" .. tostring(status)
 				.. " request_room=" .. tostring(roomId or "nil")
 				.. " active_room=" .. tostring(self.currentRoomId or "nil")
@@ -13994,7 +13994,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 			queuedFingerprint = ""
 			if type(self.FetchCurrentRoom) == "function" then
 				self:FetchCurrentRoom(function(fetchOk, fetchDecoded)
-					review_src_trace("heartbeat open-room reconciliation ok=" .. tostring(fetchOk == true)
+					runtime_validation_trace("heartbeat open-room reconciliation ok=" .. tostring(fetchOk == true)
 						.. " room=" .. tostring(fetchDecoded and fetchDecoded.room and fetchDecoded.room.id or "nil"))
 					if not self.disconnecting then
 						self:Heartbeat(self.currentRoomId and "in_room" or "available", true)
@@ -14003,7 +14003,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 			end
 		elseif not ok and not requestContextStillCurrent then
 			-- The response belongs to a room transition that has already completed.
-			review_src_trace("ignored stale heartbeat response error=" .. tostring(errorCode)
+			runtime_validation_trace("ignored stale heartbeat response error=" .. tostring(errorCode)
 				.. " request_fingerprint=" .. tostring(fingerprint)
 				.. " active_room=" .. tostring(self.currentRoomId or "nil"))
 		end

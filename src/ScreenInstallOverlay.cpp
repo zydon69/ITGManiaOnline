@@ -111,7 +111,7 @@ static bool InstallSmzip(
   ScopedMount zipMount("zip", sZipFile, TEMP_ZIP_MOUNT_POINT);
   if (!zipMount) {
     const std::string message = "Failed to mount package " + sZipFile;
-    LogReviewSrcDiagnostics("SRC-3405 %s", message.c_str());
+    LogRuntimeValidationDiagnostics("%s", message.c_str());
     if (SCREENMAN != nullptr) {
       SCREENMAN->SystemMessage(message);
     }
@@ -145,8 +145,8 @@ static bool InstallSmzip(
     if (!IsInstallableContentPath(destination)) {
       const std::string result =
           "Package contains a forbidden path: " + destination;
-      LogReviewSrcDiagnostics(
-          "SRC-3406 rejected package path package='%s' path='%s'",
+      LogRuntimeValidationDiagnostics(
+          "rejected package path package='%s' path='%s'",
           sZipFile.c_str(), destination.c_str());
       if (SCREENMAN != nullptr) {
         SCREENMAN->SystemMessage(result);
@@ -193,7 +193,7 @@ bool InstallSmzipOsArg(
   ScopedMount osMount("dir", sOsDir, TEMP_OS_MOUNT_POINT);
   if (!osMount) {
     const std::string message = "Failed to access package directory " + sOsDir;
-    LogReviewSrcDiagnostics("SRC-3405 %s", message.c_str());
+    LogRuntimeValidationDiagnostics("%s", message.c_str());
     if (SCREENMAN != nullptr) {
       SCREENMAN->SystemMessage(message);
     }

@@ -35,7 +35,7 @@ bool AddExportPlayer(
       GAMESTATE->m_pPlayerState[pn] == nullptr || !GAMESTATE->IsHumanPlayer(pn)) {
     if (logFailure && LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2374: ScreenSongOptions ignored non-exportable "
+          "ScreenSongOptions ignored non-exportable "
           "player %d while exporting options.",
           static_cast<int>(pn));
     }
@@ -97,7 +97,7 @@ void ScreenSongOptions::Init() {
   if (PREFSMAN == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1706: ScreenSongOptions has no PrefsManager; "
+          "ScreenSongOptions has no PrefsManager; "
           "using the parent transition.");
     }
     return;
@@ -110,7 +110,7 @@ void ScreenSongOptions::Init() {
   if (!HasLoadedTheme()) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1707: ScreenSongOptions has no loaded theme; "
+          "ScreenSongOptions has no loaded theme; "
           "using the parent transition.");
     }
     return;
@@ -126,7 +126,7 @@ void ScreenSongOptions::Init() {
   if (optionInPath.empty()) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1708: ScreenSongOptions option-in transition is "
+          "ScreenSongOptions option-in transition is "
           "declared but missing; using the parent transition.");
     }
     return;
@@ -140,7 +140,7 @@ void ScreenSongOptions::ExportOptions(
   if (GAMESTATE == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1710: ScreenSongOptions cannot export without "
+          "ScreenSongOptions cannot export without "
           "GameState.");
     }
     return;
@@ -149,7 +149,7 @@ void ScreenSongOptions::ExportOptions(
   if (iRow < 0 || iRow >= GetNumRows() || GetRow(iRow) == nullptr) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-1715: ScreenSongOptions ignored invalid row %d "
+          "ScreenSongOptions ignored invalid row %d "
           "while exporting options.",
           iRow);
     }
@@ -180,7 +180,7 @@ void ScreenSongOptions::ExportOptions(
           iRow, exportPlayers, nullptr)) {
     if (LOG != nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2375: ScreenSongOptions row %d produced no "
+          "ScreenSongOptions row %d produced no "
           "export.",
           iRow);
     }

@@ -24,26 +24,26 @@ std::string ReaderSourcePathOrUnknown(const RageSoundReader& reader) {
 
 RageSoundReader* RageSoundReader::CopyReader(const RageSoundReader* pCopy) {
   if (pCopy == nullptr) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2905: refused to copy a null sound reader");
+    LogRuntimeValidationDiagnostics(
+        "refused to copy a null sound reader");
     return nullptr;
   }
 
   try {
     RageSoundReader* pReader = pCopy->Copy();
     if (pReader == nullptr) {
-      LogReviewSrcDiagnostics(
-          "SRC_AUDIT_FIX SRC-2905: sound reader Copy returned null for '%s'",
+      LogRuntimeValidationDiagnostics(
+          "sound reader Copy returned null for '%s'",
           ReaderSourcePathOrUnknown(*pCopy).c_str());
     }
     return pReader;
   } catch (const std::bad_alloc&) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2905: sound reader copy allocation failed for '%s'",
+    LogRuntimeValidationDiagnostics(
+        "sound reader copy allocation failed for '%s'",
         ReaderSourcePathOrUnknown(*pCopy).c_str());
   } catch (...) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2905: sound reader copy threw for '%s'",
+    LogRuntimeValidationDiagnostics(
+        "sound reader copy threw for '%s'",
         ReaderSourcePathOrUnknown(*pCopy).c_str());
   }
   return nullptr;
@@ -74,14 +74,14 @@ const char* RageSoundReader::PropertySetStatusToString(
 
 int RageSoundReader::ClampSourceFrameToInt(std::int64_t iFrame) {
   if (iFrame > std::numeric_limits<int>::max()) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2902: clamped source frame %lld to INT_MAX",
+    LogRuntimeValidationDiagnostics(
+        "clamped source frame %lld to INT_MAX",
         static_cast<long long>(iFrame));
     return std::numeric_limits<int>::max();
   }
   if (iFrame < std::numeric_limits<int>::min()) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2902: clamped source frame %lld to INT_MIN",
+    LogRuntimeValidationDiagnostics(
+        "clamped source frame %lld to INT_MIN",
         static_cast<long long>(iFrame));
     return std::numeric_limits<int>::min();
   }
@@ -97,8 +97,8 @@ int RageSoundReader::RetriedRead(
   }
   if (iFrames < 0 || pBuffer == nullptr) {
     SetBaseError(
-        "SRC_AUDIT_FIX SRC-2901: RetriedRead received an invalid data request");
-    LogReviewSrcDiagnostics("%s", GetBaseError().c_str());
+        "RetriedRead received an invalid data request");
+    LogRuntimeValidationDiagnostics("%s", GetBaseError().c_str());
     if (LOG != nullptr) {
       LOG->Warn(
           "RageSoundReader::RetriedRead called with invalid buffer/frame "
@@ -136,8 +136,8 @@ int RageSoundReader::RetriedRead(
 
   ClearBaseError();
   if (!m_bRetriedReadStallReported) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2899 SRC-2900: sound reader temporarily made no "
+    LogRuntimeValidationDiagnostics(
+        "sound reader temporarily made no "
         "progress after immediate retries source=%s zero_progress=%u "
         "stream_looped=%u",
         ReaderSourcePathOrUnknown(*this).c_str(), zeroProgressReads,

@@ -31,7 +31,7 @@ static void WarnAttack(const std::string& warning) {
 static float SanitizeAttackSeconds(float value, const char* context) {
   if (!std::isfinite(value) || value < 0.0f) {
     WarnAttack(ssprintf(
-        "SRC_AUDIT_FIX: Invalid attack seconds %f in %s; using 0.", value,
+        "Invalid attack seconds %f in %s; using 0.", value,
         context));
     return 0.0f;
   }
@@ -44,7 +44,7 @@ static float AddAttackSeconds(float start, float duration,
   if (!std::isfinite(result) ||
       result > static_cast<double>(std::numeric_limits<float>::max())) {
     WarnAttack(ssprintf(
-        "SRC_AUDIT_FIX: Attack second range overflow in %s; clamping.",
+        "Attack second range overflow in %s; clamping.",
         context));
     return std::numeric_limits<float>::max();
   }
@@ -56,7 +56,7 @@ void Attack::GetAttackBeats(
   fStartBeat = 0.0f;
   fEndBeat = 0.0f;
   if (pSong == nullptr) {
-    WarnAttack("SRC_AUDIT_FIX: Attack::GetAttackBeats called without song.");
+    WarnAttack("Attack::GetAttackBeats called without song.");
     return;
   }
   const float startSecond =
@@ -71,7 +71,7 @@ void Attack::GetAttackBeats(
   if (!std::isfinite(fStartBeat) || !std::isfinite(fEndBeat) ||
       fEndBeat < fStartBeat) {
     WarnAttack(ssprintf(
-        "SRC_AUDIT_FIX: Invalid attack beat range %f-%f; clamping to start.",
+        "Invalid attack beat range %f-%f; clamping to start.",
         fStartBeat, fEndBeat));
     fStartBeat = std::isfinite(fStartBeat) ? fStartBeat : 0.0f;
     fEndBeat = fStartBeat;
@@ -88,7 +88,7 @@ void Attack::GetRealtimeAttackBeats(
   fEndBeat = 0.0f;
   if (pSong == nullptr) {
     WarnAttack(
-        "SRC_AUDIT_FIX: Attack::GetRealtimeAttackBeats called without song.");
+        "Attack::GetRealtimeAttackBeats called without song.");
     return;
   }
 
@@ -99,7 +99,7 @@ void Attack::GetRealtimeAttackBeats(
 
   if (pPlayerState == nullptr || GAMESTATE == nullptr) {
     WarnAttack(
-        "SRC_AUDIT_FIX: Realtime attack missing player state or GAMESTATE.");
+        "Realtime attack missing player state or GAMESTATE.");
     return;
   }
 
@@ -108,7 +108,7 @@ void Attack::GetRealtimeAttackBeats(
   fStartBeat = std::min(
       GAMESTATE->m_Position.m_fSongBeat + 8, pPlayerState->m_fLastDrawnBeat);
   if (!std::isfinite(fStartBeat)) {
-    WarnAttack("SRC_AUDIT_FIX: Realtime attack start beat was non-finite.");
+    WarnAttack("Realtime attack start beat was non-finite.");
     fStartBeat = 0.0f;
   }
   fStartBeat = std::trunc(fStartBeat) + 1;
@@ -116,7 +116,7 @@ void Attack::GetRealtimeAttackBeats(
   const TimingData& timing = pSong->m_SongTiming;
   const float lStartSecond = timing.GetElapsedTimeFromBeat(fStartBeat);
   if (!std::isfinite(lStartSecond)) {
-    WarnAttack("SRC_AUDIT_FIX: Realtime attack start second was non-finite.");
+    WarnAttack("Realtime attack start second was non-finite.");
     fEndBeat = fStartBeat;
     return;
   }
@@ -129,7 +129,7 @@ void Attack::GetRealtimeAttackBeats(
 
   if (!std::isfinite(fEndBeat) || fEndBeat < fStartBeat) {
     WarnAttack(ssprintf(
-        "SRC_AUDIT_FIX: Invalid realtime attack beat range %f-%f; clamping.",
+        "Invalid realtime attack beat range %f-%f; clamping.",
         fStartBeat, fEndBeat));
     fEndBeat = fStartBeat;
   }
@@ -172,7 +172,7 @@ std::string Attack::SanitizeModifiersForSerialization(
   Trim(sanitized);
   if (changed) {
     WarnAttack(ssprintf(
-        "SRC_AUDIT_FIX: Sanitized attack modifiers containing MSD delimiters "
+        "Sanitized attack modifiers containing MSD delimiters "
         "during %s serialization.",
         context != nullptr ? context : "attack"));
   }
@@ -208,21 +208,21 @@ std::vector<std::string> AttackArray::ToVectorString() const {
   for (const Attack& a : *this) {
     if (!std::isfinite(a.fStartSecond) || !std::isfinite(a.fSecsRemaining)) {
       WarnAttack(ssprintf(
-          "SRC_AUDIT_FIX: Skipping attack with invalid times %f/%f during "
+          "Skipping attack with invalid times %f/%f during "
           "serialization.",
           a.fStartSecond, a.fSecsRemaining));
       continue;
     }
     if (!IsValidAttackLevel(a.level)) {
       WarnAttack(ssprintf(
-          "SRC_AUDIT_FIX: Serializing attack with invalid level %i.",
+          "Serializing attack with invalid level %i.",
           a.level));
     }
     const std::string modifiers =
         Attack::SanitizeModifiersForSerialization(a.sModifiers, "AttackArray");
     if (modifiers.empty()) {
       WarnAttack(
-          "SRC_AUDIT_FIX: Skipping attack with empty modifiers during "
+          "Skipping attack with empty modifiers during "
           "serialization.");
       continue;
     }
@@ -236,20 +236,20 @@ std::vector<std::string> AttackArray::ToVectorString() const {
 void AttackArray::UpdateStartTimes(float delta) {
   if (!std::isfinite(delta)) {
     WarnAttack(
-        ssprintf("SRC_AUDIT_FIX: Ignoring invalid attack time delta %f.", delta));
+        ssprintf("Ignoring invalid attack time delta %f.", delta));
     return;
   }
   for (Attack& a : *this) {
     if (!std::isfinite(a.fStartSecond)) {
-      WarnAttack("SRC_AUDIT_FIX: Invalid stored attack start time; using 0.");
+      WarnAttack("Invalid stored attack start time; using 0.");
       a.fStartSecond = 0.0f;
     }
     const double updated = static_cast<double>(a.fStartSecond) + delta;
     if (updated > std::numeric_limits<float>::max()) {
-      WarnAttack("SRC_AUDIT_FIX: Attack start time overflowed; saturating.");
+      WarnAttack("Attack start time overflowed; saturating.");
       a.fStartSecond = std::numeric_limits<float>::max();
     } else if (updated < std::numeric_limits<float>::lowest()) {
-      WarnAttack("SRC_AUDIT_FIX: Attack start time underflowed; saturating.");
+      WarnAttack("Attack start time underflowed; saturating.");
       a.fStartSecond = std::numeric_limits<float>::lowest();
     } else {
       a.fStartSecond = static_cast<float>(updated);

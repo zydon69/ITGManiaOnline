@@ -57,25 +57,25 @@ Attack NormalizeAttackForLaunch(
   Attack attack = source;
   if (!std::isfinite(attack.fSecsRemaining) || attack.fSecsRemaining < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState clamped invalid attack duration %f to 0.",
+        "PlayerState clamped invalid attack duration %f to 0.",
         attack.fSecsRemaining);
     attack.fSecsRemaining = 0.0f;
   } else if (attack.fSecsRemaining > MAX_ATTACK_DURATION_SECONDS) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState clamped oversized attack duration %f to "
+        "PlayerState clamped oversized attack duration %f to "
         "%f.",
         attack.fSecsRemaining, MAX_ATTACK_DURATION_SECONDS);
     attack.fSecsRemaining = MAX_ATTACK_DURATION_SECONDS;
   }
   if (!std::isfinite(attack.fStartSecond)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState replaced non-finite attack start %f.",
+        "PlayerState replaced non-finite attack start %f.",
         attack.fStartSecond);
     attack.fStartSecond = ATTACK_STARTS_NOW;
   }
   if (!IsValidAttackLevelForActiveAttack(attack.level)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState replaced invalid attack level %i.",
+        "PlayerState replaced invalid attack level %i.",
         static_cast<int>(attack.level));
     attack.level = ATTACK_LEVEL_1;
   }
@@ -85,7 +85,7 @@ Attack NormalizeAttackForLaunch(
                               : 0.0f;
   } else if (attack.fStartSecond < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState clamped negative attack start %f to 0.",
+        "PlayerState clamped negative attack start %f to 0.",
         attack.fStartSecond);
     attack.fStartSecond = 0.0f;
   }
@@ -95,14 +95,14 @@ Attack NormalizeAttackForLaunch(
 bool HasUsableAttackModifiers(const std::string& modifiers) {
   if (modifiers.empty() || modifiers.size() > MAX_ATTACK_MODIFIER_CHARS) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState rejected attack modifier length %zu.",
+        "PlayerState rejected attack modifier length %zu.",
         modifiers.size());
     return false;
   }
   for (unsigned char c : modifiers) {
     if (std::iscntrl(c)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState rejected attack modifiers containing "
+          "PlayerState rejected attack modifiers containing "
           "control characters.");
       return false;
     }
@@ -114,27 +114,27 @@ bool NormalizeActiveAttack(Attack& attack) {
   bool usable = true;
   if (attack.fStartSecond == ATTACK_STARTS_NOW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState converted active attack sentinel start to "
+        "PlayerState converted active attack sentinel start to "
         "0.");
     attack.fStartSecond = 0.0f;
   }
   if (!std::isfinite(attack.fStartSecond) || attack.fStartSecond < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid start "
+        "PlayerState disabled active attack with invalid start "
         "%f.",
         attack.fStartSecond);
     usable = false;
   }
   if (!std::isfinite(attack.fSecsRemaining) || attack.fSecsRemaining < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid "
+        "PlayerState disabled active attack with invalid "
         "duration %f.",
         attack.fSecsRemaining);
     usable = false;
   }
   if (!IsValidAttackLevelForActiveAttack(attack.level)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState disabled active attack with invalid level "
+        "PlayerState disabled active attack with invalid level "
         "%i.",
         static_cast<int>(attack.level));
     usable = false;
@@ -193,7 +193,7 @@ void PlayerState::Reset() {
 void PlayerState::Update(float fDelta) {
   if (!std::isfinite(fDelta) || fDelta < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState ignored invalid update delta %f.", fDelta);
+        "PlayerState ignored invalid update delta %f.", fDelta);
     fDelta = 0.0f;
   }
   // TRICKY: GAMESTATE->Update is run before any of the Screen update's,
@@ -207,7 +207,7 @@ void PlayerState::Update(float fDelta) {
   const float musicSeconds = m_Position.m_fMusicSeconds;
   if (!std::isfinite(musicSeconds) && !m_ActiveAttacks.empty()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState disabled timed attacks for non-finite "
+        "PlayerState disabled timed attacks for non-finite "
         "music position %f.",
         musicSeconds);
   }
@@ -261,7 +261,7 @@ void PlayerState::Update(float fDelta) {
 void PlayerState::SetPlayerNumber(PlayerNumber pn) {
   if (!IsValidPlayerNumberForState(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState rejected invalid PlayerNumber %i.",
+        "PlayerState rejected invalid PlayerNumber %i.",
         static_cast<int>(pn));
     pn = PLAYER_INVALID;
   }
@@ -272,14 +272,14 @@ void PlayerState::SetPlayerNumber(PlayerNumber pn) {
 void PlayerState::ResetToDefaultPlayerOptions(ModsLevel l) {
   if (!IsValidModsLevel(l)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState rejected invalid ModsLevel %i for default "
+        "PlayerState rejected invalid ModsLevel %i for default "
         "options.",
         static_cast<int>(l));
     return;
   }
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState cannot reset default options without "
+        "PlayerState cannot reset default options without "
         "GAMESTATE.");
     return;
   }
@@ -299,7 +299,7 @@ void PlayerState::LaunchAttack(const Attack& a) {
 
   if (!IsUsablePlayerNumber(m_PlayerNumber) && !IsUsableMultiPlayer(m_mp)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState rejected attack for invalid player %i and "
+        "PlayerState rejected attack for invalid player %i and "
         "multiplayer %i.",
         static_cast<int>(m_PlayerNumber), static_cast<int>(m_mp));
     return;
@@ -312,7 +312,7 @@ void PlayerState::LaunchAttack(const Attack& a) {
   if (m_ActiveAttacks.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER ||
       m_ModsToApply.size() >= MAX_ACTIVE_ATTACKS_PER_PLAYER) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2605: PlayerState rejected attack because the "
+        "PlayerState rejected attack because the "
         "active attack queue is full.");
     return;
   }
@@ -338,7 +338,7 @@ void PlayerState::LaunchAttack(const Attack& a) {
 void PlayerState::RemoveActiveAttacks(AttackLevel al) {
   if (al != NUM_ATTACK_LEVELS && !IsValidAttackLevelForActiveAttack(al)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState ignored invalid attack level removal %i.",
+        "PlayerState ignored invalid attack level removal %i.",
         static_cast<int>(al));
     return;
   }
@@ -389,7 +389,7 @@ void PlayerState::RebuildPlayerOptionsFromActiveAttacks() {
       continue; /* hasn't started yet */
     }
     if (m_ActiveAttacks[s].sModifiers.empty()) {
-      LOG->Trace("SRC_AUDIT_FIX: PlayerState skipped empty attack modifiers.");
+      LOG->Trace("PlayerState skipped empty attack modifiers.");
       continue;
     }
     po.FromString(m_ActiveAttacks[s].sModifiers);
@@ -403,7 +403,7 @@ void PlayerState::RebuildPlayerOptionsFromActiveAttacks() {
     GAMESTATE->m_SongOptions.Assign(ModsLevel_Song, so);
   } else if (!canApplySongOptions) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState rebuilt player attack options without "
+        "PlayerState rebuilt player attack options without "
         "GAMESTATE song options.");
   }
 
@@ -427,7 +427,7 @@ int PlayerState::GetSumOfActiveAttackLevels() const {
       const int levelValue = Enum::to_integral(m_ActiveAttacks[s].level) + 1;
       if (iSum > std::numeric_limits<int>::max() - levelValue) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: PlayerState saturated active attack level sum.");
+            "PlayerState saturated active attack level sum.");
         return std::numeric_limits<int>::max();
       }
       iSum += levelValue;
@@ -440,7 +440,7 @@ int PlayerState::GetSumOfActiveAttackLevels() const {
 const SongPosition& PlayerState::GetDisplayedPosition() const {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState using local displayed position without "
+        "PlayerState using local displayed position without "
         "GAMESTATE.");
     return m_Position;
   }
@@ -453,7 +453,7 @@ const SongPosition& PlayerState::GetDisplayedPosition() const {
 const TimingData& PlayerState::GetDisplayedTiming() const {
   if (GAMESTATE == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState using fallback displayed timing without "
+        "PlayerState using fallback displayed timing without "
         "GAMESTATE.");
     return FallbackDisplayedTiming();
   }
@@ -464,7 +464,7 @@ const TimingData& PlayerState::GetDisplayedTiming() const {
     }
   } else {
     LOG->Warn(
-        "SRC_AUDIT_FIX: PlayerState cannot use displayed timing for invalid "
+        "PlayerState cannot use displayed timing for invalid "
         "player %i.",
         static_cast<int>(m_PlayerNumber));
   }
@@ -472,7 +472,7 @@ const TimingData& PlayerState::GetDisplayedTiming() const {
     return GAMESTATE->m_pCurSong->m_SongTiming;
   }
   LOG->Warn(
-      "SRC_AUDIT_FIX: PlayerState using fallback displayed timing without "
+      "PlayerState using fallback displayed timing without "
       "current song.");
   return FallbackDisplayedTiming();
 }
@@ -499,7 +499,7 @@ class LunaPlayerState : public Luna<PlayerState> {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
     if (!IsValidModsLevel(m)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "PlayerState Lua rejected invalid ModsLevel %i in "
           "SetPlayerOptions.",
           static_cast<int>(m));
       return 0;
@@ -513,7 +513,7 @@ class LunaPlayerState : public Luna<PlayerState> {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
     if (!IsValidModsLevel(m)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "PlayerState Lua rejected invalid ModsLevel %i in "
           "GetPlayerOptions.",
           static_cast<int>(m));
       m = ModsLevel_Current;
@@ -525,7 +525,7 @@ class LunaPlayerState : public Luna<PlayerState> {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
     if (!IsValidModsLevel(m)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "PlayerState Lua rejected invalid ModsLevel %i in "
           "GetPlayerOptionsArray.",
           static_cast<int>(m));
       m = ModsLevel_Current;
@@ -539,7 +539,7 @@ class LunaPlayerState : public Luna<PlayerState> {
     ModsLevel m = Enum::Check<ModsLevel>(L, 1);
     if (!IsValidModsLevel(m)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState Lua rejected invalid ModsLevel %i in "
+          "PlayerState Lua rejected invalid ModsLevel %i in "
           "GetPlayerOptionsString.",
           static_cast<int>(m));
       m = ModsLevel_Current;

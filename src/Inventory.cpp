@@ -109,18 +109,18 @@ static bool IsValidInventoryModifier(const std::string& modifiers) {
 
 static int GetSafeNumItemTypes() {
   if (!InventoryThemeIsReady()) {
-    WarnInventory("SRC_AUDIT_FIX: Inventory has no loaded theme manager.");
+    WarnInventory("Inventory has no loaded theme manager.");
     return 0;
   }
   const float value = GetInventoryMetricF("NumItemTypes");
   if (!std::isfinite(value) || value < 0.0f) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Invalid Inventory NumItemTypes %f; using 0.", value));
+        "Invalid Inventory NumItemTypes %f; using 0.", value));
     return 0;
   }
   if (value > 128.0f) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Inventory NumItemTypes %f exceeds 128; clamping.",
+        "Inventory NumItemTypes %f exceeds 128; clamping.",
         value));
     return 128;
   }
@@ -131,13 +131,13 @@ static float GetSafeItemDurationSeconds(int itemIndex) {
   const float value = GetInventoryMetricF("ItemDurationSeconds");
   if (!std::isfinite(value) || value <= 0.0f) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid duration %f.",
+        "Ignoring inventory item %i with invalid duration %f.",
         itemIndex, value));
     return 0.0f;
   }
   if (value > MAX_INVENTORY_ITEM_DURATION_SECONDS) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Inventory item %i duration %f exceeds 24h; clamping.",
+        "Inventory item %i duration %f exceeds 24h; clamping.",
         itemIndex, value));
     return MAX_INVENTORY_ITEM_DURATION_SECONDS;
   }
@@ -161,14 +161,14 @@ void ReloadItems() {
         static_cast<AttackLevel>(GetInventoryMetricI(ssprintf("Item%dLevel", i + 1)) - 1);
     if (!IsValidInventoryAttackLevel(item.level)) {
       WarnInventory(ssprintf(
-          "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid level %i.",
+          "Ignoring inventory item %i with invalid level %i.",
           i, item.level));
       continue;
     }
     const int combo = GetInventoryMetricI(ssprintf("Item%dCombo", i + 1));
     if (combo <= 0) {
       WarnInventory(ssprintf(
-          "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid combo %i.", i,
+          "Ignoring inventory item %i with invalid combo %i.", i,
           combo));
       continue;
     }
@@ -177,7 +177,7 @@ void ReloadItems() {
     Trim(item.sModifier);
     if (!IsValidInventoryModifier(item.sModifier)) {
       WarnInventory(ssprintf(
-          "SRC_AUDIT_FIX: Ignoring inventory item %i with invalid effect.", i));
+          "Ignoring inventory item %i with invalid effect.", i));
       continue;
     }
     g_Items.push_back(item);
@@ -204,7 +204,7 @@ void Inventory::Load(PlayerState* pPlayerState) {
   m_fSecondsUntilCpuUseCheck = 0.0f;
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
       !InventoryThemeIsReady()) {
-    WarnInventory("SRC_AUDIT_FIX: Inventory::Load missing required context.");
+    WarnInventory("Inventory::Load missing required context.");
     return;
   }
 
@@ -231,13 +231,13 @@ void Inventory::Load(PlayerState* pPlayerState) {
 void Inventory::Update(float fDelta) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || STATSMAN == nullptr ||
       PREFSMAN == nullptr) {
-    WarnInventory("SRC_AUDIT_FIX: Inventory::Update missing gameplay context.");
+    WarnInventory("Inventory::Update missing gameplay context.");
     return;
   }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
   if (!IsValidInventoryPlayer(pn)) {
     WarnInventory(
-        ssprintf("SRC_AUDIT_FIX: Inventory::Update invalid player %i.", pn));
+        ssprintf("Inventory::Update invalid player %i.", pn));
     return;
   }
   if (m_pPlayerState->m_bAttackEndedThisUpdate) {
@@ -269,7 +269,7 @@ void Inventory::Update(float fDelta) {
 
   Song* song = GAMESTATE->m_pCurSong;
   if (song == nullptr) {
-    WarnInventory("SRC_AUDIT_FIX: Inventory::Update missing current song.");
+    WarnInventory("Inventory::Update missing current song.");
     return;
   }
   // use items if this player is CPU-controlled
@@ -278,14 +278,14 @@ void Inventory::Update(float fDelta) {
     // every 1 seconds, try to use an item
     if (!std::isfinite(fDelta) || fDelta < 0.0f) {
       WarnInventory(
-          ssprintf("SRC_AUDIT_FIX: Inventory::Update invalid delta %f.", fDelta));
+          ssprintf("Inventory::Update invalid delta %f.", fDelta));
       return;
     }
     const double elapsed =
         static_cast<double>(m_fSecondsUntilCpuUseCheck) + fDelta;
     if (!std::isfinite(elapsed)) {
       WarnInventory(
-          "SRC_AUDIT_FIX: Inventory CPU-use timer overflowed; resetting.");
+          "Inventory CPU-use timer overflowed; resetting.");
       m_fSecondsUntilCpuUseCheck = 0.0f;
       return;
     }
@@ -314,7 +314,7 @@ void Inventory::AwardItem(int iItemIndex) {
   if (m_pPlayerState == nullptr || iItemIndex < 0 ||
       iItemIndex >= static_cast<int>(g_Items.size())) {
     WarnInventory(
-        ssprintf("SRC_AUDIT_FIX: Invalid inventory item index %i.", iItemIndex));
+        ssprintf("Invalid inventory item index %i.", iItemIndex));
     return;
   }
   /* Non-human players are vanity only. They should not affect
@@ -357,7 +357,7 @@ void Inventory::AwardItem(int iItemIndex) {
 void Inventory::UseItem(int iSlot) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || iSlot < 0 ||
       iSlot >= NUM_INVENTORY_SLOTS) {
-    WarnInventory(ssprintf("SRC_AUDIT_FIX: Invalid inventory slot %i.", iSlot));
+    WarnInventory(ssprintf("Invalid inventory slot %i.", iSlot));
     return;
   }
   Attack* pInventory = m_pPlayerState->m_Inventory;  //[NUM_INVENTORY_SLOTS]
@@ -371,7 +371,7 @@ void Inventory::UseItem(int iSlot) {
   Attack a = pInventory[iSlot];
   if (!IsValidInventoryPlayer(pn) || !IsValidInventoryAttackLevel(a.level)) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Inventory item has invalid player/level %i/%i.", pn,
+        "Inventory item has invalid player/level %i/%i.", pn,
         a.level));
     return;
   }
@@ -380,7 +380,7 @@ void Inventory::UseItem(int iSlot) {
   if (!IsValidInventoryPlayer(pnToAttack) ||
       GAMESTATE->m_pPlayerState[pnToAttack] == nullptr) {
     WarnInventory(
-        ssprintf("SRC_AUDIT_FIX: Inventory item has invalid target %i.",
+        ssprintf("Inventory item has invalid target %i.",
                  pnToAttack));
     return;
   }
@@ -388,7 +388,7 @@ void Inventory::UseItem(int iSlot) {
   float fPercentHealthToDrain = (a.level + 1) / 10.f;
   if (!std::isfinite(fPercentHealthToDrain) || fPercentHealthToDrain <= 0.0f) {
     WarnInventory(ssprintf(
-        "SRC_AUDIT_FIX: Invalid inventory health drain %f.",
+        "Invalid inventory health drain %f.",
         fPercentHealthToDrain));
     return;
   }
@@ -417,7 +417,7 @@ void Inventory::UseItem(int iSlot) {
   pPlayerStateToAttack->LaunchAttack(a);
 
   if (!std::isfinite(GAMESTATE->m_fOpponentHealthPercent)) {
-    WarnInventory("SRC_AUDIT_FIX: Opponent health was non-finite; resetting.");
+    WarnInventory("Opponent health was non-finite; resetting.");
     GAMESTATE->m_fOpponentHealthPercent = 1.0f;
   }
   GAMESTATE->m_fOpponentHealthPercent -= fPercentHealthToDrain;

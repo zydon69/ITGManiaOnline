@@ -110,20 +110,12 @@ require_contains(
   "ActorSound checks RageSound load failure")
 require_contains(
   "${actor_sound_cpp}"
-  "SRC_AUDIT_FIX SRC-2673"
-  "ActorSound logs rejected failed decodes")
-require_contains(
-  "${actor_sound_cpp}"
   "m_Sound = nextSound;"
   "ActorSound commits only a successfully loaded sound")
 require_contains(
   "${actor_sound_cpp}"
   "m_bSoundLoaded = true;"
   "ActorSound marks logical load success")
-require_contains(
-  "${actor_sound_cpp}"
-  "SRC_AUDIT_FIX SRC-2672"
-  "ActorSound logs stale sound clearing")
 require_contains(
   "${actor_sound_cpp}"
   "if (!m_bSoundLoaded)"

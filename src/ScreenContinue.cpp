@@ -22,7 +22,7 @@
 namespace {
 void WarnScreenContinue(const char* message) {
   if (LOG != nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX ScreenContinue: %s", message);
+    LOG->Warn("ScreenContinue: %s", message);
   }
 }
 

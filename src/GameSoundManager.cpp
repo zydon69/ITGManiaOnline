@@ -236,7 +236,7 @@ static void DeleteUnregisteredSoundPool(std::vector<RageSound*>& pool) {
     if (!deletedSounds.insert(sound).second) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: skipped duplicate unregistered PlayOnce sound %p.",
+            "skipped duplicate unregistered PlayOnce sound %p.",
             static_cast<void*>(sound));
       }
       continue;
@@ -290,7 +290,7 @@ static void DeleteRegisteredSoundPool(std::vector<RageSound*>& pool) {
     if (!deletedSounds.insert(sound).second) {
       if (LOG != nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: skipped duplicate registered PlayOnce sound %p.",
+            "skipped duplicate registered PlayOnce sound %p.",
             static_cast<void*>(sound));
       }
       continue;
@@ -324,7 +324,7 @@ static std::vector<RageSound*> DetachPlayOnceCacheForShutdown() {
       } else {
         if (LOG != nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: skipped duplicate PlayOnce sound %p while "
+              "skipped duplicate PlayOnce sound %p while "
               "detaching shutdown cache path='%s'.",
               static_cast<void*>(sound), pathAndPool.first.c_str());
         }

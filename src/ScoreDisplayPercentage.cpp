@@ -7,7 +7,7 @@
 #include "ThemeManager.h"
 
 namespace {
-void WarnScoreDisplayPercentageAuditFix(const char* message) {
+void WarnScoreDisplayPercentageSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -22,8 +22,8 @@ ScoreDisplayPercentage::ScoreDisplayPercentage() {
       this->AddChild(m_sprFrame);
     }
   } else {
-    WarnScoreDisplayPercentageAuditFix(
-        "SRC_AUDIT_FIX SRC-1098: ScoreDisplayPercentage constructed without "
+    WarnScoreDisplayPercentageSafety(
+        "ScoreDisplayPercentage constructed without "
         "THEME.");
   }
 
@@ -36,8 +36,8 @@ void ScoreDisplayPercentage::Init(
     const PlayerStageStats* pPlayerStageStats) {
   ScoreDisplay::Init(pPlayerState, pPlayerStageStats);
   if (pPlayerState == nullptr || pPlayerStageStats == nullptr) {
-    WarnScoreDisplayPercentageAuditFix(
-        "SRC_AUDIT_FIX SRC-236: ScoreDisplayPercentage ignored null init "
+    WarnScoreDisplayPercentageSafety(
+        "ScoreDisplayPercentage ignored null init "
         "state.");
     return;
   }

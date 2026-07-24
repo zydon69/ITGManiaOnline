@@ -29,7 +29,7 @@ namespace {
 constexpr float kDefaultBpmCycleTime = 1.0f;
 constexpr float kDefaultRandomCycleTime = 0.2f;
 
-void WarnBPMDisplayAuditFix(const char* message) {
+void WarnBPMDisplaySafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -90,13 +90,13 @@ bool IsSafeBPMFormat(const std::string& format) {
 
 std::string FormatBPMText(const std::string& format, float value) {
   if (!std::isfinite(value)) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1117: BPMDisplay reset non-finite BPM text value.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay reset non-finite BPM text value.");
     value = 0.0f;
   }
   if (!IsSafeBPMFormat(format)) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1118: BPMDisplay ignored unsafe FormatString.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored unsafe FormatString.");
     return ssprintf("%.0f", value);
   }
   return ssprintf(format.c_str(), value);
@@ -104,7 +104,7 @@ std::string FormatBPMText(const std::string& format, float value) {
 
 float SanitizeCycleTime(float value, float fallback, const char* context) {
   if (!std::isfinite(value) || value <= 0.0f) {
-    WarnBPMDisplayAuditFix(context);
+    WarnBPMDisplaySafety(context);
     return fallback;
   }
   return value;
@@ -119,8 +119,8 @@ std::vector<float> SanitizeDisplayBPMs(const DisplayBpms& bpms) {
   sanitized.reserve(bpms.vfBpms.size());
   for (float bpm : bpms.vfBpms) {
     if (!IsUsableDisplayBPM(bpm)) {
-      WarnBPMDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1117: BPMDisplay ignored invalid BPM value.");
+      WarnBPMDisplaySafety(
+          "BPMDisplay ignored invalid BPM value.");
       continue;
     }
     sanitized.push_back(bpm);
@@ -139,8 +139,8 @@ BPMDisplay::BPMDisplay() {
 
 void BPMDisplay::Load() {
   if (THEME == nullptr || m_sName.empty()) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1114: BPMDisplay refused metric load without theme "
+    WarnBPMDisplaySafety(
+        "BPMDisplay refused metric load without theme "
         "or name.");
     return;
   }
@@ -166,8 +166,8 @@ void BPMDisplay::Load() {
 
 void BPMDisplay::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1114: BPMDisplay ignored null XML node.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored null XML node.");
     return;
   }
   BitmapText::LoadFromNode(pNode);
@@ -180,8 +180,8 @@ float BPMDisplay::GetActiveBPM() const {
 
 void BPMDisplay::Update(float fDeltaTime) {
   if (!std::isfinite(fDeltaTime) || fDeltaTime < 0.0f) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1115: BPMDisplay ignored invalid update delta.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored invalid update delta.");
     BitmapText::Update(0.0f);
     return;
   }
@@ -196,7 +196,7 @@ void BPMDisplay::Update(float fDeltaTime) {
 
   m_fCycleTime = SanitizeCycleTime(
       m_fCycleTime, kDefaultBpmCycleTime,
-      "SRC_AUDIT_FIX SRC-1115: BPMDisplay repaired invalid cycle time.");
+      "BPMDisplay repaired invalid cycle time.");
   m_fPercentInState -= fDeltaTime / m_fCycleTime;
   if (m_fPercentInState < 0) {
     // go to next state
@@ -232,8 +232,8 @@ void BPMDisplay::SetBPMRange(const DisplayBpms& bpms) {
 
   const std::vector<float> BPMS = SanitizeDisplayBPMs(bpms);
   if (BPMS.empty()) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1116: BPMDisplay fell back from empty BPM range.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay fell back from empty BPM range.");
     NoBPM();
     return;
   }
@@ -296,7 +296,7 @@ void BPMDisplay::CycleRandomly() {
 
   m_fCycleTime = SanitizeCycleTime(
       m_fCycleTime, kDefaultRandomCycleTime,
-      "SRC_AUDIT_FIX SRC-1115: BPMDisplay used default random cycle time.");
+      "BPMDisplay used default random cycle time.");
 }
 
 void BPMDisplay::NoBPM() {
@@ -307,8 +307,8 @@ void BPMDisplay::NoBPM() {
 
 void BPMDisplay::SetBpmFromSong(const Song* pSong) {
   if (pSong == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1119: BPMDisplay ignored null song.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored null song.");
     NoBPM();
     return;
   }
@@ -324,8 +324,8 @@ void BPMDisplay::SetBpmFromSong(const Song* pSong) {
       CycleRandomly();
       break;
     default:
-      WarnBPMDisplayAuditFix(
-          "SRC_AUDIT_FIX SRC-1119: BPMDisplay fell back from invalid display "
+      WarnBPMDisplaySafety(
+          "BPMDisplay fell back from invalid display "
           "BPM type.");
       NoBPM();
       break;
@@ -334,8 +334,8 @@ void BPMDisplay::SetBpmFromSong(const Song* pSong) {
 
 void BPMDisplay::SetBpmFromSteps(const Steps* pSteps) {
   if (pSteps == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1119: BPMDisplay ignored null steps.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored null steps.");
     NoBPM();
     return;
   }
@@ -350,15 +350,15 @@ void BPMDisplay::SetBpmFromSteps(const Steps* pSteps) {
 
 void BPMDisplay::SetBpmFromCourse(const Course* pCourse) {
   if (pCourse == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1119: BPMDisplay ignored null course.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay ignored null course.");
     NoBPM();
     return;
   }
   if (GAMESTATE == nullptr ||
       GAMESTATE->GetCurrentStyle(PLAYER_INVALID) == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1119: BPMDisplay refused course BPM without style.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay refused course BPM without style.");
     SetVarious();
     return;
   }
@@ -368,8 +368,8 @@ void BPMDisplay::SetBpmFromCourse(const Course* pCourse) {
   // GetTranslitFullTitle because "Crashinfo.txt is garbled because of the ANSI
   // output as usual." -f
   if (pTrail == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1119: BPMDisplay fell back from missing course "
+    WarnBPMDisplaySafety(
+        "BPMDisplay fell back from missing course "
         "trail.");
     SetVarious();
     return;
@@ -378,7 +378,7 @@ void BPMDisplay::SetBpmFromCourse(const Course* pCourse) {
   m_fCycleTime = (float)COURSE_CYCLE_SPEED;
   m_fCycleTime = SanitizeCycleTime(
       m_fCycleTime, kDefaultBpmCycleTime,
-      "SRC_AUDIT_FIX SRC-1115: BPMDisplay used default course cycle time.");
+      "BPMDisplay used default course cycle time.");
 
   if ((int)pTrail->m_vEntries.size() >
       CommonMetrics::MAX_COURSE_ENTRIES_BEFORE_VARIOUS) {
@@ -393,8 +393,8 @@ void BPMDisplay::SetBpmFromCourse(const Course* pCourse) {
 
 void BPMDisplay::SetConstantBpm(float fBPM) {
   if (!std::isfinite(fBPM) || fBPM < 0.0f) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1117: BPMDisplay reset invalid constant BPM.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay reset invalid constant BPM.");
     fBPM = 0.0f;
   }
   DisplayBpms bpms;
@@ -410,8 +410,8 @@ void BPMDisplay::SetVarious() {
 
 void BPMDisplay::SetFromGameState() {
   if (GAMESTATE == nullptr) {
-    WarnBPMDisplayAuditFix(
-        "SRC_AUDIT_FIX SRC-1121: BPMDisplay fell back without GAMESTATE.");
+    WarnBPMDisplaySafety(
+        "BPMDisplay fell back without GAMESTATE.");
     NoBPM();
     return;
   }

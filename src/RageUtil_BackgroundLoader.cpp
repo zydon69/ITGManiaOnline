@@ -67,8 +67,8 @@ static void DeleteEmptyDirectories(std::string sDir) {
   GetDirListing(sDir + "/*", asNewDirs, false, true);
   for (unsigned i = 0; i < asNewDirs.size(); ++i) {
     if (!IsADirectory(asNewDirs[i])) {
-      LogReviewSrcDiagnostics(
-          "SRC-3404 background cache cleanup skipped non-directory '%s'",
+      LogRuntimeValidationDiagnostics(
+          "background cache cleanup skipped non-directory '%s'",
           asNewDirs[i].c_str());
       continue;
     }
@@ -198,7 +198,7 @@ void BackgroundLoader::LoadThread() {
           const int wrote = dst.Write(buf, got);
           if (wrote != got) {
             BACKGROUND_LOADER_WARN(
-                "SRC_AUDIT_FIX SRC-1038: BackgroundLoader cache write failed "
+                "BackgroundLoader cache write failed "
                 "for '%s'.",
                 sFile.c_str());
             bWriteToCache = false;
@@ -210,13 +210,13 @@ void BackgroundLoader::LoadThread() {
           }
         } else if (got < 0) {
           BACKGROUND_LOADER_WARN(
-              "SRC_AUDIT_FIX SRC-1038: BackgroundLoader read failed for '%s'.",
+              "BackgroundLoader read failed for '%s'.",
               sFile.c_str());
           bLoadSucceeded = false;
           break;
         } else if (got == 0 && !src.AtEOF()) {
           BACKGROUND_LOADER_WARN(
-              "SRC_AUDIT_FIX SRC-1038: BackgroundLoader made no read progress "
+              "BackgroundLoader made no read progress "
               "for '%s'.",
               sFile.c_str());
           bLoadSucceeded = false;
@@ -230,7 +230,7 @@ void BackgroundLoader::LoadThread() {
       BACKGROUND_LOADER_TRACE("XXX: done");
     } else {
       BACKGROUND_LOADER_WARN(
-          "SRC_AUDIT_FIX SRC-1038: BackgroundLoader could not open '%s'.",
+          "BackgroundLoader could not open '%s'.",
           sFile.c_str());
     }
     src.Close();
@@ -315,7 +315,7 @@ void BackgroundLoader::FinishedWithCachedFile(std::string sFile) {
   it = m_FinishedRequests.find(sFile);
   if (it == m_FinishedRequests.end()) {
     BACKGROUND_LOADER_WARN(
-        "SRC_AUDIT_FIX SRC-1037: BackgroundLoader ignored unknown finished "
+        "BackgroundLoader ignored unknown finished "
         "cache file '%s'.",
         sFile.c_str());
     return;
@@ -324,7 +324,7 @@ void BackgroundLoader::FinishedWithCachedFile(std::string sFile) {
   --it->second;
   if (it->second < 0) {
     BACKGROUND_LOADER_WARN(
-        "SRC_AUDIT_FIX SRC-1037: BackgroundLoader corrected negative refcount "
+        "BackgroundLoader corrected negative refcount "
         "for '%s'.",
         sFile.c_str());
     it->second = 0;

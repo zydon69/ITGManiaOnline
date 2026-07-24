@@ -275,7 +275,7 @@ struct WavReaderADPCM : public WavReader {
       m_iaCoef1.resize(iNumCoef);
       m_iaCoef2.resize(iNumCoef);
     } catch (const std::bad_alloc&) {
-      m_sError = "SRC_AUDIT_FIX SRC-2797: ADPCM coefficient allocation failed";
+      m_sError = "ADPCM coefficient allocation failed";
       return false;
     }
     for (int i = 0; i < iNumCoef; ++i) {
@@ -290,7 +290,7 @@ struct WavReaderADPCM : public WavReader {
     try {
       m_pBuffer = new float[m_iFramesPerBlock * m_WavData.m_iChannels];
     } catch (const std::bad_alloc&) {
-      m_sError = "SRC_AUDIT_FIX SRC-2797: ADPCM decode buffer allocation failed";
+      m_sError = "ADPCM decode buffer allocation failed";
       return false;
     }
     m_iBufferAvail = m_iBufferUsed = 0;
@@ -578,7 +578,7 @@ std::string ReadString(RageFileBasic& f, int iSize, std::string& sError) {
   try {
     ret.assign(static_cast<size_t>(iSize), '\0');
   } catch (const std::bad_alloc&) {
-    sError = "SRC_AUDIT_FIX SRC-2797: WAV string allocation failed";
+    sError = "WAV string allocation failed";
     return std::string();
   }
   if (iSize == 0) {
@@ -717,14 +717,14 @@ RageSoundReader_FileReader::OpenResult RageSoundReader_WAV::Open(
       try {
         m_pImpl = new WavReaderPCM(*m_pFile, m_WavData);
       } catch (const std::bad_alloc&) {
-        FATAL_ERROR("SRC_AUDIT_FIX SRC-2797: PCM WAV reader allocation failed");
+        FATAL_ERROR("PCM WAV reader allocation failed");
       }
       break;
     case 2:  // ADPCM
       try {
         m_pImpl = new WavReaderADPCM(*m_pFile, m_WavData);
       } catch (const std::bad_alloc&) {
-        FATAL_ERROR("SRC_AUDIT_FIX SRC-2797: ADPCM WAV reader allocation failed");
+        FATAL_ERROR("ADPCM WAV reader allocation failed");
       }
       break;
     case 85:  // MP3

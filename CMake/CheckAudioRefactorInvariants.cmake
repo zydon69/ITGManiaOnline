@@ -224,18 +224,6 @@ require_contains(
   "RageSoundPosMap protects instance-owned drift state")
 require_contains(
   "${rage_sound_pos_map_cpp}"
-  "SRC_AUDIT_FIX SRC-2916"
-  "RageSoundPosMap invalid inserts are review-traced")
-require_contains(
-  "${rage_sound_pos_map_cpp}"
-  "SRC_AUDIT_FIX SRC-2917"
-  "RageSoundPosMap allocation failures are review-traced")
-require_contains(
-  "${rage_sound_pos_map_cpp}"
-  "SRC_AUDIT_FIX SRC-2921"
-  "RageSoundPosMap corrupt search entries are review-traced")
-require_contains(
-  "${rage_sound_pos_map_cpp}"
   "kMaxPosMapEntries"
   "RageSoundPosMap bounds fragmented history by entry count")
 require_contains(
@@ -390,22 +378,6 @@ require_contains(
   "RageSoundReader copy traits go through the guarded base helper")
 require_contains(
   "${rage_sound_reader_cpp}"
-  "SRC_AUDIT_FIX SRC-2905"
-  "RageSoundReader copy failures are review-traced")
-require_contains(
-  "${rage_sound_reader_cpp}"
-  "SRC_AUDIT_FIX SRC-2901"
-  "RageSoundReader invalid RetriedRead calls are diagnosable")
-require_contains(
-  "${rage_sound_reader_cpp}"
-  "SRC_AUDIT_FIX SRC-2899 SRC-2900"
-  "RageSoundReader retry exhaustion is diagnosable")
-require_contains(
-  "${rage_sound_reader_cpp}"
-  "SRC_AUDIT_FIX SRC-2902"
-  "RageSoundReader source-frame clamping is diagnosable")
-require_contains(
-  "${rage_sound_reader_cpp}"
   "return RageSoundReader::WOULD_BLOCK;"
   "RageSoundReader retry exhaustion reports temporary backpressure")
 require_contains(
@@ -421,18 +393,10 @@ require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
   "while (m_StreamPosition.size() > 1 &&"
   "ThreadedBuffer collapses consumed mapping runs in one retry transition")
-require_contains(
-  "${rage_sound_reader_threaded_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2933"
-  "ThreadedBuffer mapping compaction is review-traced")
 require_not_contains(
   "${rage_sound_reader_resample_good_cpp}"
   "if (iFramesNeeded == 0) {\n    return 0;"
   "Resample_Good must drain internally buffered output without source input")
-require_contains(
-  "${rage_sound_reader_resample_good_cpp}"
-  "SRC_AUDIT_FIX SRC-2934"
-  "Resample_Good internal-buffer draining is review-traced")
 
 require_contains(
   "${game_sound_manager_cpp}"
@@ -491,10 +455,6 @@ require_not_contains(
   "${auto_keysounds_cpp}"
   "ASSERT_M(\n      m_pSharedSound != nullptr"
   "AutoKeysounds must not assert on songs without playable keysounds")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2751"
-  "RageSoundReader_Extend logs null source readers without crashing")
 require_not_contains(
   "${rage_sound_reader_extend_cpp}"
   "ASSERT_M(\n      pSource != nullptr"
@@ -515,34 +475,6 @@ require_contains(
   "${rage_sound_reader_extend_h}"
   "std::string GetError() const override;"
   "RageSoundReader_Extend exposes local diagnostics")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2890"
-  "RageSoundReader_Extend copy failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2891"
-  "RageSoundReader_Extend seek failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2892"
-  "RageSoundReader_Extend loop restart failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2893"
-  "RageSoundReader_Extend frame arithmetic is guarded")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2894"
-  "RageSoundReader_Extend internal failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2896"
-  "RageSoundReader_Extend length reporting failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_extend_cpp}"
-  "SRC_AUDIT_FIX SRC-2897"
-  "RageSoundReader_Extend source-frame tracking is guarded")
 require_contains(
   "${rage_sound_reader_extend_cpp}"
   "AdvanceFrameByRatio"
@@ -589,10 +521,6 @@ require_contains(
   "PostBuffering converts copy allocation failures into nullptr")
 require_contains(
   "${rage_sound_reader_post_buffering_cpp}"
-  "SRC_AUDIT_FIX SRC-2821"
-  "PostBuffering diagnoses sample-count overflow before int attenuation")
-require_contains(
-  "${rage_sound_reader_post_buffering_cpp}"
   "RageSoundReader_PostBuffering::GetError() const"
   "PostBuffering exposes filter-owned diagnostics")
 require_not_contains(
@@ -607,10 +535,6 @@ require_contains(
   "${rage_sound_reader_file_reader_h}"
   "OPEN_FATAL_ERROR."
   "RageSoundReader_FileReader open contract references a real enum")
-require_contains(
-  "${rage_sound_reader_file_reader_cpp}"
-  "SRC_AUDIT_FIX SRC-2794"
-  "RageSoundReader_FileReader converts allocation failures into open errors")
 require_contains(
   "${rage_sound_reader_file_reader_cpp}"
   "*pPrebuffer = false;"
@@ -629,14 +553,6 @@ require_contains(
   "RageSoundReader_Preload exposes 64-bit source-frame metadata")
 require_contains(
   "${rage_sound_reader_preload_cpp}"
-  "SRC_AUDIT_FIX SRC-2790"
-  "RageSoundReader_Preload diagnoses preload open and allocation failures")
-require_contains(
-  "${rage_sound_reader_preload_cpp}"
-  "SRC_AUDIT_FIX SRC-2791"
-  "RageSoundReader_Preload diagnoses seek/read range failures")
-require_contains(
-  "${rage_sound_reader_preload_cpp}"
   "catch (const std::bad_alloc&)"
   "RageSoundReader_Preload converts allocation failures into preload errors")
 require_not_contains(
@@ -651,10 +567,6 @@ require_contains(
   "${rage_sound_reader_wav_h}"
   "RageSoundReader_WAV* Copy() const override;"
   "RageSoundReader_WAV copy contract is explicit")
-require_contains(
-  "${rage_sound_reader_wav_cpp}"
-  "SRC_AUDIT_FIX SRC-2797"
-  "RageSoundReader_WAV converts allocation failures into decoder errors")
 require_contains(
   "${rage_sound_reader_wav_cpp}"
   "void RageSoundReader_WAV::Close()"
@@ -677,10 +589,6 @@ require_contains(
   "RageSoundReader_Vorbisfile has a real close/reset implementation")
 require_contains(
   "${rage_sound_reader_vorbis_cpp}"
-  "SRC_AUDIT_FIX SRC-2802"
-  "RageSoundReader_Vorbisfile converts allocation failures into decoder errors")
-require_contains(
-  "${rage_sound_reader_vorbis_cpp}"
   "const ogg_int64_t curofs = ov_pcm_tell(vf);"
   "RageSoundReader_Vorbisfile keeps Vorbis read positions in 64-bit form")
 require_contains(
@@ -695,10 +603,6 @@ require_contains(
   "${rage_sound_reader_vorbis_cpp}"
   "GetSourcePath().c_str()"
   "RageSoundReader_Vorbisfile reports source paths in decoder diagnostics")
-require_contains(
-  "${rage_sound_reader_vorbis_cpp}"
-  "SRC_AUDIT_FIX SRC-3320"
-  "RageSoundReader_Vorbisfile refuses copies that cannot rewind")
 require_contains(
   "${rage_sound_reader_mp3_h}"
   "RageSoundReader_MP3(const RageSoundReader_MP3&) = delete;"
@@ -725,10 +629,6 @@ require_contains(
   "RageSoundReader_MP3 verifies file rewind before resetting decoder state")
 require_contains(
   "${rage_sound_reader_mp3_cpp}"
-  "SRC_AUDIT_FIX SRC-2810"
-  "RageSoundReader_MP3 diagnoses invalid MAD stream buffer pointers")
-require_contains(
-  "${rage_sound_reader_mp3_cpp}"
   "bytes_read = std::max(0, bytes_read - tagsize);"
   "RageSoundReader_MP3 keeps ID3 skip accounting non-negative")
 require_contains(
@@ -740,18 +640,6 @@ require_contains(
   "clamp_milliseconds_to_int"
   "RageSoundReader_MP3 clamps internal MP3 duration arithmetic before public int returns")
 require_contains(
-  "${rage_sound_reader_mp3_cpp}"
-  "SRC_AUDIT_FIX SRC-2812"
-  "RageSoundReader_MP3 diagnoses seek estimate overflow")
-require_contains(
-  "${rage_sound_reader_mp3_cpp}"
-  "SRC_AUDIT_FIX SRC-2815"
-  "RageSoundReader_MP3 bounds fixed synth output buffer writes")
-require_contains(
-  "${rage_sound_reader_mp3_cpp}"
-  "SRC_AUDIT_FIX SRC-2816"
-  "RageSoundReader_MP3 avoids stale errno diagnostics for seek failures")
-require_contains(
   "${rage_sound_reader_pan_h}"
   "RageSoundReader_Pan* Copy() const override"
   "RageSoundReader_Pan copy contract is explicitly overriding")
@@ -759,10 +647,6 @@ require_contains(
   "${rage_sound_reader_pan_h}"
   "std::string GetError() const override;"
   "RageSoundReader_Pan exposes filter-owned diagnostics")
-require_contains(
-  "${rage_sound_reader_pan_cpp}"
-  "SRC_AUDIT_FIX SRC-2754"
-  "RageSoundReader_Pan records internal filter failures locally")
 require_contains(
   "${rage_sound_reader_pan_cpp}"
   "RageSoundReader_Pan::Read called with a null output buffer"
@@ -791,18 +675,6 @@ require_contains(
   "${rage_sound_reader_pitch_change_cpp}"
   "m_bPreservePitch(g_bRateModPreservesPitch.Get())"
   "PitchChange snapshots RateModPreservesPitch at construction")
-require_contains(
-  "${rage_sound_reader_pitch_change_cpp}"
-  "SRC_AUDIT_FIX SRC-2827"
-  "PitchChange records internal read failures locally")
-require_contains(
-  "${rage_sound_reader_pitch_change_cpp}"
-  "SRC_AUDIT_FIX SRC-2830"
-  "PitchChange rejects unsafe speed and pitch ratios before resampling")
-require_contains(
-  "${rage_sound_reader_pitch_change_cpp}"
-  "SRC_AUDIT_FIX SRC-3321"
-  "PitchChange propagates transactional resampler rate failures")
 require_contains(
   "${rage_sound_cpp}"
   "const std::string setupError ="
@@ -841,10 +713,6 @@ require_contains(
   "SpeedChange converts allocation failures into reader errors or nullptr")
 require_contains(
   "${rage_sound_reader_speed_change_cpp}"
-  "SRC_AUDIT_FIX SRC-2848"
-  "SpeedChange records internal read/setup failures locally")
-require_contains(
-  "${rage_sound_reader_speed_change_cpp}"
   "ClampInt64ToInt"
   "SpeedChange clamps 64-bit position arithmetic before public int returns")
 require_contains(
@@ -881,10 +749,6 @@ require_not_contains(
   "ThreadedBuffer must not truncate its initial source frame")
 require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-3323"
-  "ThreadedBuffer guards 64-bit source-frame accumulation")
-require_contains(
-  "${rage_sound_reader_threaded_buffer_cpp}"
   "MAX_THREADED_BUFFER_CHANNELS"
   "ThreadedBuffer enforces an explicit channel ceiling")
 require_contains(
@@ -899,10 +763,6 @@ require_contains(
   "${rage_sound_reader_threaded_buffer_cpp}"
   "RestoreThreadedBufferState"
   "ThreadedBuffer restores original buffering state during copy failures")
-require_contains(
-  "${rage_sound_reader_threaded_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2858"
-  "ThreadedBuffer records internal failures locally")
 require_not_contains(
   "${rage_sound_reader_threaded_buffer_h}"
   "return new RageSoundReader_ThreadedBuffer(*this);"
@@ -945,14 +805,6 @@ require_contains(
   "Resample_Good rebuilds channel topology in temporary owners before swap")
 require_contains(
   "${rage_sound_reader_resample_good_cpp}"
-  "SRC_AUDIT_FIX SRC-2835"
-  "Resample_Good diagnoses failed rate changes")
-require_contains(
-  "${rage_sound_reader_resample_good_cpp}"
-  "SRC_AUDIT_FIX SRC-2837"
-  "Resample_Good records internal read/setup failures locally")
-require_contains(
-  "${rage_sound_reader_resample_good_cpp}"
   "MAX_RESAMPLE_CHANNELS"
   "Resample_Good enforces an explicit channel ceiling")
 require_contains(
@@ -981,19 +833,19 @@ require_contains(
   "ChannelSplit serializes shared source and buffer state")
 require_contains(
   "${rage_sound_reader_channel_split_cpp}"
-  "WarnAuditFix(\"SRC-2755\""
+  "WarnSafety(\"ChannelSplit\""
   "ChannelSplit diagnoses null source and impl paths")
 require_contains(
   "${rage_sound_reader_channel_split_cpp}"
-  "WarnAuditFix(\"SRC-2756\""
+  "WarnSafety(\"ChannelSplit\""
   "ChannelSplit diagnoses invalid read buffers")
 require_contains(
   "${rage_sound_reader_channel_split_cpp}"
-  "WarnAuditFix(\"SRC-2757\""
+  "WarnSafety(\"ChannelSplit\""
   "ChannelSplit validates channel maps")
 require_contains(
   "${rage_sound_reader_channel_split_cpp}"
-  "WarnAuditFix(\"SRC-2758\""
+  "WarnSafety(\"ChannelSplit\""
   "ChannelSplit guards frame and sample arithmetic")
 require_contains(
   "${rage_sound_reader_channel_split_cpp}"
@@ -1028,26 +880,6 @@ require_contains(
   "size_t m_iOffset;"
   "RageSoundMixBuffer stores offsets in size_t")
 require_contains(
-  "${rage_sound_mix_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2761"
-  "RageSoundMixBuffer rejects negative write offsets")
-require_contains(
-  "${rage_sound_mix_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2762"
-  "RageSoundMixBuffer rejects invalid strides and span overflow")
-require_contains(
-  "${rage_sound_mix_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2763"
-  "RageSoundMixBuffer guards resize arithmetic and allocation")
-require_contains(
-  "${rage_sound_mix_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2764"
-  "RageSoundMixBuffer rejects null interleaved buffers")
-require_contains(
-  "${rage_sound_mix_buffer_cpp}"
-  "SRC_AUDIT_FIX SRC-2765"
-  "RageSoundMixBuffer validates deinterlace arguments")
-require_contains(
   "${rage_sound_reader_chain_cpp}"
   "RageSoundReader_Chain: mix buffer write failed"
   "RageSoundReader_Chain handles mix write failures")
@@ -1067,22 +899,6 @@ require_contains(
   "${rage_sound_reader_chain_h}"
   "std::string GetError() const override;"
   "RageSoundReader_Chain exposes local diagnostics")
-require_contains(
-  "${rage_sound_reader_chain_cpp}"
-  "SRC_AUDIT_FIX SRC-2865"
-  "RageSoundReader_Chain copy failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_chain_cpp}"
-  "SRC_AUDIT_FIX SRC-2866"
-  "RageSoundReader_Chain load ownership failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_chain_cpp}"
-  "SRC_AUDIT_FIX SRC-2870"
-  "RageSoundReader_Chain rejects invalid source topology")
-require_contains(
-  "${rage_sound_reader_chain_cpp}"
-  "SRC_AUDIT_FIX SRC-2873"
-  "RageSoundReader_Chain guards frame arithmetic")
 require_contains(
   "${rage_sound_reader_chain_cpp}"
   "ReplaceNamedSoundPointer"
@@ -1121,56 +937,8 @@ require_contains(
   "RageSoundReader_Merge exposes local diagnostics")
 require_contains(
   "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2876"
-  "RageSoundReader_Merge copy failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2877"
-  "RageSoundReader_Merge AddSound/Finish misuse is diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2878"
-  "RageSoundReader_Merge wrapper publication failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2879"
-  "RageSoundReader_Merge validates source topology")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
   "RageSoundReader_Merge: mix buffer write failed"
   "RageSoundReader_Merge handles mix write failures")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2880"
-  "RageSoundReader_Merge checks channel mismatch in release builds")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2881"
-  "RageSoundReader_Merge guards mix offset arithmetic")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2882"
-  "RageSoundReader_Merge seek failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2883"
-  "RageSoundReader_Merge property mismatches are diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2884"
-  "RageSoundReader_Merge read failures are diagnosable")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2885"
-  "RageSoundReader_Merge read allocations are guarded")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2886"
-  "RageSoundReader_Merge resync arithmetic is guarded")
-require_contains(
-  "${rage_sound_reader_merge_cpp}"
-  "SRC_AUDIT_FIX SRC-2887"
-  "RageSoundReader_Merge frame arithmetic is guarded")
 require_contains(
   "${rage_sound_driver_generic_cpp}"
   "RageSoundDriver::MixIntoBuffer: mix buffer write failed"
@@ -1193,7 +961,7 @@ require_contains(
   "RageSoundUtil mono to stereo conversion requires output capacity")
 require_contains(
   "${rage_sound_util_cpp}"
-  "SRC_AUDIT_FIX %s RageSoundUtil::%s refused invalid input"
+  "%s RageSoundUtil::%s refused invalid input"
   "RageSoundUtil invalid inputs are review-traced")
 require_contains(
   "${rage_sound_util_cpp}"

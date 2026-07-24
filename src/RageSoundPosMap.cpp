@@ -125,7 +125,7 @@ struct pos_map_impl {
 
   bool SetErrorLocked(const std::string& error) const {
     m_sError = error;
-    LogReviewSrcDiagnostics("%s", error.c_str());
+    LogRuntimeValidationDiagnostics("%s", error.c_str());
     return false;
   }
 
@@ -160,13 +160,13 @@ bool pos_map_queue::Insert(
   if (iFrames <= 0 || !std::isfinite(fSourceToDestRatio) ||
       fSourceToDestRatio <= 0.0) {
     return m_pImpl->SetErrorLocked(
-        "SRC_AUDIT_FIX SRC-2916: PosMap rejected invalid insert arguments");
+        "PosMap rejected invalid insert arguments");
   }
   if ((iSourceFrame < 0 || iDestFrame < 0) &&
       !m_pImpl->m_bLoggedIntentionalNegativeMapping) {
     m_pImpl->m_bLoggedIntentionalNegativeMapping = true;
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2918: PosMap accepted intentional negative frame "
+    LogRuntimeValidationDiagnostics(
+        "PosMap accepted intentional negative frame "
         "mapping source=%lld dest=%lld frames=%lld ratio=%.9f "
         "(further mappings suppressed for this queue)",
         static_cast<long long>(iSourceFrame),
@@ -180,7 +180,7 @@ bool pos_map_queue::Insert(
       !ScaleFramesToDestDelta(iFrames, fSourceToDestRatio, destDelta) ||
       !AddInt64(iDestFrame, destDelta, destEnd)) {
     return m_pImpl->SetErrorLocked(
-        "SRC_AUDIT_FIX SRC-2916: PosMap rejected overflowed insert mapping");
+        "PosMap rejected overflowed insert mapping");
   }
 
   bool merged = false;
@@ -211,7 +211,7 @@ bool pos_map_queue::Insert(
       m_pImpl->m_Queue.emplace_back();
     } catch (const std::bad_alloc&) {
       return m_pImpl->SetErrorLocked(
-          "SRC_AUDIT_FIX SRC-2917: PosMap insert allocation failed");
+          "PosMap insert allocation failed");
     }
     pos_map_t& m = m_pImpl->m_Queue.back();
     m.m_iSourceFrame = iSourceFrame;
@@ -236,7 +236,7 @@ void pos_map_impl::CleanupLocked() {
     if (!AddInt64(iTotalFrames, it->m_iFrames, iTotalFrames)) {
       iTotalFrames = std::numeric_limits<int64_t>::max();
       SetErrorLocked(
-          "SRC_AUDIT_FIX SRC-2919: PosMap cleanup frame accumulator overflow");
+          "PosMap cleanup frame accumulator overflow");
       break;
     }
   }
@@ -260,7 +260,7 @@ pos_map_search_result pos_map_queue::SearchResult(
   int64_t minorPositionDriftFrames = 0;
   if (!MinorPositionDriftFramesForRate(iFrameRate, minorPositionDriftFrames)) {
     m_pImpl->SetErrorLocked(
-        "SRC_AUDIT_FIX SRC-2925: PosMap search rejected invalid frame rate");
+        "PosMap search rejected invalid frame rate");
     result.status = pos_map_search_result::Status::InvalidInput;
     return result;
   }
@@ -322,15 +322,15 @@ pos_map_search_result pos_map_queue::SearchResult(
   if (iClosestPositionDist == std::numeric_limits<uint64_t>::max()) {
     if (skippedCorruptEntries > 0) {
       m_pImpl->SetErrorLocked(
-          "SRC_AUDIT_FIX SRC-2921: PosMap search skipped only corrupt entries");
+          "PosMap search skipped only corrupt entries");
       result.status = pos_map_search_result::Status::CorruptMap;
     }
     return result;
   }
 
   if (skippedCorruptEntries > 0) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2921: PosMap search skipped %zu corrupt entries",
+    LogRuntimeValidationDiagnostics(
+        "PosMap search skipped %zu corrupt entries",
         skippedCorruptEntries);
   }
 

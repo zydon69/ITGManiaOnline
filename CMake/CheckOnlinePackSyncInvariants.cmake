@@ -62,7 +62,7 @@ foreach(REQUIRED_SNIPPET
     "local_success_response"
     "SONGMAN:FindStepsByOnlineChartHash(expectedChartHash)"
     "self.activeBrowseOnlyDownload == true"
-    "SRC_REVIEW_TRACE [OnlinePackSync]")
+    "RUNTIME_VALIDATION [OnlinePackSync]")
   string(FIND "${ONLINE_PACK_SYNC_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
@@ -146,7 +146,7 @@ foreach(REQUIRED_SNIPPET
     "profile-guid:v2:"
     "stored_token_binding_user_mismatch"
     "stored token ignored reason=profile_binding_missing_or_invalid"
-    "SRC_REVIEW_TRACE [ITGOnline]")
+    "RUNTIME_VALIDATION [ITGOnline]")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
@@ -218,12 +218,12 @@ foreach(REQUIRED_SNIPPET
 endforeach()
 
 foreach(REQUIRED_SNIPPET
-    "review_src,ResetLogs"
-    "Linereview_src=\"conf,review_src\"")
+    "runtime_validation,ResetLogs"
+    "Lineruntime_validation=\"conf,runtime_validation\"")
   string(FIND "${SIMPLY_LOVE_METRICS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
       FATAL_ERROR
-      "Simply Love review-src option invariant failed: missing '${REQUIRED_SNIPPET}'")
+      "Simply Love runtime-validation option invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()

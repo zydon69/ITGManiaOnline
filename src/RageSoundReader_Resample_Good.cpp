@@ -784,14 +784,14 @@ RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
   m_iSampleRate = iSampleRate > 0 ? iSampleRate : 0;
   if (!IsUsableSource(pSource, m_iSampleRate)) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good received an invalid source "
+        "Resample_Good received an invalid source "
         "reader or sample rate");
     return;
   }
   float fActualRate = RATE_DISABLED;
   if (!ReopenResamplerLocked(RATE_DISABLED, &fActualRate)) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2834: Resample_Good could not build its initial "
+        "Resample_Good could not build its initial "
         "resampler topology");
   }
 }
@@ -826,7 +826,7 @@ bool RageSoundReader_Resample_Good::IsUsableLocked() const {
 
 bool RageSoundReader_Resample_Good::ResetLocked() {
   if (m_pSource.isNull()) {
-    SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good reset has no source");
+    SetError("Resample_Good reset has no source");
     return false;
   }
   for (size_t iChannel = 0; iChannel < m_pSource->GetNumChannels() &&
@@ -835,7 +835,7 @@ bool RageSoundReader_Resample_Good::ResetLocked() {
     if (m_apResamplers[iChannel] == nullptr ||
         !m_apResamplers[iChannel]->Reset()) {
       SetError(
-          "SRC_AUDIT_FIX SRC-2833: Resample_Good could not reset resampler "
+          "Resample_Good could not reset resampler "
           "state");
       return false;
     }
@@ -894,7 +894,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
   if (!IsUsableSource(m_pSource.isNull() ? nullptr : &*m_pSource,
                       m_iSampleRate)) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2834: Resample_Good refused invalid source "
+        "Resample_Good refused invalid source "
         "topology");
     return false;
   }
@@ -903,7 +903,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
   int iUpFactor = 0;
   int iAppliedDownFactor = 0;
   if (!GetFactorsLocked(fRate, iDownFactor, iUpFactor, iAppliedDownFactor)) {
-    SetError("SRC_AUDIT_FIX SRC-2838: Resample_Good rejected rate factors");
+    SetError("Resample_Good rejected rate factors");
     return false;
   }
 
@@ -917,7 +917,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
       if (fRate != RATE_DISABLED) {
         if (iMaxDownFactor > std::numeric_limits<int>::max() / 5) {
           SetError(
-              "SRC_AUDIT_FIX SRC-2838: Resample_Good rejected huge filter "
+              "Resample_Good rejected huge filter "
               "factor");
           return false;
         }
@@ -929,7 +929,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
               iUpFactor, iMinDownFactor, iMaxDownFactor));
       if (!p->IsUsable() || !p->SetDownFactor(iAppliedDownFactor)) {
         SetError(
-            "SRC_AUDIT_FIX SRC-2834: Resample_Good could not build a usable "
+            "Resample_Good could not build a usable "
             "channel resampler");
         return false;
       }
@@ -937,7 +937,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
     }
   } catch (const std::bad_alloc&) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2834: Resample_Good ran out of memory rebuilding "
+        "Resample_Good ran out of memory rebuilding "
         "resamplers");
     return false;
   }
@@ -950,7 +950,7 @@ bool RageSoundReader_Resample_Good::ReopenResamplerLocked(
     }
   } catch (const std::bad_alloc&) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2834: Resample_Good ran out of memory publishing "
+        "Resample_Good ran out of memory publishing "
         "resamplers");
     return false;
   }
@@ -975,12 +975,12 @@ int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
   if (m_pSource.isNull() || m_iSampleRate <= 0 ||
       m_pSource->GetSampleRate() <= 0) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good rejected SetPosition topology");
+        "Resample_Good rejected SetPosition topology");
     return RageSoundReader::ERROR;
   }
   if (!ResetLocked()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good could not reset before "
+        "Resample_Good could not reset before "
         "SetPosition");
     return RageSoundReader::ERROR;
   }
@@ -990,8 +990,8 @@ int RageSoundReader_Resample_Good::SetPosition(int iFrame) {
       static_cast<int64_t>(iFrame) *
       static_cast<int64_t>(m_pSource->GetSampleRate()) / m_iSampleRate;
   if (iFrame < 0) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good accepted lead-in SetPosition "
+    LogRuntimeValidationDiagnostics(
+        "Resample_Good accepted lead-in SetPosition "
         "frame=%d sourceFrame=%lld",
         iFrame, static_cast<long long>(iSourceFrame));
   }
@@ -1005,18 +1005,18 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
   std::lock_guard<std::mutex> lock(m_StateMutex);
   if (pBuf == nullptr) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read called with null buffer");
+        "Resample_Good Read called with null buffer");
     return RageSoundReader::ERROR;
   }
   if (iFrames < 0) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read called with negative frame "
+        "Resample_Good Read called with negative frame "
         "count");
     return RageSoundReader::ERROR;
   }
   if (!IsUsableLocked()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good Read has no usable topology");
+        "Resample_Good Read has no usable topology");
     return RageSoundReader::ERROR;
   }
   const int iChannels = static_cast<int>(m_apResamplers.size());
@@ -1029,7 +1029,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
   int iUpFactor = 0;
   int iAppliedDownFactor = 0;
   if (!GetFactorsLocked(m_fRate, iDownFactor, iUpFactor, iAppliedDownFactor)) {
-    SetError("SRC_AUDIT_FIX SRC-2838: Resample_Good has invalid rate factors");
+    SetError("Resample_Good has invalid rate factors");
     return RageSoundReader::ERROR;
   }
 
@@ -1046,7 +1046,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
           std::numeric_limits<size_t>::max() /
               static_cast<size_t>(iChannels)) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2838: Resample_Good input frame request overflow");
+        "Resample_Good input frame request overflow");
     return RageSoundReader::ERROR;
   }
   std::vector<float> tmpBuf;
@@ -1057,7 +1057,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
                    static_cast<size_t>(iChannels)));
   } catch (const std::bad_alloc&) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good could not allocate read buffer");
+        "Resample_Good could not allocate read buffer");
     return RageSoundReader::ERROR;
   }
 
@@ -1065,8 +1065,8 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
   if (iFramesNeeded > 0) {
     iFramesIn = m_pSource->Read(&tmpBuf[0], iFramesNeeded);
   } else {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2934: resampler draining buffered samples "
+    LogRuntimeValidationDiagnostics(
+        "resampler draining buffered samples "
         "without source input source=%s requested=%d",
         GetSourcePath().c_str(), iFrames);
   }
@@ -1075,7 +1075,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
   }
   if (iFramesIn > iFramesNeeded) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2837: Resample_Good source returned too many "
+        "Resample_Good source returned too many "
         "frames");
     return RageSoundReader::ERROR;
   }
@@ -1084,7 +1084,7 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
     int iGotFrames = m_apResamplers[iChannel]->Run(
         &tmpBuf[0] + iChannel, iFramesIn, pBuf + iChannel, iFrames, iChannels);
     if (iGotFrames < 0 || iGotFrames > iFrames) {
-      SetError("SRC_AUDIT_FIX SRC-2837: Resample_Good channel run failed");
+      SetError("Resample_Good channel run failed");
       return RageSoundReader::ERROR;
     }
 
@@ -1111,12 +1111,12 @@ int RageSoundReader_Resample_Good::Read(float* pBuf, int iFrames) {
 bool RageSoundReader_Resample_Good::SetRate(float fRatio) {
   std::lock_guard<std::mutex> lock(m_StateMutex);
   if (!IsFinitePositive(fRatio) || fRatio > MAX_REASONABLE_RATE) {
-    SetError("SRC_AUDIT_FIX SRC-2835: Resample_Good rejected unsafe rate");
+    SetError("Resample_Good rejected unsafe rate");
     return false;
   }
   if (!IsUsableLocked()) {
     SetError(
-        "SRC_AUDIT_FIX SRC-2835: Resample_Good refused rate change without a "
+        "Resample_Good refused rate change without a "
         "usable topology");
     return false;
   }
@@ -1124,7 +1124,7 @@ bool RageSoundReader_Resample_Good::SetRate(float fRatio) {
   float fActualRate = fRatio;
   if (!ReopenResamplerLocked(fRatio, &fActualRate) ||
       !IsFinitePositive(fActualRate)) {
-    SetError("SRC_AUDIT_FIX SRC-2835: Resample_Good failed to apply rate");
+    SetError("Resample_Good failed to apply rate");
     return false;
   }
 
@@ -1155,7 +1155,7 @@ RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
     for (size_t i = 0; i < cpy.m_apResamplers.size(); ++i) {
       if (cpy.m_apResamplers[i] == nullptr) {
         SetError(
-            "SRC_AUDIT_FIX SRC-2840: Resample_Good copy found null channel "
+            "Resample_Good copy found null channel "
             "resampler");
         return;
       }
@@ -1163,7 +1163,7 @@ RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
           new RageSoundResampler_Polyphase(*cpy.m_apResamplers[i]));
       if (!p->IsUsable()) {
         SetError(
-            "SRC_AUDIT_FIX SRC-2840: Resample_Good copy produced unusable "
+            "Resample_Good copy produced unusable "
             "channel resampler");
         return;
       }
@@ -1175,7 +1175,7 @@ RageSoundReader_Resample_Good::RageSoundReader_Resample_Good(
     }
   } catch (const std::bad_alloc&) {
     ClearResamplers();
-    SetError("SRC_AUDIT_FIX SRC-2840: Resample_Good copy ran out of memory");
+    SetError("Resample_Good copy ran out of memory");
     return;
   }
 
@@ -1216,9 +1216,7 @@ void RageSoundReader_Resample_Good::ClearError() const {
 }
 
 void RageSoundReader_Resample_Good::SetError(const std::string& sError) const {
-  if (sError.find("SRC_AUDIT_FIX SRC-28") != std::string::npos) {
-    LogReviewSrcDiagnostics("%s", sError.c_str());
-  }
+  LogRuntimeValidationDiagnostics("%s", sError.c_str());
   std::lock_guard<std::mutex> lock(m_ErrorMutex);
   m_sError = sError;
 }

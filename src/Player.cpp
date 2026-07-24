@@ -84,7 +84,7 @@ class JudgedRows {
   // Returns true if the row has already been judged.
   bool JudgeRow(int iRow) {
     if (iRow < 0 || iRow > MAX_NOTE_ROW) {
-      LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid judged row %i.", iRow);
+      LOG->Warn("Ignoring invalid judged row %i.", iRow);
       return true;
     }
     if (iRow < m_iStart) {
@@ -137,17 +137,17 @@ static const char* GetPlayerRoutineCoupleMode(PlayerNumber pn) {
 static void AddPlayerCaloriesSaturated(float& total, float calories) {
   if (!std::isfinite(total) || total < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Reset invalid accumulated calorie value %f.", total);
+        "Reset invalid accumulated calorie value %f.", total);
     total = 0.0f;
   }
   if (!std::isfinite(calories) || calories < 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid calorie increment %f.",
+    LOG->Warn("Ignoring invalid calorie increment %f.",
               calories);
     return;
   }
   const float maximum = std::numeric_limits<float>::max();
   if (calories > maximum - total) {
-    LOG->Warn("SRC_AUDIT_FIX: Saturating accumulated calories.");
+    LOG->Warn("Saturating accumulated calories.");
     total = maximum;
     return;
   }
@@ -173,7 +173,7 @@ static bool IsValidHoldNoteScoreForPlayer(HoldNoteScore score) {
 static float SanitizePlayerMusicRate(float rate, const char* context) {
   if (!std::isfinite(rate) || rate <= 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid music rate %f in %s; using 1.", rate, context);
+        "Invalid music rate %f in %s; using 1.", rate, context);
     return 1.0f;
   }
   return rate;
@@ -182,7 +182,7 @@ static float SanitizePlayerMusicRate(float rate, const char* context) {
 static float SanitizePlayerDelta(float delta, const char* context) {
   if (!std::isfinite(delta) || delta < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid delta %f in %s; using 0.", delta, context);
+        "Invalid delta %f in %s; using 0.", delta, context);
     return 0.0f;
   }
   return delta;
@@ -191,13 +191,13 @@ static float SanitizePlayerDelta(float delta, const char* context) {
 static int SafeEndRowForPlayer(int startRow, int duration) {
   if (duration < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Negative hold duration %i at row %i; clamping.",
+        "Negative hold duration %i at row %i; clamping.",
         duration, startRow);
     duration = 0;
   }
   if (startRow > MAX_NOTE_ROW - duration) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Hold end row overflow at row %i duration %i; "
+        "Hold end row overflow at row %i duration %i; "
         "clamping to MAX_NOTE_ROW.",
         startRow, duration);
     return MAX_NOTE_ROW;
@@ -215,7 +215,7 @@ static const Style* GetSafePlayerStyle(const PlayerState* playerState) {
 
 static bool HasPlayerThemeRuntime(const char* context) {
   if (THEME == nullptr || !THEME->IsThemeLoaded()) {
-    LOG->Warn("SRC_AUDIT_FIX: %s skipped because THEME is unavailable.", context);
+    LOG->Warn("%s skipped because THEME is unavailable.", context);
     return false;
   }
   return true;
@@ -223,13 +223,13 @@ static bool HasPlayerThemeRuntime(const char* context) {
 
 static float GetSafeStageStepsSeconds(const char* context) {
   if (STATSMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: %s using zero stage time without STATSMAN.",
+    LOG->Warn("%s using zero stage time without STATSMAN.",
               context);
     return 0.0f;
   }
   const float seconds = STATSMAN->m_CurStageStats.m_fStepsSeconds;
   if (!std::isfinite(seconds) || seconds < 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: %s using zero invalid stage time %f.", context,
+    LOG->Warn("%s using zero invalid stage time %f.", context,
               seconds);
     return 0.0f;
   }
@@ -238,13 +238,13 @@ static float GetSafeStageStepsSeconds(const char* context) {
 
 static float GetSafeGameplaySeconds(const char* context) {
   if (STATSMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: %s using zero gameplay time without STATSMAN.",
+    LOG->Warn("%s using zero gameplay time without STATSMAN.",
               context);
     return 0.0f;
   }
   const float seconds = STATSMAN->m_CurStageStats.m_fGameplaySeconds;
   if (!std::isfinite(seconds) || seconds < 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: %s using zero invalid gameplay time %f.", context,
+    LOG->Warn("%s using zero invalid gameplay time %f.", context,
               seconds);
     return 0.0f;
   }
@@ -256,7 +256,7 @@ static void MarkAutoplayUsedForPlayer(PlayerStageStats* stats,
   if (STATSMAN != nullptr) {
     STATSMAN->m_CurStageStats.m_bUsedAutoplay = true;
   } else {
-    LOG->Warn("SRC_AUDIT_FIX: %s could not mark autoplay without STATSMAN.",
+    LOG->Warn("%s could not mark autoplay without STATSMAN.",
               context);
   }
   if (stats != nullptr) {
@@ -266,7 +266,7 @@ static void MarkAutoplayUsedForPlayer(PlayerStageStats* stats,
 
 static bool BroadcastPlayerMessage(Message& msg, const char* context) {
   if (MESSAGEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: %s dropped message '%s' without MESSAGEMAN.",
+    LOG->Warn("%s dropped message '%s' without MESSAGEMAN.",
               context, msg.GetName().c_str());
     return false;
   }
@@ -277,7 +277,7 @@ static bool BroadcastPlayerMessage(Message& msg, const char* context) {
 static bool PostPlayerScreenMessage(ScreenMessage sm, float delay,
                                     const char* context) {
   if (SCREENMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: %s dropped screen message '%s' without SCREENMAN.",
+    LOG->Warn("%s dropped screen message '%s' without SCREENMAN.",
               context, sm.c_str());
     return false;
   }
@@ -288,7 +288,7 @@ static bool PostPlayerScreenMessage(ScreenMessage sm, float delay,
 static float SanitizePlayerFinite(float value, float fallback,
                                   const char* context) {
   if (!std::isfinite(value)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid float %f in %s; using %f.", value,
+    LOG->Warn("Invalid float %f in %s; using %f.", value,
               context, fallback);
     return fallback;
   }
@@ -305,7 +305,7 @@ static float SanitizePlayerNonNegative(float value, float fallback,
                                        const char* context) {
   value = SanitizePlayerFinite(value, fallback, context);
   if (value < 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: Negative float %f in %s; using %f.", value,
+    LOG->Warn("Negative float %f in %s; using %f.", value,
               context, fallback);
     return fallback;
   }
@@ -315,7 +315,7 @@ static float SanitizePlayerNonNegative(float value, float fallback,
 static int AddRowsClamped(int row, int delta, const char* context) {
   const int64_t sum = static_cast<int64_t>(row) + static_cast<int64_t>(delta);
   if (sum < 0 || sum > MAX_NOTE_ROW) {
-    LOG->Warn("SRC_AUDIT_FIX: Clamped note row sum %lld in %s.",
+    LOG->Warn("Clamped note row sum %lld in %s.",
               static_cast<long long>(sum), context);
   }
   return static_cast<int>(std::clamp<int64_t>(sum, 0, MAX_NOTE_ROW));
@@ -526,7 +526,7 @@ ThemeMetric<bool> BATTLE_RAVE_MIRROR("Player", "BattleRaveMirror");
 float Player::GetWindowSeconds(TimingWindow tw) {
   if (tw < 0 || tw >= NUM_TimingWindow) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid timing window %i; using W5 fallback.",
+        "Invalid timing window %i; using W5 fallback.",
         static_cast<int>(tw));
     tw = TW_W5;
   }
@@ -538,7 +538,7 @@ float Player::GetWindowSeconds(TimingWindow tw) {
     std::string unusedName;
     TimingWindowSecondsInit(tw, unusedName, unusedDefault);
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid timing window seconds %f for %s; using %f.",
+        "Invalid timing window seconds %f for %s; using %f.",
         fSecs, unusedName.c_str(), unusedDefault);
     fSecs = unusedDefault;
   }
@@ -659,7 +659,7 @@ void Player::Init(
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (style == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Player::Init missing valid player style; visible "
+        "Player::Init missing valid player style; visible "
         "player parts will not be initialized.");
     return;
   }
@@ -700,7 +700,7 @@ void Player::Init(
       iNumEnabledPlayers = 1;
     } else if (iEnabledPlayerIndex < 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: PlayerState was not enabled during Init; using "
+          "PlayerState was not enabled during Init; using "
           "fallback enabled player index.");
       iEnabledPlayerIndex = 0;
     }
@@ -810,7 +810,7 @@ void Player::Init(
         Trail* trail = GAMESTATE->m_pCurTrail[pn];
         if (trail == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Missing trail while calculating read BPM; "
+              "Missing trail while calculating read BPM; "
               "using default.");
           fMaxBPM = PlayerReadBpmFallback;
         } else {
@@ -831,7 +831,7 @@ void Player::Init(
       } else {
         if (GAMESTATE->m_pCurSong == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX: Missing song while calculating read BPM; using "
+              "Missing song while calculating read BPM; using "
               "default.");
           fMaxBPM = PlayerReadBpmFallback;
         } else if (M_MOD_HIGH_CAP > 0) {
@@ -845,7 +845,7 @@ void Player::Init(
 
     if (!std::isfinite(fMaxBPM) || fMaxBPM <= 0.0f) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid read BPM %f; using default CMod BPM.",
+          "Invalid read BPM %f; using default CMod BPM.",
           fMaxBPM);
       fMaxBPM = PlayerReadBpmFallback;
     }
@@ -865,7 +865,7 @@ void Player::Init(
         m_pActorWithComboPosition = &*m_sprCombo;
         this->AddChild(m_sprCombo);
       } else {
-        LOG->Warn("SRC_AUDIT_FIX SRC-2022: Player combo actor did not load.");
+        LOG->Warn("Player combo actor did not load.");
         m_pActorWithComboPosition = nullptr;
       }
 
@@ -878,7 +878,7 @@ void Player::Init(
         m_pActorWithJudgmentPosition = &*m_sprJudgment;
         this->AddChild(m_sprJudgment);
       } else {
-        LOG->Warn("SRC_AUDIT_FIX SRC-2022: Player judgment actor did not load.");
+        LOG->Warn("Player judgment actor did not load.");
         m_pActorWithJudgmentPosition = nullptr;
       }
     };
@@ -891,7 +891,7 @@ void Player::Init(
       loadVisibleActors();
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2021: Loading player actors without Lua thread "
+          "Loading player actors without Lua thread "
           "variables.");
       loadVisibleActors();
     }
@@ -905,7 +905,7 @@ void Player::Init(
       std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
   if (colsPerPlayer != style->m_iColsPerPlayer) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Clamped invalid style column count %i to %i.",
+        "Clamped invalid style column count %i to %i.",
         style->m_iColsPerPlayer, colsPerPlayer);
   }
   m_vpHoldJudgment.resize(colsPerPlayer);
@@ -929,7 +929,7 @@ void Player::Init(
     if (LUA != nullptr) {
       ActorUtil::LoadAllCommands(*m_pNoteField, sType);
     } else {
-      LOG->Warn("SRC_AUDIT_FIX SRC-2021: NoteField commands skipped without Lua.");
+      LOG->Warn("NoteField commands skipped without Lua.");
     }
     this->AddChild(m_pNoteField);
   }
@@ -955,7 +955,7 @@ static bool NeedsTapJudging(const TapNote& tn) {
       return false;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid TapNoteType %i in NeedsTapJudging.",
+          "Invalid TapNoteType %i in NeedsTapJudging.",
           tn.type);
       return false;
   }
@@ -980,7 +980,7 @@ static bool NeedsHoldJudging(const TapNote& tn) {
       return false;
     default:
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid TapNoteType %i in NeedsHoldJudging.",
+          "Invalid TapNoteType %i in NeedsHoldJudging.",
           tn.type);
       return false;
   }
@@ -989,7 +989,7 @@ static bool NeedsHoldJudging(const TapNote& tn) {
 static void GenerateCacheDataStructure(
     PlayerState* pPlayerState, const NoteData& notes) {
   if (pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2048: Skipping cache generation without state.");
+    LOG->Warn("Skipping cache generation without state.");
     return;
   }
   pPlayerState->m_CacheDisplayedBeat.clear();
@@ -1005,7 +1005,7 @@ static void GenerateCacheDataStructure(
     if (seg == nullptr || !std::isfinite(seg->GetBeat()) ||
         !std::isfinite(seg->GetRatio())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2048: Ignoring invalid scroll segment in player "
+          "Ignoring invalid scroll segment in player "
           "cache.");
       continue;
     }
@@ -1014,7 +1014,7 @@ static void GenerateCacheDataStructure(
     lastRatio = seg->GetRatio();
     if (!std::isfinite(displayedBeat)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2048: Reset invalid displayed beat cache value.");
+          "Reset invalid displayed beat cache value.");
       displayedBeat = lastRealBeat;
       lastRatio = 1.0f;
     }
@@ -1047,7 +1047,7 @@ void Player::Load() {
   RageUtil::SafeDelete(m_pIterUnjudgedRows);
   RageUtil::SafeDelete(m_pIterUnjudgedMineRows);
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Player::Load called without gameplay state.");
+    LOG->Warn("Player::Load called without gameplay state.");
     return;
   }
 
@@ -1057,14 +1057,14 @@ void Player::Load() {
       !IsValidPlayerNumberForPlayer(pn) ||
       GAMESTATE->m_pCurSteps[pn] == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Player::Load missing song, steps, style, or player; "
+        "Player::Load missing song, steps, style, or player; "
         "load aborted.");
     return;
   }
 
   m_Timing = GAMESTATE->m_pCurSteps[pn]->GetTimingData();
   if (m_Timing == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Player::Load missing timing data; load aborted.");
+    LOG->Warn("Player::Load missing timing data; load aborted.");
     return;
   }
 
@@ -1138,7 +1138,7 @@ void Player::Load() {
             break;
           default:
             LOG->Warn(
-                "SRC_AUDIT_FIX: Invalid battle mirror slot %i; leaving notes "
+                "Invalid battle mirror slot %i; leaving notes "
                 "unmirrored.",
                 mirrorSlot);
             break;
@@ -1201,7 +1201,7 @@ void Player::Load() {
     if (!IsConfinedSongAssetPath(
             sSongDir, pSong->m_vsKeysoundFile[i], sKeysoundFilePath)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2047: Ignoring unsafe keysound path '%s'.",
+          "Ignoring unsafe keysound path '%s'.",
           pSong->m_vsKeysoundFile[i].c_str());
       sound.Unload();
       continue;
@@ -1239,7 +1239,7 @@ void Player::Load() {
 void Player::SendComboMessages(
     unsigned int iOldCombo, unsigned int iOldMissCombo) {
   if (m_pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2023: Combo message skipped without state.");
+    LOG->Warn("Combo message skipped without state.");
     return;
   }
   const unsigned int iCurCombo =
@@ -1282,7 +1282,7 @@ void Player::Update(float fDeltaTime) {
   if (GAMESTATE == nullptr || m_pPlayerState == nullptr || m_Timing == nullptr ||
       style == nullptr || GAMESTATE->m_pCurSong == nullptr || IsOniDead()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Player::Update skipped because gameplay context is "
+        "Player::Update skipped because gameplay context is "
         "incomplete.");
     return;
   }
@@ -1466,7 +1466,7 @@ void Player::Update(float fDeltaTime) {
       std::clamp(style->m_iColsPerPlayer, 0, MAX_COLS_PER_PLAYER);
   if (iNumCols != style->m_iColsPerPlayer) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Clamped invalid update column count %i to %i.",
+        "Clamped invalid update column count %i to %i.",
         style->m_iColsPerPlayer, iNumCols);
   }
   for (int col = 0; col < iNumCols; ++col) {
@@ -1532,7 +1532,7 @@ void Player::Update(float fDeltaTime) {
 
     if (m_pIterNeedsTapJudging == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Missing tap judging iterator in Player::Update.");
+          "Missing tap judging iterator in Player::Update.");
       return;
     }
     for (auto iter = *m_pIterNeedsTapJudging;
@@ -1584,7 +1584,7 @@ void Player::Update(float fDeltaTime) {
         }
       } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX SRC-2024: Held miss input check skipped without "
+            "Held miss input check skipped without "
             "INPUTMAPPER.");
       }
       tn.result.bHeld = maxSecsHeld >= secsSinceNote;
@@ -1597,7 +1597,7 @@ void Player::Update(float fDeltaTime) {
     {
       if (m_pIterNeedsHoldJudging == nullptr) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Missing hold judging iterator in Player::Update.");
+            "Missing hold judging iterator in Player::Update.");
         return;
       }
       NoteData::all_tracks_iterator& iter = *m_pIterNeedsHoldJudging;
@@ -1634,7 +1634,7 @@ void Player::Update(float fDeltaTime) {
           continue;  // don't process this below
         default:
           LOG->Warn(
-              "SRC_AUDIT_FIX: Invalid TapNoteSubType %i in Player::Update; "
+              "Invalid TapNoteSubType %i in Player::Update; "
               "skipping hold note.",
               tn.subType);
           continue;
@@ -1679,7 +1679,7 @@ void Player::Update(float fDeltaTime) {
         m_pPlayerState->GetDisplayedTiming().GetBeatFromElapsedTime(
             fPositionSeconds);
     if (!std::isfinite(fDisplayedSongBeat)) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-2035: Crossed row beat is invalid.");
+      LOG->Warn("Crossed row beat is invalid.");
       return;
     }
     const int iRowNow = BeatToNoteRowNotRounded(fDisplayedSongBeat);
@@ -1720,13 +1720,13 @@ void Player::UpdateHoldNotes(
     int iSongRow, float fDeltaTime, std::vector<TrackRowTapNote>& vTN) {
   fDeltaTime = SanitizePlayerDelta(fDeltaTime, "Player::UpdateHoldNotes");
   if (vTN.empty() || m_pPlayerState == nullptr || GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid Player::UpdateHoldNotes context.");
+    LOG->Warn("Invalid Player::UpdateHoldNotes context.");
     return;
   }
 
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (style == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Missing style in Player::UpdateHoldNotes.");
+    LOG->Warn("Missing style in Player::UpdateHoldNotes.");
     return;
   }
 
@@ -1738,7 +1738,7 @@ void Player::UpdateHoldNotes(
 
   int iStartRow = vTN[0].iRow;
   if (iStartRow < 0 || iStartRow > MAX_NOTE_ROW) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2040: Invalid hold start row %i.",
+    LOG->Warn("Invalid hold start row %i.",
               iStartRow);
     return;
   }
@@ -1753,7 +1753,7 @@ void Player::UpdateHoldNotes(
     if (trtn.pTN == nullptr || trtn.iRow != iStartRow || iTrack < 0 ||
         iTrack >= m_NoteData.GetNumTracks() || iTrack >= styleTracks) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid grouped hold note at row %i track %i; "
+          "Invalid grouped hold note at row %i track %i; "
           "skipping group.",
           trtn.iRow, iTrack);
       return;
@@ -1761,21 +1761,21 @@ void Player::UpdateHoldNotes(
     TapNote& tn = *trtn.pTN;
     if (!IsValidHoldNoteScoreForPlayer(tn.HoldResult.hns)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid hold score %i at row %i track %i; "
+          "Invalid hold score %i at row %i track %i; "
           "resetting it.",
           tn.HoldResult.hns, trtn.iRow, iTrack);
       tn.HoldResult.hns = HNS_None;
     }
     if (!IsValidTapNoteScoreForPlayer(tn.result.tns)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid tap score %i at row %i track %i; resetting "
+          "Invalid tap score %i at row %i track %i; resetting "
           "it.",
           tn.result.tns, trtn.iRow, iTrack);
       tn.result.tns = TNS_None;
     }
     if (!IsValidTapNoteScoreForPlayer(tn.result.earlyTns)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid early tap score %i at row %i track %i; "
+          "Invalid early tap score %i at row %i track %i; "
           "resetting it.",
           tn.result.earlyTns, trtn.iRow, iTrack);
       tn.result.earlyTns = TNS_None;
@@ -1790,7 +1790,7 @@ void Player::UpdateHoldNotes(
     if (tn.subType != subType ||
         !IsValidTapNoteSubTypeForPlayer(tn.subType)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid or mixed hold subtype %i at row %i; "
+          "Invalid or mixed hold subtype %i at row %i; "
           "skipping group.",
           tn.subType, trtn.iRow);
       return;
@@ -1803,7 +1803,7 @@ void Player::UpdateHoldNotes(
   }
 
   if (iFirstTrackWithMaxEndRow < 0) {
-    LOG->Warn("SRC_AUDIT_FIX: Hold group has no valid end row.");
+    LOG->Warn("Hold group has no valid end row.");
     return;
   }
   // LOG->Trace( ssprintf("start row: %i; max/end row: =
@@ -1928,7 +1928,7 @@ void Player::UpdateHoldNotes(
               INPUTMAPPER->IsBeingPressed(GameI, m_pPlayerState->m_mp);
         } else {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-2027: Hold input check skipped without "
+              "Hold input check skipped without "
               "INPUTMAPPER.");
           bIsHoldingButton = false;
         }
@@ -1988,7 +1988,7 @@ void Player::UpdateHoldNotes(
           const float windowSeconds = GetWindowSeconds(window);
           if (windowSeconds <= 0.0f) {
             LOG->Warn(
-                "SRC_AUDIT_FIX: Non-positive hold timing window; preserving "
+                "Non-positive hold timing window; preserving "
                 "hold life.");
             break;
           }
@@ -2013,7 +2013,7 @@ void Player::UpdateHoldNotes(
           const float windowSeconds = GetWindowSeconds(TW_Roll);
           if (windowSeconds <= 0.0f) {
             LOG->Warn(
-                "SRC_AUDIT_FIX: Non-positive roll timing window; preserving "
+                "Non-positive roll timing window; preserving "
                 "roll life.");
             break;
           }
@@ -2027,7 +2027,7 @@ void Player::UpdateHoldNotes(
       */
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX: Invalid tap note subtype %i in UpdateHoldNotes.",
+            "Invalid tap note subtype %i in UpdateHoldNotes.",
             subType);
         return;
     }
@@ -2085,7 +2085,7 @@ void Player::UpdateHoldNotes(
         */
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX: Invalid tap note subtype %i while scoring hold.",
+            "Invalid tap note subtype %i while scoring hold.",
             subType);
         return;
     }
@@ -2158,7 +2158,7 @@ void Player::UpdateHoldNotes(
           ? fLife / maxHoldLife
           : 0.0f;
   if (!std::isfinite(fLifeFraction)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2028: Invalid hold life fraction %f.",
+    LOG->Warn("Invalid hold life fraction %f.",
               fLifeFraction);
     fLifeFraction = 0.0f;
   }
@@ -2212,7 +2212,7 @@ void Player::ApplyWaitingTransforms() {
       GAMESTATE->m_pCurSong == nullptr || m_Timing == nullptr ||
       style == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Skipping waiting transforms because gameplay context "
+        "Skipping waiting transforms because gameplay context "
         "is incomplete.");
     return;
   }
@@ -2227,7 +2227,7 @@ void Player::ApplyWaitingTransforms() {
         GAMESTATE->m_pCurSong, m_pPlayerState, fStartBeat, fEndBeat);
     if (!std::isfinite(fStartBeat) || !std::isfinite(fEndBeat)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Ignoring transform '%s' with invalid beats %f-%f.",
+          "Ignoring transform '%s' with invalid beats %f-%f.",
           mod.sModifiers.c_str(), fStartBeat, fEndBeat);
       continue;
     }
@@ -2254,7 +2254,7 @@ void Player::DrawPrimitives() {
   if (!m_bLoaded || GAMESTATE == nullptr || m_pPlayerState == nullptr ||
       style == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Skipping Player::DrawPrimitives before a complete "
+        "Skipping Player::DrawPrimitives before a complete "
         "load or without style.");
     return;
   }
@@ -2341,7 +2341,7 @@ void Player::DrawPrimitives() {
 
 bool Player::PushPlayerMatrix(float x, float skew, float center_y) {
   if (DISPLAY == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2029: PushPlayerMatrix skipped without DISPLAY.");
+    LOG->Warn("PushPlayerMatrix skipped without DISPLAY.");
     return false;
   }
   DISPLAY->CameraPushMatrix();
@@ -2354,7 +2354,7 @@ bool Player::PushPlayerMatrix(float x, float skew, float center_y) {
 
 void Player::PopPlayerMatrix() {
   if (DISPLAY == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2029: PopPlayerMatrix skipped without DISPLAY.");
+    LOG->Warn("PopPlayerMatrix skipped without DISPLAY.");
     return;
   }
   DISPLAY->CameraPopMatrix();
@@ -2437,7 +2437,7 @@ Player::PlayerNoteFieldPositioner::PlayerNoteFieldPositioner(
     : player(p), matrix_pushed(false) {
   if (player == nullptr || player->m_pNoteField == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2029: PlayerNoteFieldPositioner skipped invalid "
+        "PlayerNoteFieldPositioner skipped invalid "
         "player/notefield.");
     player = nullptr;
     original_y = 0.0f;
@@ -2498,7 +2498,7 @@ Player::PlayerNoteFieldPositioner::~PlayerNoteFieldPositioner() {
 
 void Player::DrawTapJudgments() {
   if (m_pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2030: DrawTapJudgments skipped without state.");
+    LOG->Warn("DrawTapJudgments skipped without state.");
     return;
   }
   if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fBlind > 0) {
@@ -2512,7 +2512,7 @@ void Player::DrawTapJudgments() {
 
 void Player::DrawHoldJudgments() {
   if (m_pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2030: DrawHoldJudgments skipped without state.");
+    LOG->Warn("DrawHoldJudgments skipped without state.");
     return;
   }
   if (m_pPlayerState->m_PlayerOptions.GetCurrent().m_fBlind > 0) {
@@ -2533,7 +2533,7 @@ void Player::ChangeLife(TapNoteScore tns) {
       !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
       !IsValidTapNoteScoreForPlayer(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring invalid ChangeLife tap score %i.", tns);
+        "Ignoring invalid ChangeLife tap score %i.", tns);
     return;
   }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
@@ -2565,7 +2565,7 @@ void Player::ChangeLife(HoldNoteScore hns, TapNoteScore tns) {
       !IsValidHoldNoteScoreForPlayer(hns) ||
       !IsValidTapNoteScoreForPlayer(tns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring invalid ChangeLife hold/tap score %i/%i.",
+        "Ignoring invalid ChangeLife hold/tap score %i/%i.",
         hns, tns);
     return;
   }
@@ -2584,7 +2584,7 @@ void Player::ChangeLife(float delta) {
   if (m_pPlayerState == nullptr ||
       !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
       !std::isfinite(delta)) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life delta %f.", delta);
+    LOG->Warn("Ignoring invalid life delta %f.", delta);
     return;
   }
   // If ChangeLifeRecord is not called before the change, then the life graph
@@ -2606,7 +2606,7 @@ void Player::SetLife(float value) {
   if (m_pPlayerState == nullptr ||
       !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber) ||
       !std::isfinite(value)) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid life value %f.", value);
+    LOG->Warn("Ignoring invalid life value %f.", value);
     return;
   }
   // If ChangeLifeRecord is not called before the change, then the life graph
@@ -2627,7 +2627,7 @@ void Player::SetLife(float value) {
 void Player::ChangeLifeRecord() {
   if (m_pPlayerState == nullptr ||
       !IsValidPlayerNumberForPlayer(m_pPlayerState->m_PlayerNumber)) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring life record without PlayerState.");
+    LOG->Warn("Ignoring life record without PlayerState.");
     return;
   }
   PlayerNumber pn = m_pPlayerState->m_PlayerNumber;
@@ -2639,7 +2639,7 @@ void Player::ChangeLifeRecord() {
   }
   if (fLife != -1) {
     if (!std::isfinite(fLife)) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-2031: Ignoring invalid life record %f.",
+      LOG->Warn("Ignoring invalid life record %f.",
                 fLife);
       return;
     }
@@ -2655,7 +2655,7 @@ int Player::GetClosestNoteDirectional(
     bool bForward) const {
   if (m_Timing == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid closest note search col %i with %i tracks.",
+        "Invalid closest note search col %i with %i tracks.",
         col, m_NoteData.GetNumTracks());
     return -1;
   }
@@ -2707,7 +2707,7 @@ int Player::GetClosestNote(
     bool bAllowGraded) const {
   if (m_Timing == nullptr || col < 0 || col >= m_NoteData.GetNumTracks()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid closest note context col %i with %i tracks.",
+        "Invalid closest note context col %i with %i tracks.",
         col, m_NoteData.GetNumTracks());
     return -1;
   }
@@ -2738,7 +2738,7 @@ int Player::GetClosestNote(
 int Player::GetClosestNonEmptyRowDirectional(
     int iStartRow, int iEndRow, bool bAllowGraded, bool bForward) const {
   if (m_Timing == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Missing timing in closest row search.");
+    LOG->Warn("Missing timing in closest row search.");
     return -1;
   }
   iStartRow = std::clamp(iStartRow, 0, MAX_NOTE_ROW);
@@ -2788,7 +2788,7 @@ int Player::GetClosestNonEmptyRow(
     int iNoteRow, int iMaxRowsAhead, int iMaxRowsBehind,
     bool bAllowGraded) const {
   if (m_Timing == nullptr || m_pPlayerState == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid closest non-empty row context.");
+    LOG->Warn("Invalid closest non-empty row context.");
     return -1;
   }
   // Start at iIndexStartLookingAt and search outward.
@@ -2876,7 +2876,7 @@ void Player::DoTapScoreNone() {
     m_pCombinedLifeMeter->HandleTapScoreNone(pn);
   } else if (m_pCombinedLifeMeter) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Combined TapScoreNone skipped without valid player.");
+        "Combined TapScoreNone skipped without valid player.");
   }
 
   if (const char* mode = GetPlayerRoutineCoupleMode(pn)) {
@@ -2902,7 +2902,7 @@ void Player::DoTapScoreNone() {
   if (PENALIZE_TAP_SCORE_NONE) {
     if (m_pPlayerState == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2032: TapScoreNone penalty skipped without state.");
+          "TapScoreNone penalty skipped without state.");
       return;
     }
     SetJudgment(
@@ -2919,7 +2919,7 @@ void Player::ScoreAllActiveHoldsLetGo() {
   if (PENALIZE_TAP_SCORE_NONE) {
     if (m_pPlayerState == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2033: Active hold let-go skipped without state.");
+          "Active hold let-go skipped without state.");
       return;
     }
     const float fSongBeat = SanitizePlayerFinite(
@@ -2969,7 +2969,7 @@ void Player::PlayKeysound(const TapNote& tn, TapNoteScore score) {
     }
     if (!m_vKeysounds[tn.iKeysoundIndex].IsLoaded()) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2047: Keysound index %i is not loaded.",
+          "Keysound index %i is not loaded.",
           tn.iKeysoundIndex);
       return;
     }
@@ -2992,12 +2992,12 @@ void Player::Step(
       GAMESTATE->GetCurrentGame() == nullptr || style == nullptr || col < 0 ||
       col >= m_NoteData.GetNumTracks()) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Ignoring invalid Player::Step col %i row %i.", col,
+        "Ignoring invalid Player::Step col %i row %i.", col,
         row);
     return;
   }
   if (row < -1 || row > MAX_NOTE_ROW) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring invalid Player::Step row %i.", row);
+    LOG->Warn("Ignoring invalid Player::Step row %i.", row);
     return;
   }
   if (IsOniDead()) {
@@ -3068,7 +3068,7 @@ void Player::Step(
           break;
         default:
           LOG->Warn(
-              "SRC_AUDIT_FIX: Invalid roll subtype %i in Player::Step.",
+              "Invalid roll subtype %i in Player::Step.",
               tn.subType);
           continue;
       }
@@ -3143,7 +3143,7 @@ void Player::Step(
                             : nullptr;
     if (pProfile == nullptr || INPUTMAPPER == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2034: Calorie count skipped without profile/input.");
+          "Calorie count skipped without profile/input.");
     } else {
       int iNumTracksHeld = 0;
       const float timingWindowJump = SanitizePlayerNonNegative(
@@ -3182,7 +3182,7 @@ void Player::Step(
               SCALE(tracksForCalories, 1, 2, 0.041f, 0.133f);
           const float weight = pProfile->GetCalculatedWeightPounds();
           if (!std::isfinite(weight) || weight <= 0.0f) {
-            LOG->Warn("SRC_AUDIT_FIX: Invalid profile weight for calories.");
+            LOG->Warn("Invalid profile weight for calories.");
             break;
           }
           fCals = SCALE(
@@ -3271,7 +3271,7 @@ void Player::Step(
 
     const float fSecondsFromExact = std::abs(fNoteOffset);
     if (!std::isfinite(fSecondsFromExact)) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-2035: Ignoring non-finite note offset.");
+      LOG->Warn("Ignoring non-finite note offset.");
       return;
     }
 
@@ -3281,14 +3281,14 @@ void Player::Step(
         m_NoteData.FindTapNote(col, iRowOfOverlappingNoteOrRow);
     if (iter == m_NoteData.end(col)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Player::Step found no note at col %i row %i.", col,
+          "Player::Step found no note at col %i row %i.", col,
           iRowOfOverlappingNoteOrRow);
       return;
     }
     pTN = &iter->second;
     if (!IsValidTapNoteTypeForPlayer(pTN->type)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: Invalid tap note type %i at col %i row %i.",
+          "Invalid tap note type %i at col %i row %i.",
           pTN->type, col, iRowOfOverlappingNoteOrRow);
       return;
     }
@@ -3483,7 +3483,7 @@ void Player::Step(
       }
       default:
         LOG->Warn(
-            "SRC_AUDIT_FIX: Invalid player controller type %i in Step.",
+            "Invalid player controller type %i in Step.",
             m_pPlayerState->m_PlayerController);
         return;
     }
@@ -3509,7 +3509,7 @@ void Player::Step(
         pPlayerStateToAttack->LaunchAttack(attack);
       } else {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Consuming attack note without target player %i.",
+            "Consuming attack note without target player %i.",
             pnToAttack);
       }
 
@@ -3530,7 +3530,7 @@ void Player::Step(
     // Do game-specific and mode-specific score mapping.
     const Game* currentGame = GAMESTATE->GetCurrentGame();
     if (currentGame == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX SRC-2036: Step scoring skipped without game.");
+      LOG->Warn("Step scoring skipped without game.");
       return;
     }
     score = currentGame->MapTapNoteScore(score);
@@ -3691,7 +3691,7 @@ void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
       !std::isfinite(fMissIfOlderThanSeconds) ||
       fMissIfOlderThanSeconds < 0.0f) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid UpdateTapNotesMissedOlderThan context/window.");
+        "Invalid UpdateTapNotesMissedOlderThan context/window.");
     return;
   }
   // LOG->Trace( "Steps::UpdateTapNotesMissedOlderThan(%f)",
@@ -3708,7 +3708,7 @@ void Player::UpdateTapNotesMissedOlderThan(float fMissIfOlderThanSeconds) {
     m_Timing->GetBeatAndBPSFromElapsedTime(beat_info);
     if (!std::isfinite(beat_info.beat)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2038: Miss horizon produced invalid beat %f.",
+          "Miss horizon produced invalid beat %f.",
           beat_info.beat);
       return;
     }
@@ -3764,7 +3764,7 @@ void Player::UpdateJudgedRows() {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
       GAMESTATE->GetCurrentGame() == nullptr || m_Timing == nullptr ||
       m_pIterUnjudgedRows == nullptr || m_pIterUnjudgedMineRows == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid UpdateJudgedRows context.");
+    LOG->Warn("Invalid UpdateJudgedRows context.");
     return;
   }
   // Look ahead far enough to catch any rows judged early.
@@ -3774,7 +3774,7 @@ void Player::UpdateJudgedRows() {
           "Player::UpdateJudgedRows music seconds") +
       GetMaxStepDistanceSeconds());
   if (!std::isfinite(endBeat)) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2038: Judged row horizon is invalid.");
+    LOG->Warn("Judged row horizon is invalid.");
     return;
   }
   const int iEndRow = BeatToNoteRow(endBeat);
@@ -3872,7 +3872,7 @@ void Player::UpdateJudgedRows() {
           break;
         default:
           LOG->Warn(
-              "SRC_AUDIT_FIX: Invalid mine tap score %i at row %i.",
+              "Invalid mine tap score %i at row %i.",
               tn.result.tns, iRow);
           tn.result.bHidden = true;
           continue;
@@ -3898,7 +3898,7 @@ void Player::UpdateJudgedRows() {
             ATTACK_RUN_TIME_MINE, 0.0f, "Player::UpdateJudgedRows mine attack");
         if (fAttackRunTime <= 0.0f) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-2039: Mine attack skipped invalid runtime.");
+              "Mine attack skipped invalid runtime.");
         } else {
           Attack attMineAttack;
           attMineAttack.sModifiers = ApplyRandomAttack();
@@ -3946,7 +3946,7 @@ void Player::UpdateJudgedRows() {
 void Player::FlashGhostRow(int iRow) {
   if (m_pPlayerState == nullptr || iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2030: FlashGhostRow skipped invalid state/row %i.",
+        "FlashGhostRow skipped invalid state/row %i.",
         iRow);
     return;
   }
@@ -3983,7 +3983,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
   const Style* style = GetSafePlayerStyle(m_pPlayerState);
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
       m_pIterUncrossedRows == nullptr || style == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid CrossedRows context.");
+    LOG->Warn("Invalid CrossedRows context.");
     return;
   }
   iLastRowCrossed = std::clamp(iLastRowCrossed, 0, MAX_NOTE_ROW);
@@ -4002,7 +4002,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
         if (!REQUIRE_STEP_ON_HOLD_HEADS) {
           if (INPUTMAPPER == nullptr) {
             LOG->Warn(
-                "SRC_AUDIT_FIX SRC-2040: Hold head input skipped without "
+                "Hold head input skipped without "
                 "INPUTMAPPER.");
             break;
           }
@@ -4029,7 +4029,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
       case TapNoteType_Mine: {
         if (INPUTMAPPER == nullptr) {
           LOG->Warn(
-              "SRC_AUDIT_FIX SRC-2040: Mine input skipped without INPUTMAPPER.");
+              "Mine input skipped without INPUTMAPPER.");
           break;
         }
         // Hold the panel while crossing a mine will cause the mine to explode
@@ -4100,7 +4100,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
           tickCurrent > 0 ? ROWS_PER_BEAT / tickCurrent : 0;
       if (tickCurrent > 0 && tickInterval <= 0) {
         LOG->Warn(
-            "SRC_AUDIT_FIX: Ignoring invalid tick count %i at row %i.",
+            "Ignoring invalid tick count %i at row %i.",
             tickCurrent, r);
         continue;
       }
@@ -4151,7 +4151,7 @@ void Player::CrossedRows(int iLastRowCrossed, const RageTimer& now) {
 void Player::HandleTapRowScore(unsigned row) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr || m_Timing == nullptr ||
       row > (unsigned)MAX_NOTE_ROW) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleTapRowScore context/row %u.", row);
+    LOG->Warn("Invalid HandleTapRowScore context/row %u.", row);
     return;
   }
   bool bNoCheating = true;
@@ -4312,12 +4312,12 @@ void Player::HandleHoldCheckpoint(
     const std::vector<int>& viColsWithHold) {
   if (m_pPlayerState == nullptr || m_Timing == nullptr ||
       viColsWithHold.empty()) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleHoldCheckpoint context.");
+    LOG->Warn("Invalid HandleHoldCheckpoint context.");
     return;
   }
   if (iNumHoldsHeldThisRow < 0 || iNumHoldsMissedThisRow < 0) {
     LOG->Warn(
-        "SRC_AUDIT_FIX SRC-2041: Invalid checkpoint counts held=%i missed=%i.",
+        "Invalid checkpoint counts held=%i missed=%i.",
         iNumHoldsHeldThisRow, iNumHoldsMissedThisRow);
     return;
   }
@@ -4383,7 +4383,7 @@ void Player::HandleHoldCheckpoint(
 
 void Player::HandleHoldScore(const TapNote& tn) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid HandleHoldScore context.");
+    LOG->Warn("Invalid HandleHoldScore context.");
     return;
   }
   HoldNoteScore holdScore = tn.HoldResult.hns;
@@ -4391,7 +4391,7 @@ void Player::HandleHoldScore(const TapNote& tn) {
   if (!IsValidHoldNoteScoreForPlayer(holdScore) ||
       !IsValidTapNoteScoreForPlayer(tapScore)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid hold score pair %i/%i.", holdScore, tapScore);
+        "Invalid hold score pair %i/%i.", holdScore, tapScore);
     return;
   }
   bool bNoCheating = true;
@@ -4499,7 +4499,7 @@ void Player::CacheAllUsedNoteSkins() {
 
 void Player::SetMineJudgment(TapNoteScore tns, int iTrack) {
   if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns)) {
-    LOG->Warn("SRC_AUDIT_FIX: Invalid SetMineJudgment score %i.", tns);
+    LOG->Warn("Invalid SetMineJudgment score %i.", tns);
     return;
   }
   ++m_iPerfMineJudgmentsSinceLastSnapshot;
@@ -4525,7 +4525,7 @@ void Player::SetJudgment(
   if (m_pPlayerState == nullptr || !IsValidTapNoteScoreForPlayer(tns) ||
       iRow < 0 || iRow > MAX_NOTE_ROW) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid SetJudgment row %i track %i score %i.", iRow,
+        "Invalid SetJudgment row %i track %i score %i.", iRow,
         iTrack, tns);
     return;
   }
@@ -4577,7 +4577,7 @@ void Player::SetJudgment(
       LUA->Release(L);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2043: Judgment Lua payload skipped without Lua.");
+          "Judgment Lua payload skipped without Lua.");
     }
     BroadcastPlayerMessage(msg, "Player::SetJudgment");
   }
@@ -4589,7 +4589,7 @@ void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
       !IsValidTapNoteScoreForPlayer(tn.result.tns) ||
       !IsValidHoldNoteScoreForPlayer(tn.HoldResult.hns)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: Invalid SetHoldJudgment track %i scores %i/%i.",
+        "Invalid SetHoldJudgment track %i scores %i/%i.",
         iTrack, tn.result.tns, tn.HoldResult.hns);
     return;
   }
@@ -4615,7 +4615,7 @@ void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
       LUA->Release(L);
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX SRC-2043: Hold judgment Lua payload skipped without "
+          "Hold judgment Lua payload skipped without "
           "Lua.");
     }
 
@@ -4626,7 +4626,7 @@ void Player::SetHoldJudgment(TapNote& tn, int iTrack) {
 void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr ||
       m_pPlayerStageStats == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: Ignoring SetCombo without gameplay stats.");
+    LOG->Warn("Ignoring SetCombo without gameplay stats.");
     return;
   }
   if (!m_bSeenComboYet)  // first update, don't set bIsMilestone=true
@@ -4689,7 +4689,7 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
       PERCENT_UNTIL_COLOR_COMBO, 0.0f, "Player::SetCombo color percent");
   if (GAMESTATE->IsCourseMode()) {
     if (GAMESTATE->m_pCurCourse == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Missing course while setting combo.");
+      LOG->Warn("Missing course while setting combo.");
       return;
     }
     int iSongIndexStartColoring =
@@ -4699,7 +4699,7 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
     bPastBeginning = GAMESTATE->GetCourseSongIndex() >= iSongIndexStartColoring;
   } else {
     if (GAMESTATE->m_pCurSong == nullptr) {
-      LOG->Warn("SRC_AUDIT_FIX: Missing song while setting combo.");
+      LOG->Warn("Missing song while setting combo.");
       return;
     }
     const float musicSeconds = SanitizePlayerNonNegative(
@@ -4764,7 +4764,7 @@ void Player::IncrementComboOrMissCombo(bool bComboOrMissCombo) {
 
 std::string Player::ApplyRandomAttack() {
   if (GAMESTATE == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX SRC-2046: Random attack skipped without GAMESTATE.");
+    LOG->Warn("Random attack skipped without GAMESTATE.");
     return "";
   }
   if (GAMESTATE->m_RandomAttacks.size() < 1) {

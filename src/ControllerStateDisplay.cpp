@@ -114,19 +114,19 @@ void ControllerStateDisplay::LoadInternal(
   ClearLoadedActors();
   if (sType.empty() || THEME == nullptr) {
     WarnControllerStateDisplay(
-        "SRC_AUDIT_FIX SRC-1255: ControllerStateDisplay skipped load without "
+        "ControllerStateDisplay skipped load without "
         "theme or type.");
     return;
   }
   if (mp != MultiPlayer_Invalid && !IsValidControllerStateMultiPlayer(mp)) {
     WarnControllerStateDisplay(
-        "SRC_AUDIT_FIX SRC-1257: ControllerStateDisplay ignored invalid "
+        "ControllerStateDisplay ignored invalid "
         "multiplayer.");
     return;
   }
   if (!IsValidControllerStateGameController(gc)) {
     WarnControllerStateDisplay(
-        "SRC_AUDIT_FIX SRC-1257: ControllerStateDisplay ignored invalid game "
+        "ControllerStateDisplay ignored invalid game "
         "controller.");
     return;
   }

@@ -72,12 +72,12 @@ int SafeNonNegativeInt(float value, const char* context) {
   if (!std::isfinite(value) || value <= 0.0f) {
     if (!std::isfinite(value)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s ignored non-finite value %f.", context, value);
+          "%s ignored non-finite value %f.", context, value);
     }
     return 0;
   }
   if (value >= static_cast<float>(INT_MAX)) {
-    LOG->Warn("SRC_AUDIT_FIX: %s clamped oversized value %f.", context, value);
+    LOG->Warn("%s clamped oversized value %f.", context, value);
     return INT_MAX;
   }
   return static_cast<int>(value);
@@ -86,7 +86,7 @@ int SafeNonNegativeInt(float value, const char* context) {
 float SafeFiniteFloat(float value, const char* context) {
   if (!std::isfinite(value)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s replaced non-finite value %f.", context, value);
+        "%s replaced non-finite value %f.", context, value);
     return 0.0f;
   }
   return value;
@@ -95,7 +95,7 @@ float SafeFiniteFloat(float value, const char* context) {
 float SafeFiniteNonNegativeFloat(float value, const char* context) {
   value = SafeFiniteFloat(value, context);
   if (value < 0.0f) {
-    LOG->Warn("SRC_AUDIT_FIX: %s replaced negative value %f.", context, value);
+    LOG->Warn("%s replaced negative value %f.", context, value);
     return 0.0f;
   }
   return value;
@@ -103,7 +103,7 @@ float SafeFiniteNonNegativeFloat(float value, const char* context) {
 
 int SafeNonNegativeSize(size_t value, const char* context) {
   if (value > static_cast<size_t>(INT_MAX)) {
-    LOG->Warn("SRC_AUDIT_FIX: %s clamped oversized size %zu.", context, value);
+    LOG->Warn("%s clamped oversized size %zu.", context, value);
     return INT_MAX;
   }
   return static_cast<int>(value);
@@ -113,12 +113,12 @@ void SafeAddInt(int& target, int amount, const char* context) {
   if (amount <= 0) {
     if (amount < 0) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: %s ignored negative increment %d.", context, amount);
+          "%s ignored negative increment %d.", context, amount);
     }
     return;
   }
   if (target > INT_MAX - amount) {
-    LOG->Warn("SRC_AUDIT_FIX: %s saturated at INT_MAX.", context);
+    LOG->Warn("%s saturated at INT_MAX.", context);
     target = INT_MAX;
     return;
   }
@@ -197,7 +197,7 @@ bool HasSongRecentScoreContext(
   if (ss.m_vpPossibleSongs.empty() || ss.m_vpPossibleSongs[0] == nullptr ||
       pss.m_vpPossibleSteps.empty() || pss.m_vpPossibleSteps[0] == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: %s skipped incomplete song score context: songs=%zu "
+        "%s skipped incomplete song score context: songs=%zu "
         "steps=%zu.",
         context, ss.m_vpPossibleSongs.size(), pss.m_vpPossibleSteps.size());
     return false;
@@ -223,7 +223,7 @@ StatsManager::StatsManager() {
     LUA->Release(L);
   } else {
     LOG->Warn(
-        "SRC_AUDIT_FIX: StatsManager constructed without LUA; global binding "
+        "StatsManager constructed without LUA; global binding "
         "skipped.");
   }
 }
@@ -307,20 +307,20 @@ void AddPlayerStatsToProfile(
     Profile* pProfile, const StageStats& ss, PlayerNumber pn) {
   if (pProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped null profile for "
+        "AddPlayerStatsToProfile skipped null profile for "
         "player %d.",
         pn);
     return;
   }
   if (!IsValidPlayerNumber(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid player %d.",
+        "AddPlayerStatsToProfile skipped invalid player %d.",
         pn);
     return;
   }
   if (!IsValidPlayMode(ss.m_playMode)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid play mode %d.",
+        "AddPlayerStatsToProfile skipped invalid play mode %d.",
         ss.m_playMode);
     return;
   }
@@ -330,7 +330,7 @@ void AddPlayerStatsToProfile(
   }
   if (pss.m_pStyle == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped player %d without "
+        "AddPlayerStatsToProfile skipped player %d without "
         "style.",
         pn);
     return;
@@ -338,7 +338,7 @@ void AddPlayerStatsToProfile(
   if (pss.m_iStepsPlayed < 0 ||
       pss.m_vpPossibleSteps.size() < static_cast<size_t>(pss.m_iStepsPlayed)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped player %d with "
+        "AddPlayerStatsToProfile skipped player %d with "
         "invalid steps count %d/%zu.",
         pn, pss.m_iStepsPlayed, pss.m_vpPossibleSteps.size());
     return;
@@ -353,7 +353,7 @@ void AddPlayerStatsToProfile(
     Steps* pSteps = pss.m_vpPossibleSteps[i];
     if (pSteps == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped null steps at %d "
+          "AddPlayerStatsToProfile skipped null steps at %d "
           "for player %d.",
           i, pn);
       continue;
@@ -361,7 +361,7 @@ void AddPlayerStatsToProfile(
     Difficulty dc = pSteps->GetDifficulty();
     if (!IsValidDifficulty(dc)) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid difficulty "
+          "AddPlayerStatsToProfile skipped invalid difficulty "
           "%d for player %d.",
           dc, pn);
       continue;
@@ -413,7 +413,7 @@ void AddPlayerStatsToProfile(
           "AddPlayerStatsToProfile stages passed by grade");
     } else {
       LOG->Warn(
-          "SRC_AUDIT_FIX: AddPlayerStatsToProfile skipped invalid grade %d "
+          "AddPlayerStatsToProfile skipped invalid grade %d "
           "for player %d.",
           grade, pn);
     }
@@ -427,7 +427,7 @@ std::unique_ptr<XNode> MakeRecentScoreNode(
   if (IsCoursePlayMode(ss.m_playMode)) {
     if (pCourse == nullptr || pTrail == nullptr) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: MakeRecentScoreNode skipped course score because "
+          "MakeRecentScoreNode skipped course score because "
           "course=%p trail=%p.",
           static_cast<void*>(pCourse), static_cast<void*>(pTrail));
       return nullptr;
@@ -469,18 +469,18 @@ std::unique_ptr<XNode> MakeRecentScoreNode(
 
 void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
   if (pSS == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: CommitStatsToProfiles skipped null StageStats.");
+    LOG->Warn("CommitStatsToProfiles skipped null StageStats.");
     return;
   }
   if (PROFILEMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: CommitStatsToProfiles skipped without PROFILEMAN.");
+        "CommitStatsToProfiles skipped without PROFILEMAN.");
     return;
   }
   Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
   if (pMachineProfile == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: CommitStatsToProfiles continuing without machine "
+        "CommitStatsToProfiles continuing without machine "
         "profile.");
   }
 
@@ -590,7 +590,7 @@ void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
     SaveUploadFile(pSS);
   } else if (PREFSMAN == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: CommitStatsToProfiles skipped upload without "
+        "CommitStatsToProfiles skipped upload without "
         "PREFSMAN.");
   }
 
@@ -599,16 +599,16 @@ void StatsManager::CommitStatsToProfiles(const StageStats* pSS) {
 
 void StatsManager::SaveUploadFile(const StageStats* pSS) {
   if (pSS == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped null StageStats.");
+    LOG->Warn("SaveUploadFile skipped null StageStats.");
     return;
   }
   if (PROFILEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped without PROFILEMAN.");
+    LOG->Warn("SaveUploadFile skipped without PROFILEMAN.");
     return;
   }
   Profile* pMachineProfile = PROFILEMAN->GetMachineProfile();
   if (pMachineProfile == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped without machine profile.");
+    LOG->Warn("SaveUploadFile skipped without machine profile.");
     return;
   }
 
@@ -666,7 +666,7 @@ void StatsManager::SaveUploadFile(const StageStats* pSS) {
   }
 
   if (recentScoreCount == 0) {
-    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile skipped empty recent score file.");
+    LOG->Warn("SaveUploadFile skipped empty recent score file.");
     return;
   }
 
@@ -683,30 +683,30 @@ void StatsManager::SaveUploadFile(const StageStats* pSS) {
   if (bSaved) {
     std::string sStatsXmlSigFile = fn + SIGNATURE_APPEND;
     if (!CryptManager::SignFileToFile(fn, sStatsXmlSigFile)) {
-      LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile failed to sign %s.", fn.c_str());
+      LOG->Warn("SaveUploadFile failed to sign %s.", fn.c_str());
     }
   } else {
-    LOG->Warn("SRC_AUDIT_FIX: SaveUploadFile failed to write %s.", fn.c_str());
+    LOG->Warn("SaveUploadFile failed to write %s.", fn.c_str());
   }
 }
 
 void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   if (pSS == nullptr || !IsValidPlayerNumber(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore skipped invalid input stats=%p "
+        "SavePadmissScore skipped invalid input stats=%p "
         "player=%d.",
         static_cast<const void*>(pSS), pn);
     return;
   }
   if (PROFILEMAN == nullptr) {
-    LOG->Warn("SRC_AUDIT_FIX: SavePadmissScore skipped without PROFILEMAN.");
+    LOG->Warn("SavePadmissScore skipped without PROFILEMAN.");
     return;
   }
   const PlayerStageStats* playerStats = &pSS->m_player[pn];
   if (!IsValidPlayerNumber(playerStats->m_player_number) ||
       playerStats->m_player_number != pn) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore skipped mismatched player stat index "
+        "SavePadmissScore skipped mismatched player stat index "
         "%d for player %d.",
         playerStats->m_player_number, pn);
     return;
@@ -714,21 +714,21 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
   Profile* pp = PROFILEMAN->GetProfile(playerStats->m_player_number);
   if (pp == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d without profile.",
+        "SavePadmissScore skipped player %d without profile.",
         pn);
     return;
   }
   if (playerStats->m_vpPossibleSteps.empty() ||
       playerStats->m_vpPossibleSteps[0] == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d without steps.", pn);
+        "SavePadmissScore skipped player %d without steps.", pn);
     return;
   }
   Steps* steps = playerStats->m_vpPossibleSteps[0];  // XXX Courses and such
   Song* song = steps->m_pSong;
   if (song == nullptr) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore skipped player %d because steps have "
+        "SavePadmissScore skipped player %d because steps have "
         "no song.",
         pn);
     return;
@@ -776,7 +776,7 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
       steps->Compress();
     }
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore failed to serialize steps for player "
+        "SavePadmissScore failed to serialize steps for player "
         "%d.",
         pn);
     return;
@@ -928,14 +928,14 @@ void StatsManager::SavePadmissScore(const StageStats* pSS, PlayerNumber pn) {
       dir + Profile::MakeUniqueFileNameNoExtension(dir, sDate + " ") + ".xml";
   if (!XmlFileUtil::SaveToFile(xml.get(), fn, "", true)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: SavePadmissScore failed to write %s.", fn.c_str());
+        "SavePadmissScore failed to write %s.", fn.c_str());
   }
 }
 
 void StatsManager::UnjoinPlayer(PlayerNumber pn) {
   if (!IsValidPlayerNumber(pn)) {
     LOG->Warn(
-        "SRC_AUDIT_FIX: StatsManager::UnjoinPlayer ignored invalid player "
+        "StatsManager::UnjoinPlayer ignored invalid player "
         "%d.",
         pn);
     return;
@@ -1009,7 +1009,7 @@ class LunaStatsManager : public Luna<StatsManager> {
     if (p->m_vPlayedStageStats.size() >
         static_cast<size_t>(std::numeric_limits<int>::max())) {
       LOG->Warn(
-          "SRC_AUDIT_FIX: GetPlayedStageStats has too many stage stats: %zu.",
+          "GetPlayedStageStats has too many stage stats: %zu.",
           p->m_vPlayedStageStats.size());
       lua_pushnil(L);
       return 1;

@@ -232,14 +232,14 @@ static void AdjustVideoModeParams(VideoModeParams& p) {
   if (!EnumDisplaySettings(displayName, ENUM_CURRENT_SETTINGS, &dm)) {
     p.rate = 60;
     DWORD error = GetLastError();
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2930: EnumDisplaySettings fallback display='%s' "
+    LogRuntimeValidationDiagnostics(
+        "EnumDisplaySettings fallback display='%s' "
         "primary=%s error=%lu",
         p.sDisplayId.c_str(), displayName == nullptr ? "true" : "false",
         static_cast<unsigned long>(error));
     if (error == ERROR_SUCCESS) {
       // Some drivers return FALSE without setting an error. The 60 Hz
-      // fallback is intentional; review_src carries the diagnostic context.
+      // fallback is intentional; runtime_validation carries the diagnostic context.
     } else {
       LOG->Warn(
           "%s",

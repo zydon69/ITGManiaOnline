@@ -25,7 +25,7 @@
 namespace {
 constexpr int kMaxTextureHintResolution = 32768;
 
-void WarnBitmapTextureAuditFix(const char* message) {
+void WarnBitmapTextureSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
@@ -34,8 +34,8 @@ void WarnBitmapTextureAuditFix(const char* message) {
 RageSurface* MakeFallbackSurface() {
   RageSurface* fallback = RageSurfaceUtils::MakeDummySurface(64, 64);
   if (fallback == nullptr) {
-    WarnBitmapTextureAuditFix(
-        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture could not create fallback "
+    WarnBitmapTextureSafety(
+        "RageBitmapTexture could not create fallback "
         "surface.");
   }
   return fallback;
@@ -95,8 +95,8 @@ void RageBitmapTexture::Create() {
   RageTextureID actualID = GetID();
 
   if (actualID.filename.empty()) {
-    WarnBitmapTextureAuditFix(
-        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture refused empty filename.");
+    WarnBitmapTextureSafety(
+        "RageBitmapTexture refused empty filename.");
     m_iSourceWidth = m_iSourceHeight = 1;
     m_iTextureWidth = m_iTextureHeight = 1;
     m_iImageWidth = m_iImageHeight = 1;
@@ -104,8 +104,8 @@ void RageBitmapTexture::Create() {
     return;
   }
   if (DISPLAY == nullptr) {
-    WarnBitmapTextureAuditFix(
-        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture skipped GPU creation without "
+    WarnBitmapTextureSafety(
+        "RageBitmapTexture skipped GPU creation without "
         "display backend.");
     m_iSourceWidth = m_iSourceHeight = 1;
     m_iTextureWidth = m_iTextureHeight = 1;
@@ -138,8 +138,8 @@ void RageBitmapTexture::Create() {
 
   if (pImg == nullptr || pImg->format == nullptr || pImg->w <= 0 ||
       pImg->h <= 0) {
-    WarnBitmapTextureAuditFix(
-        "SRC_AUDIT_FIX SRC-1026: RageBitmapTexture replaced invalid decoded "
+    WarnBitmapTextureSafety(
+        "RageBitmapTexture replaced invalid decoded "
         "surface.");
     delete pImg;
     pImg = MakeFallbackSurface();
@@ -272,8 +272,8 @@ void RageBitmapTexture::Create() {
     RageSurfaceUtils::Zoom(pImg, m_iImageWidth, m_iImageHeight);
     if (pImg == nullptr || pImg->format == nullptr || pImg->w <= 0 ||
         pImg->h <= 0) {
-      WarnBitmapTextureAuditFix(
-          "SRC_AUDIT_FIX SRC-1027: RageBitmapTexture recovered from invalid "
+      WarnBitmapTextureSafety(
+          "RageBitmapTexture recovered from invalid "
           "zoom result.");
       delete pImg;
       pImg = MakeFallbackSurface();
@@ -299,8 +299,8 @@ void RageBitmapTexture::Create() {
       delete pImg;
       pImg = pGrayscale;
     } else {
-      WarnBitmapTextureAuditFix(
-          "SRC_AUDIT_FIX SRC-1028: RageBitmapTexture kept source after failed "
+      WarnBitmapTextureSafety(
+          "RageBitmapTexture kept source after failed "
           "grayscale palettize.");
     }
   }
@@ -336,8 +336,8 @@ void RageBitmapTexture::Create() {
         pixfmt = RagePixelFormat_RGBA8;
         break;
       default:
-        WarnBitmapTextureAuditFix(
-            "SRC_AUDIT_FIX SRC-1029: RageBitmapTexture clamped invalid color "
+        WarnBitmapTextureSafety(
+            "RageBitmapTexture clamped invalid color "
             "depth.");
         pixfmt = RagePixelFormat_RGBA8;
         break;
@@ -365,8 +365,8 @@ void RageBitmapTexture::Create() {
     const RageDisplay::RagePixelFormatDesc* pfd =
         DISPLAY->GetPixelFormatDesc(pixfmt);
     if (pfd == nullptr) {
-      WarnBitmapTextureAuditFix(
-          "SRC_AUDIT_FIX SRC-1030: RageBitmapTexture skipped dither without "
+      WarnBitmapTextureSafety(
+          "RageBitmapTexture skipped dither without "
           "pixel format description.");
     } else {
       RageSurface* dst = CreateSurface(
@@ -377,8 +377,8 @@ void RageBitmapTexture::Create() {
         delete pImg;
         pImg = dst;
       } else {
-        WarnBitmapTextureAuditFix(
-            "SRC_AUDIT_FIX SRC-1030: RageBitmapTexture skipped dither after "
+        WarnBitmapTextureSafety(
+            "RageBitmapTexture skipped dither after "
             "surface allocation failure.");
       }
     }
@@ -397,8 +397,8 @@ void RageBitmapTexture::Create() {
 
   m_uTexHandle = DISPLAY->CreateTexture(pixfmt, pImg, actualID.bMipMaps);
   if (m_uTexHandle == 0) {
-    WarnBitmapTextureAuditFix(
-        "SRC_AUDIT_FIX SRC-1031: RageBitmapTexture failed to create GPU "
+    WarnBitmapTextureSafety(
+        "RageBitmapTexture failed to create GPU "
         "texture handle.");
   }
 

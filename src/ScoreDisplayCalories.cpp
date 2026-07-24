@@ -18,13 +18,13 @@
 REGISTER_ACTOR_CLASS(ScoreDisplayCalories);
 
 namespace {
-void WarnScoreDisplayCaloriesAuditFix(const char* message) {
+void WarnScoreDisplayCaloriesSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void TraceScoreDisplayCaloriesAuditFix(const char* message) {
+void TraceScoreDisplayCaloriesSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Trace("%s", message);
   }
@@ -48,8 +48,8 @@ ScoreDisplayCalories::~ScoreDisplayCalories() {
 
 void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnScoreDisplayCaloriesAuditFix(
-        "SRC_AUDIT_FIX SRC-1103: ScoreDisplayCalories ignored null XML node.");
+    WarnScoreDisplayCaloriesSafety(
+        "ScoreDisplayCalories ignored null XML node.");
     return;
   }
   RollingNumbers::LoadFromNode(pNode);
@@ -63,8 +63,8 @@ void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
     if (b) {
       LuaHelpers::Pop(L, m_PlayerNumber);
       if (!IsValidPlayerNumber(m_PlayerNumber)) {
-        WarnScoreDisplayCaloriesAuditFix(
-            "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories ignored invalid "
+        WarnScoreDisplayCaloriesSafety(
+            "ScoreDisplayCalories ignored invalid "
             "PlayerNumber.");
         m_PlayerNumber = PLAYER_INVALID;
       }
@@ -72,8 +72,8 @@ void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
       if (L != nullptr) {
         lua_pop(L, 1);
       }
-      WarnScoreDisplayCaloriesAuditFix(
-          "SRC_AUDIT_FIX SRC-237: ScoreDisplayCalories missing PlayerNumber "
+      WarnScoreDisplayCaloriesSafety(
+          "ScoreDisplayCalories missing PlayerNumber "
           "attribute.");
       m_PlayerNumber = PLAYER_INVALID;
     }
@@ -81,8 +81,8 @@ void ScoreDisplayCalories::LoadFromNode(const XNode* pNode) {
       LUA->Release(L);
     }
   } else {
-    WarnScoreDisplayCaloriesAuditFix(
-        "SRC_AUDIT_FIX SRC-1103: ScoreDisplayCalories loaded without LUA.");
+    WarnScoreDisplayCaloriesSafety(
+        "ScoreDisplayCalories loaded without LUA.");
   }
 
   if (MESSAGEMAN != nullptr) {
@@ -118,15 +118,15 @@ void ScoreDisplayCalories::HandleMessage(const Message& msg) {
 
 void ScoreDisplayCalories::UpdateNumber() {
   if (!IsValidPlayerNumber(m_PlayerNumber)) {
-    TraceScoreDisplayCaloriesAuditFix(
-        "SRC_AUDIT_FIX SRC-239: ScoreDisplayCalories skipped update with "
+    TraceScoreDisplayCaloriesSafety(
+        "ScoreDisplayCalories skipped update with "
         "invalid PlayerNumber.");
     SetTargetNumber(0);
     return;
   }
   if (STATSMAN == nullptr) {
-    TraceScoreDisplayCaloriesAuditFix(
-        "SRC_AUDIT_FIX SRC-1105: ScoreDisplayCalories skipped update without "
+    TraceScoreDisplayCaloriesSafety(
+        "ScoreDisplayCalories skipped update without "
         "StatsManager.");
     SetTargetNumber(0);
     return;
@@ -138,8 +138,8 @@ void ScoreDisplayCalories::UpdateNumber() {
           .m_fCaloriesBurned +
       STATSMAN->m_CurStageStats.m_player[m_PlayerNumber].m_fCaloriesBurned;
   if (!std::isfinite(fCals) || fCals < 0.0f) {
-    TraceScoreDisplayCaloriesAuditFix(
-        "SRC_AUDIT_FIX SRC-1105: ScoreDisplayCalories corrected invalid "
+    TraceScoreDisplayCaloriesSafety(
+        "ScoreDisplayCalories corrected invalid "
         "calories.");
     fCals = std::max(0.0f, std::isfinite(fCals) ? fCals : 0.0f);
   }

@@ -642,8 +642,8 @@ int RageSound::GetDataToPlay(
 
     if (!m_StreamToSourceMap.Insert(
             m_iStreamFrame, iGotFrames, iSourceFrame, fRate)) {
-      LogReviewSrcDiagnostics(
-          "SRC_AUDIT_FIX SRC-2916: stream-to-source position map insert "
+      LogRuntimeValidationDiagnostics(
+          "stream-to-source position map insert "
           "failed sound='%s' error='%s'",
           m_sFilePath.c_str(), m_StreamToSourceMap.GetError().c_str());
     }
@@ -658,7 +658,7 @@ int RageSound::GetDataToPlay(
     if (!RageSoundUtil::ConvertMonoToStereoInPlace(
             pBuffer, static_cast<size_t>(iFramesStored), stereoCapacity)) {
       m_sError =
-          "SRC_AUDIT_FIX SRC-2907: mono to stereo expansion failed during mix";
+          "mono to stereo expansion failed during mix";
       if (LOG != nullptr) {
         LOG->Warn("%s", m_sError.c_str());
       }
@@ -677,8 +677,8 @@ void RageSound::CommitPlayingPosition(
   }
   m_Mutex.Lock();
   if (!m_HardwareToStreamMap.Insert(iHardwareFrame, iGotFrames, iStreamFrame)) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2916: hardware-to-stream position map insert "
+    LogRuntimeValidationDiagnostics(
+        "hardware-to-stream position map insert "
         "failed sound='%s' error='%s'",
         m_sFilePath.c_str(), m_HardwareToStreamMap.GetError().c_str());
   }
@@ -956,8 +956,8 @@ int64_t RageSound::GetSourceFrameFromHardwareFrame(
   const pos_map_search_result streamFrame =
       m_HardwareToStreamMap.SearchResult(iHardwareFrame, driverSampleRate);
   if (!streamFrame.Found()) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2920: hardware-to-stream position lookup failed "
+    LogRuntimeValidationDiagnostics(
+        "hardware-to-stream position lookup failed "
         "sound='%s' status=%d error='%s'",
         m_sFilePath.c_str(), static_cast<int>(streamFrame.status),
         m_HardwareToStreamMap.GetError().c_str());
@@ -967,8 +967,8 @@ int64_t RageSound::GetSourceFrameFromHardwareFrame(
   const pos_map_search_result sourceFrame =
       m_StreamToSourceMap.SearchResult(streamFrame.frame, sourceSampleRate);
   if (!sourceFrame.Found()) {
-    LogReviewSrcDiagnostics(
-        "SRC_AUDIT_FIX SRC-2920: stream-to-source position lookup failed "
+    LogRuntimeValidationDiagnostics(
+        "stream-to-source position lookup failed "
         "sound='%s' status=%d error='%s'",
         m_sFilePath.c_str(), static_cast<int>(sourceFrame.status),
         m_StreamToSourceMap.GetError().c_str());

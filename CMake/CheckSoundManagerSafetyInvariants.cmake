@@ -1,0 +1,21 @@
+if(NOT DEFINED ITGMANIA_SOURCE_DIR)
+  message(FATAL_ERROR "ITGMANIA_SOURCE_DIR is required")
+endif()
+
+function(require_contains file needle description)
+  file(READ "${ITGMANIA_SOURCE_DIR}/${file}" contents)
+  string(FIND "${contents}" "${needle}" position)
+  if(position EQUAL -1)
+    message(FATAL_ERROR "${description}: '${needle}' missing from ${file}")
+  endif()
+endfunction()
+
+require_contains("src/RageSoundManager.h" "std::shared_ptr<RageSoundDriver> m_pDriver" "Sound driver lifetime must be retained by active callers")
+require_contains("src/RageSoundManager.cpp" "driver.swap(m_pDriver)" "Shutdown must detach the sound driver atomically")
+require_contains("src/RageSoundManager.cpp" "driver.reset();" "Detached driver teardown must happen outside the lifecycle mutex")
+require_contains("src/RageSound.cpp" "detachedSound->m_bDeleteWhenFinished = true" "Detached copies must arm deletion before playback")
+require_contains("src/RageSound.cpp" "RageSoundReader_Preload::PreloadSound(m_pSource)" "Preload replacement must remain explicit")
+require_contains("src/GameSoundManager.cpp" "fLengthSeconds(-1.0f)" "Queued music requests must be fully initialized")
+require_contains("src/GameSoundManager.cpp" "std::unique(arraySoundFiles.begin(), arraySoundFiles.end())" "Directory sounds must use a stable deduplicated candidate list")
+
+message(STATUS "Sound manager safety invariants passed")

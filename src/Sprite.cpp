@@ -31,13 +31,13 @@ REGISTER_ACTOR_CLASS(Sprite);
 const float min_state_delay = 0.0001f;
 
 namespace {
-void WarnSpriteAuditFix(const char* message) {
+void WarnSpriteSafety(const char* message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message);
   }
 }
 
-void WarnSpriteAuditFix(const std::string& message) {
+void WarnSpriteSafety(const std::string& message) {
   if (LOG != nullptr) {
     LOG->Warn("%s", message.c_str());
   }
@@ -56,8 +56,8 @@ float SanitizeFiniteFloat(float value, float fallback, const char* context) {
   if (IsFiniteFloat(value)) {
     return value;
   }
-  WarnSpriteAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-1050: Sprite replaced non-finite %s.", context));
+  WarnSpriteSafety(ssprintf(
+      "Sprite replaced non-finite %s.", context));
   return fallback;
 }
 
@@ -65,8 +65,8 @@ RectF SanitizeRect(RectF rect, const RectF& fallback, const char* context) {
   if (IsFiniteRect(rect)) {
     return rect;
   }
-  WarnSpriteAuditFix(ssprintf(
-      "SRC_AUDIT_FIX SRC-1050: Sprite replaced non-finite %s rect.", context));
+  WarnSpriteSafety(ssprintf(
+      "Sprite replaced non-finite %s rect.", context));
   return fallback;
 }
 
@@ -136,8 +136,8 @@ Sprite* Sprite::NewBlankSprite() {
   if (TEXTUREMAN != nullptr) {
     news->Load(TEXTUREMAN->GetDefaultTextureID());
   } else {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1051: Sprite created blank sprite without "
+    WarnSpriteSafety(
+        "Sprite created blank sprite without "
         "TEXTUREMAN.");
     news->Load(RageTextureID());
   }
@@ -170,8 +170,8 @@ Sprite::Sprite(const Sprite& cpy) : Actor(cpy) {
     m_pTexture = TEXTUREMAN->CopyTexture(cpy.m_pTexture);
   } else {
     if (cpy.m_pTexture != nullptr) {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1051: Sprite copy skipped texture copy without "
+      WarnSpriteSafety(
+          "Sprite copy skipped texture copy without "
           "TEXTUREMAN.");
     }
     m_pTexture = nullptr;
@@ -269,7 +269,7 @@ void Sprite::Load(RageTextureID ID) {
 
 void Sprite::LoadFromNode(const XNode* pNode) {
   if (pNode == nullptr) {
-    WarnSpriteAuditFix("SRC_AUDIT_FIX SRC-1052: Sprite ignored null node.");
+    WarnSpriteSafety("Sprite ignored null node.");
     LoadStatesFromTexture();
     return;
   }
@@ -290,8 +290,8 @@ void Sprite::LoadFromNode(const XNode* pNode) {
 
     LoadStatesFromTexture();
     if (m_pTexture == nullptr || m_pTexture->GetNumFrames() <= 0) {
-      WarnSpriteAuditFix(ssprintf(
-          "SRC_AUDIT_FIX SRC-1052: Sprite skipped frame metadata for texture "
+      WarnSpriteSafety(ssprintf(
+          "Sprite skipped frame metadata for texture "
           "'%s' because no usable texture is loaded.",
           sPath.c_str()));
       Actor::LoadFromNode(pNode);
@@ -404,8 +404,8 @@ void Sprite::LoadFromNode(const XNode* pNode) {
         Sprite::m_size.x = aStates[0].rect.GetWidth() / ratioX;
         Sprite::m_size.y = aStates[0].rect.GetHeight() / ratioY;
       } else {
-        WarnSpriteAuditFix(
-            "SRC_AUDIT_FIX SRC-1052: Sprite kept texture size because frame "
+        WarnSpriteSafety(
+            "Sprite kept texture size because frame "
             "ratio was invalid.");
       }
     }
@@ -421,8 +421,8 @@ void Sprite::UnloadTexture() {
     if (TEXTUREMAN != nullptr) {
       TEXTUREMAN->UnloadTexture(m_pTexture);  // Unload it.
     } else {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1051: Sprite detached texture without TEXTUREMAN.");
+      WarnSpriteSafety(
+          "Sprite detached texture without TEXTUREMAN.");
     }
     m_pTexture = nullptr;
 
@@ -461,8 +461,8 @@ void Sprite::EnableAnimation(bool bEnable) {
 
 void Sprite::SetTexture(RageTexture* pTexture) {
   if (pTexture == nullptr) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1053: Sprite refused null texture and unloaded.");
+    WarnSpriteSafety(
+        "Sprite refused null texture and unloaded.");
     UnloadTexture();
     LoadStatesFromTexture();
     return;
@@ -474,8 +474,8 @@ void Sprite::SetTexture(RageTexture* pTexture) {
   }
 
   if (m_pTexture->GetTextureWidth() <= 0 || m_pTexture->GetTextureHeight() <= 0) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1053: Sprite loaded texture with invalid texture "
+    WarnSpriteSafety(
+        "Sprite loaded texture with invalid texture "
         "dimensions.");
   }
 
@@ -501,8 +501,8 @@ void Sprite::LoadFromTexture(RageTextureID ID) {
   if (m_pTexture && m_pTexture->GetID() == ID) {
     pTexture = m_pTexture;
   } else if (TEXTUREMAN == nullptr) {
-    WarnSpriteAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1051: Sprite cannot load texture '%s' without "
+    WarnSpriteSafety(ssprintf(
+        "Sprite cannot load texture '%s' without "
         "TEXTUREMAN.",
         ID.filename.c_str()));
   } else {
@@ -561,8 +561,8 @@ void Sprite::LoadStatesFromTexture() {
     m_States.push_back(newState);
   }
   if (m_States.empty()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite created default state for texture with "
+    WarnSpriteSafety(
+        "Sprite created default state for texture with "
         "no frames.");
     m_States.push_back(MakeDefaultSpriteState());
   }
@@ -577,8 +577,8 @@ void Sprite::UpdateAnimationState() {
     return;
   }
   if (m_iCurState < 0 || m_iCurState >= (int)m_States.size()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite repaired current state index before "
+    WarnSpriteSafety(
+        "Sprite repaired current state index before "
         "animation update.");
     m_iCurState = 0;
   }
@@ -621,8 +621,8 @@ void Sprite::UpdateAnimationState() {
 // todo: see if "current" practice is just that. -aj
 void Sprite::Update(float fDelta) {
   if (!IsFiniteFloat(fDelta)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1055: Sprite ignored non-finite update delta.");
+    WarnSpriteSafety(
+        "Sprite ignored non-finite update delta.");
     return;
   }
   Actor::Update(fDelta);  // do tweening
@@ -640,8 +640,8 @@ void Sprite::Update(float fDelta) {
 
   float fTimePassed = GetEffectDeltaTime();
   if (!IsFiniteFloat(fTimePassed)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1055: Sprite ignored non-finite effect delta.");
+    WarnSpriteSafety(
+        "Sprite ignored non-finite effect delta.");
     return;
   }
   m_fSecsIntoState += fTimePassed;
@@ -665,8 +665,8 @@ void Sprite::Update(float fDelta) {
     }
     if (!IsFiniteFloat(coord_delta) || !IsFiniteFloat(m_fTexCoordVelocityX) ||
         !IsFiniteFloat(m_fTexCoordVelocityY)) {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1055: Sprite disabled invalid texcoord velocity.");
+      WarnSpriteSafety(
+          "Sprite disabled invalid texcoord velocity.");
       m_fTexCoordVelocityX = 0.0f;
       m_fTexCoordVelocityY = 0.0f;
       return;
@@ -718,8 +718,8 @@ void TexCoordArrayFromRect(float fImageCoords[8], const RectF& rect) {
 
 void Sprite::DrawTexture(const TweenState* state) {
   if (DISPLAY == nullptr || state == nullptr) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw without display/state.");
+    WarnSpriteSafety(
+        "Sprite skipped draw without display/state.");
     return;
   }
   Actor::SetGlobalRenderStates();  // set Actor-specified render states
@@ -727,8 +727,8 @@ void Sprite::DrawTexture(const TweenState* state) {
   RectF crop = state->crop;
   crop = SanitizeRect(crop, RectF(0, 0, 0, 0), "crop");
   if (!IsFiniteFloat(m_size.x) || !IsFiniteFloat(m_size.y)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw with invalid size.");
+    WarnSpriteSafety(
+        "Sprite skipped draw with invalid size.");
     return;
   }
   // bail if cropped all the way
@@ -876,8 +876,8 @@ bool Sprite::EarlyAbortDraw() const { return m_pTexture == nullptr; }
 
 void Sprite::DrawPrimitives() {
   if (m_pTempState == nullptr) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1056: Sprite skipped draw without tween state.");
+    WarnSpriteSafety(
+        "Sprite skipped draw without tween state.");
     return;
   }
   if (m_pTempState->fade.top > 0 || m_pTempState->fade.bottom > 0 ||
@@ -1005,8 +1005,8 @@ int Sprite::GetNumStates() const { return m_States.size(); }
 
 void Sprite::SetState(int iNewState) {
   if (m_States.empty()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite repaired empty state list in SetState.");
+    WarnSpriteSafety(
+        "Sprite repaired empty state list in SetState.");
     LoadStatesFromTexture();
   }
   if (m_States.empty()) {
@@ -1062,8 +1062,8 @@ void Sprite::RecalcAnimationLengthSeconds() {
     }
   }
   if (!IsFiniteFloat(m_animation_length_seconds)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite reset non-finite animation length.");
+    WarnSpriteSafety(
+        "Sprite reset non-finite animation length.");
     m_animation_length_seconds = 0.0f;
   }
 }
@@ -1108,8 +1108,8 @@ void Sprite::SetCustomTextureCoords(
 
 void Sprite::SetCustomImageRect(RectF rectImageCoords) {
   if (!HasUsableTextureDimensions(m_pTexture)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image rect without usable "
+    WarnSpriteSafety(
+        "Sprite ignored image rect without usable "
         "texture dimensions.");
     return;
   }
@@ -1132,8 +1132,8 @@ void Sprite::SetCustomImageCoords(
                             // right
 {
   if (!HasUsableTextureDimensions(m_pTexture)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image coords without usable "
+    WarnSpriteSafety(
+        "Sprite ignored image coords without usable "
         "texture dimensions.");
     return;
   }
@@ -1170,14 +1170,14 @@ const RectF* Sprite::GetCurrentTextureCoordRect() const {
 const RectF* Sprite::GetTextureCoordRectForState(int iState) const {
   static const RectF fallbackRect(0, 0, 1, 1);
   if (m_States.empty()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite returned fallback rect for empty "
+    WarnSpriteSafety(
+        "Sprite returned fallback rect for empty "
         "state list.");
     return &fallbackRect;
   }
   if (iState < 0 || iState >= (int)m_States.size()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite clamped texture coord state index.");
+    WarnSpriteSafety(
+        "Sprite clamped texture coord state index.");
     iState = std::clamp(iState, 0, (int)m_States.size() - 1);
   }
 
@@ -1212,8 +1212,8 @@ void Sprite::ScaleToClipped(float fWidth, float fHeight) {
   if ((!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight)) ||
       (fWidth <= 0.0f && fWidth != -1.0f) ||
       (fHeight <= 0.0f && fHeight != -1.0f)) {
-    WarnSpriteAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1058: Sprite ignored invalid ScaleToClipped size "
+    WarnSpriteSafety(ssprintf(
+        "Sprite ignored invalid ScaleToClipped size "
         "%.6fx%.6f.",
         fWidth, fHeight));
     return;
@@ -1241,8 +1241,8 @@ void Sprite::ScaleToClipped(float fWidth, float fHeight) {
     Sprite::ScaleToCover(RectF(0, 0, fWidth, fHeight));
     if (GetZoomedWidth() <= 0.0f || GetZoomedHeight() <= 0.0f ||
         !IsFiniteFloat(GetZoomedWidth()) || !IsFiniteFloat(GetZoomedHeight())) {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1058: Sprite aborted ScaleToClipped after invalid "
+      WarnSpriteSafety(
+          "Sprite aborted ScaleToClipped after invalid "
           "zoomed size.");
       SetXY(fOriginalX, fOriginalY);
       return;
@@ -1289,8 +1289,8 @@ void Sprite::CropTo(float fWidth, float fHeight) {
   if ((!IsFiniteFloat(fWidth) || !IsFiniteFloat(fHeight)) ||
       (fWidth <= 0.0f && fWidth != -1.0f) ||
       (fHeight <= 0.0f && fHeight != -1.0f)) {
-    WarnSpriteAuditFix(ssprintf(
-        "SRC_AUDIT_FIX SRC-1058: Sprite ignored invalid CropTo size %.6fx%.6f.",
+    WarnSpriteSafety(ssprintf(
+        "Sprite ignored invalid CropTo size %.6fx%.6f.",
         fWidth, fHeight));
     return;
   }
@@ -1314,8 +1314,8 @@ void Sprite::CropTo(float fWidth, float fHeight) {
     Sprite::ScaleToCover(RectF(0, 0, fWidth, fHeight));
     if (GetZoomedWidth() <= 0.0f || GetZoomedHeight() <= 0.0f ||
         !IsFiniteFloat(GetZoomedWidth()) || !IsFiniteFloat(GetZoomedHeight())) {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1058: Sprite aborted CropTo after invalid zoomed "
+      WarnSpriteSafety(
+          "Sprite aborted CropTo after invalid zoomed "
           "size.");
       SetXY(fOriginalX, fOriginalY);
       return;
@@ -1369,8 +1369,8 @@ void Sprite::StretchTexCoords(float fX, float fY) {
 
 void Sprite::AddImageCoords(float fX, float fY) {
   if (!HasUsableTextureDimensions(m_pTexture)) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1057: Sprite ignored image coord offset without "
+    WarnSpriteSafety(
+        "Sprite ignored image coord offset without "
         "usable texture dimensions.");
     return;
   }
@@ -1390,8 +1390,8 @@ void Sprite::AddImageCoords(float fX, float fY) {
 void Sprite::SetStateProperties(const std::vector<State>& new_states) {
   m_States = new_states;
   if (m_States.empty()) {
-    WarnSpriteAuditFix(
-        "SRC_AUDIT_FIX SRC-1054: Sprite replaced empty state properties.");
+    WarnSpriteSafety(
+        "Sprite replaced empty state properties.");
     m_States.push_back(MakeDefaultSpriteState());
   }
 
@@ -1599,8 +1599,8 @@ class LunaSprite : public Luna<Sprite> {
       COMMON_RETURN_SELF;
     }
     if (TEXTUREMAN == nullptr) {
-      WarnSpriteAuditFix(
-          "SRC_AUDIT_FIX SRC-1051: Sprite Lua SetTexture ignored texture "
+      WarnSpriteSafety(
+          "Sprite Lua SetTexture ignored texture "
           "without TEXTUREMAN.");
       COMMON_RETURN_SELF;
     }

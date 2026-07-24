@@ -39,8 +39,8 @@ static RageSurface* TryOpenFile(
     if (ret == nullptr) {
       error = "Image decoder returned success without a surface";
       bKeepTrying = false;
-      LogReviewSrcDiagnostics(
-          "SRC-3402 image decoder returned a null surface for '%s' as %s",
+      LogRuntimeValidationDiagnostics(
+          "image decoder returned a null surface for '%s' as %s",
           sPath.c_str(), format.c_str());
       return nullptr;
     }
