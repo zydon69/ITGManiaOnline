@@ -338,6 +338,18 @@ assert(onlineClientContent:find('self:HandleDeletedRoom(roomId, "room_deleted_ev
 	"direct room.deleted events must share the same cleanup path")
 assert(onlineClientContent:find("readyStates = room.ready_states or {}", 1, true),
 	"lobby payloads must preserve authoritative ready-state rows")
+assert(onlineClientContent:find('preferred=lobby reason=completed_round_reset_while_evaluating', 1, true),
+	"a server-side evaluation timeout must force the client back to the online lobby")
+assert(onlineClientContent:find('if phase == "lobby" and not (self.currentRoom and self.currentRoom.selected_song) then', 1, true),
+	"a missed evaluation-timeout event must recover from the authoritative lobby snapshot")
+local songBrowsingTimeoutHandler = assert(
+	onlineClientContent:match('if name == "room%.song_browsing_timeout" then(.-)%s*if eventId'),
+	"the client must handle the authoritative idle song-browser timeout"
+)
+assert(songBrowsingTimeoutHandler:find('self:ApplyPreferredRoomScreen(topScreen, "lobby")', 1, true),
+	"an idle song-browsing manager must return to the online lobby screen")
+assert(songBrowsingTimeoutHandler:find("online_protocol_ids_match(timedOutManagerId, currentUserId)", 1, true),
+	"song-browser timeout navigation must only apply to the room manager")
 local liveScoreFlush = assert(
 	onlineClientContent:match("function ITGOnline:FlushLiveScore%b()%s*(.-)%s*function ITGOnline:HandleRoomNotPlayingScoreReject"),
 	"missing live-score flush handler"

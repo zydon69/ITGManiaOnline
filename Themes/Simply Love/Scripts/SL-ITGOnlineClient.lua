@@ -6784,6 +6784,15 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
 		if self:IsOnlineEvaluationScreen(screenName) then
+			if phase == "lobby" and not (self.currentRoom and self.currentRoom.selected_song) then
+				-- The server owns the evaluation rest deadline. Once it resets
+				-- the completed round, leave evaluation even when the realtime
+				-- event was missed and this state arrived through a later sync.
+				online_flow_trace("preferred=lobby reason=completed_round_reset_while_evaluating"
+					.. " playState=" .. tostring(playState)
+					.. " phase=" .. tostring(phase))
+				return "lobby"
+			end
 			if (phase == "lobby_ready" or phase == "config")
 				and self.currentRoom
 				and self.currentRoom.selected_song
@@ -16566,6 +16575,32 @@ elseif name == "room.score_updated" then
 				.. " eventId=" .. tostring(eventId))
 			local room = self:ApplyRoomSnapshot(payload.room, "realtime_room_event:" .. tostring(name))
 			if not room then return false end
+			if name == "room.song_browsing_timeout" then
+				self:ClearActiveSongPreview(nil, "song_browsing_timeout")
+				self.activeSongPreviewSessionId = nil
+				safe_broadcast("OnlineSongPreviewCleared", {
+					room_id = roomId,
+					reason = payload.reason or "song_browsing_inactivity",
+					forced = true,
+				})
+				local timedOutManagerId = payload.manager_user_id or payload.managerUserId
+				local currentUserId = self.user and self.user.id
+				local topScreen = top_screen()
+				local managerMustReturn = timedOutManagerId ~= nil
+					and currentUserId ~= nil
+					and online_protocol_ids_match(timedOutManagerId, currentUserId)
+					and topScreen
+					and self:IsOnlineMusicSelectScreen(topScreen:GetName())
+				online_flow_trace("song_browsing_timeout_event"
+					.. " room=" .. tostring(roomId or payload.room.id or "nil")
+					.. " manager=" .. tostring(timedOutManagerId or "nil")
+					.. " currentUser=" .. tostring(currentUserId or "nil")
+					.. " screen=" .. tostring(topScreen and topScreen:GetName() or "nil")
+					.. " navigate=" .. tostring(managerMustReturn == true))
+				if managerMustReturn then
+					self:ApplyPreferredRoomScreen(topScreen, "lobby")
+				end
+			end
 			if eventId and eventId ~= "0" and versionRoomId ~= "" then
 				self.lastRoomEventIdByRoomId[versionRoomId] = eventId
 			end
