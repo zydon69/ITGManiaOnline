@@ -8640,7 +8640,22 @@ function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
 		self:ClearLocalPlayerSession(player, { clearStored = true })
 		self:HandleLocalPartyInvariantFailure("companion_auth_session_revoked", player, eventPayload)
 	elseif eventName == "room.kicked" or eventName == "room.left" then
-		self:HandleLocalPartyInvariantFailure("companion_" .. eventName:gsub("%.", "_"), player, eventPayload)
+		local eventRoomId = eventPayload.room_id or eventPayload.roomId
+		local expectedCoordinatedLeave = eventName == "room.left"
+			and eventRoomId ~= nil
+			and self:IsLeavingRoom(eventRoomId)
+		if expectedCoordinatedLeave then
+			online_flow_trace("companion_room_left_expected localPlayer="
+				.. local_player_key(player)
+				.. " room=" .. tostring(eventRoomId)
+				.. " reason=primary_coordinated_leave")
+		else
+			self:HandleLocalPartyInvariantFailure(
+				"companion_" .. eventName:gsub("%.", "_"),
+				player,
+				eventPayload
+			)
+		end
 	elseif eventName == "room.invitation.created" then
 		local invitation = type(eventPayload.invitation) == "table" and eventPayload.invitation or {}
 		local invitationId = invitation.id
@@ -16781,25 +16796,8 @@ function ITGOnline:RequestJoinRoom(roomId, callback, options)
 				self.pendingJoinRequestId = decoded.join_request.id
 				online_flow_trace("join_room_request_pending room=" .. tostring(joinIntentRoomId)
 					.. " joinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
-					.. " status=" .. tostring(decoded.join_request.status or "nil"))
-				if self:IsLocalTwoPlayerSession() then
-					self.localPartyPendingCompanionRoomId = self:RoomKey(joinIntentRoomId)
-					self:RequestCompanionJoinRequest(joinIntentRoomId,
-						function(companionOk, companionDecoded, companionResponse)
-							if not companionOk then
-								online_flow_trace("local_party_companion_join_request_failed"
-									.. " room=" .. tostring(joinIntentRoomId)
-									.. " status=" .. tostring(companionResponse
-										and companionResponse.statusCode or "nil"))
-								self:CancelJoinRequest()
-								self.localPartyPendingCompanionRoomId = nil
-								safe_broadcast("ITGOnlineLocalPartyJoinFailed", {
-									roomId = joinIntentRoomId,
-									localPlayer = "P2",
-								})
-							end
-						end)
-				end
+					.. " status=" .. tostring(decoded.join_request.status or "nil")
+					.. " localPartyServerManaged=" .. tostring(self:IsLocalTwoPlayerSession() == true))
 			elseif privateRoom and ok then
 				online_flow_trace("join_room_response_rejected reason=missing_join_request_payload"
 					.. " room=" .. tostring(joinIntentRoomId))
@@ -17120,69 +17118,6 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 	self:ReportSongAvailability(false, "reloaded", callback)
 end
 
-function ITGOnline:RequestCompanionJoinRequest(roomId, callback)
-	if not self:IsLocalTwoPlayerSession() then
-		safe_callback(callback, true, nil, nil, { skipped = true })
-		return
-	end
-	local roomKey = self:RoomKey(roomId)
-	if roomKey == "" then
-		safe_callback(callback, false, nil, { errorMessage = "Invalid target room." })
-		return
-	end
-	local function submit()
-		self:RequestAsLocalPlayer(PLAYER_2, "POST",
-			"/rooms/" .. roomKey .. "/join-requests", {},
-			function(ok, decoded, response)
-				if ok then
-					self.localPartyPendingCompanionRoomId = roomKey
-					self.localPartyPendingCompanionJoinRequestId = decoded
-						and decoded.join_request and decoded.join_request.id or nil
-				end
-				online_flow_trace("companion_join_request_response localPlayer=P2"
-					.. " room=" .. roomKey
-					.. " ok=" .. tostring(ok == true)
-					.. " joinRequest="
-						.. tostring(self.localPartyPendingCompanionJoinRequestId or "nil")
-					.. " status=" .. tostring(response and response.statusCode or "nil"))
-				safe_callback(callback, ok, decoded, response)
-			end)
-	end
-	self:RequestAsLocalPlayer(PLAYER_2, "GET", "/rooms/current", nil,
-		function(ok, decoded, response)
-			local currentRoom = decoded and decoded.room or nil
-			local currentRoomId = currentRoom
-				and (currentRoom.id or currentRoom.room_id or currentRoom.roomId) or nil
-			if currentRoomId and online_room_ids_match(currentRoomId, roomId) then
-				self.localPartyPendingCompanionRoomId = roomKey
-				safe_callback(callback, true, { already_in_target = true }, nil)
-				return
-			end
-			if currentRoomId then
-				self:RequestAsLocalPlayer(PLAYER_2, "POST",
-					"/rooms/" .. tostring(currentRoomId) .. "/leave", {
-						client_action_id = self:NewClientActionId("p2-join-request-preflight-leave"),
-					}, function(leaveOk, leaveDecoded, leaveResponse)
-						local gone = leaveResponse and (
-							leaveResponse.statusCode == 404 or leaveResponse.statusCode == 410
-						)
-						if leaveOk or gone then
-							submit()
-						else
-							safe_callback(callback, false, leaveDecoded, leaveResponse)
-						end
-					end)
-				return
-			end
-			local statusCode = tonumber(response and response.statusCode) or 0
-			if ok or statusCode == 404 or statusCode == 410 then
-				submit()
-			else
-				safe_callback(callback, false, decoded, response)
-			end
-		end)
-end
-
 function ITGOnline:RequestJoinUserRoom(userId, callback)
 	self:TraceOnlineState("join_user_room_request", {
 		source = "request_join_user_room",
@@ -17210,22 +17145,10 @@ function ITGOnline:RequestJoinUserRoom(userId, callback)
 		elseif ok and decoded and decoded.join_request then
 			self.pendingJoinRoomId = decoded.join_request.room_id
 			self.pendingJoinRequestId = decoded.join_request.id
-			if self:IsLocalTwoPlayerSession() then
-				self:RequestCompanionJoinRequest(self.pendingJoinRoomId,
-					function(companionOk, companionDecoded, companionResponse)
-						if not companionOk then
-							online_flow_trace("join_user_room_companion_failed localPlayer=P2"
-								.. " room=" .. tostring(self.pendingJoinRoomId or "nil")
-								.. " status=" .. tostring(companionResponse
-									and companionResponse.statusCode or "nil"))
-							self:CancelJoinRequest()
-							safe_broadcast("ITGOnlineLocalPartyJoinFailed", {
-								roomId = self.pendingJoinRoomId,
-								localPlayer = "P2",
-							})
-						end
-					end)
-			end
+			online_flow_trace("join_user_room_request_pending room="
+				.. tostring(self.pendingJoinRoomId or "nil")
+				.. " joinRequest=" .. tostring(self.pendingJoinRequestId or "nil")
+				.. " localPartyServerManaged=" .. tostring(self:IsLocalTwoPlayerSession() == true))
 		elseif not ok then
 			self.pendingJoinRoomId = nil
 			self.pendingJoinRequestId = nil
@@ -17241,25 +17164,52 @@ function ITGOnline:InviteUser(roomId, userId, callback)
 		safe_callback(callback, false, nil, { errorMessage = "Invalid room or user id." })
 		return
 	end
-	self:TraceOnlineState("invite_user_request", {
-		source = "invite_user",
-		targetRoom = roomId,
-		targetUser = userId,
-	})
-	self:Request("POST", "/rooms/" .. tostring(roomId) .. "/invitations", {
-		user_id = userId,
-	}, function(ok, decoded, response)
-		self:TraceOnlineState("invite_user_response", {
+
+	local function submitInvitation()
+		self:TraceOnlineState("invite_user_request", {
 			source = "invite_user",
 			targetRoom = roomId,
 			targetUser = userId,
-			ok = ok == true,
-			status = response and response.statusCode or "nil",
-			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
-			hasInvitation = decoded and decoded.invitation ~= nil,
 		})
-		safe_callback(callback, ok, decoded, response)
-	end)
+		self:Request("POST", "/rooms/" .. tostring(roomId) .. "/invitations", {
+			user_id = userId,
+		}, function(ok, decoded, response)
+			self:TraceOnlineState("invite_user_response", {
+				source = "invite_user",
+				targetRoom = roomId,
+				targetUser = userId,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+				hasInvitation = decoded and decoded.invitation ~= nil,
+			})
+			safe_callback(callback, ok, decoded, response)
+		end)
+	end
+
+	if self:IsLocalTwoPlayerSession()
+		and self.currentRoom
+		and online_room_ids_match(self.currentRoomId, roomId)
+		and not self:LocalPartyRoomComplete(self.currentRoom)
+	then
+		online_flow_trace("invite_user_waiting_for_local_party"
+			.. " room=" .. tostring(roomId)
+			.. " targetUser=" .. tostring(userId))
+		self:SynchronizeCompanionRoom(
+			self.currentRoom,
+			"invite_user_preflight",
+			function(syncOk, syncDecoded, syncResponse)
+				if not syncOk then
+					safe_callback(callback, false, syncDecoded, syncResponse)
+					return
+				end
+				submitInvitation()
+			end
+		)
+		return
+	end
+
+	submitInvitation()
 end
 
 function ITGOnline:InviteUserToNewRoom(userId, visibility, callback)
@@ -17638,66 +17588,11 @@ function ITGOnline:LeaveRoom(callback, companionPendingCancelled)
 		return
 	end
 
-	if not self:IsLocalTwoPlayerSession()
-		or not self.currentRoomId
-		or not self:RoomContainsLocalPlayer(self.currentRoom, PLAYER_2)
-	then
-		self:LeavePrimaryRoom(callback)
-		return
+	if self:IsLocalTwoPlayerSession() then
+		online_flow_trace("local_party_leave_server_managed coordinator=P1"
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
 	end
-
-	self.localPartyLeaveCallbacks = self.localPartyLeaveCallbacks or {}
-	if callback then
-		append_coalesced_callback(self.localPartyLeaveCallbacks, callback, "local_party_leave", function(cb)
-			safe_callback(cb, false, nil, { errorMessage = "Too many pending local-party leave requests." })
-		end)
-	end
-	if self.localPartyLeaveInFlight == true then
-		online_flow_trace("local_party_leave_join_inflight"
-			.. " room=" .. tostring(self.currentRoomId)
-			.. " callbacks=" .. tostring(#self.localPartyLeaveCallbacks))
-		return
-	end
-
-	local roomId = tostring(self.currentRoomId)
-	self.localPartyLeaveInFlight = true
-	online_flow_trace("local_party_leave_begin localPlayer=P2"
-		.. " room=" .. roomId
-		.. " callbacks=" .. tostring(#self.localPartyLeaveCallbacks))
-	self:RequestAsLocalPlayer(PLAYER_2, "POST", "/rooms/" .. roomId .. "/leave", {
-		client_action_id = self:NewClientActionId("p2-room-leave"),
-	}, function(ok, decoded, response)
-		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
-		online_flow_trace("local_party_leave_companion_response localPlayer=P2"
-			.. " room=" .. roomId
-			.. " ok=" .. tostring(ok == true)
-			.. " gone=" .. tostring(gone == true)
-			.. " status=" .. tostring(response and response.statusCode or "nil")
-			.. " error=" .. tostring(decoded and decoded.error_code
-				or response and response.errorMessage or "nil"))
-		if not ok and not gone then
-			self.localPartyLeaveInFlight = false
-			local callbacks = self.localPartyLeaveCallbacks or {}
-			self.localPartyLeaveCallbacks = {}
-			for cb in ivalues(callbacks) do
-				safe_callback(cb, false, decoded, response)
-			end
-			return
-		end
-
-		self:LeavePrimaryRoom(function(primaryOk, primaryDecoded, primaryResponse)
-			self.localPartyLeaveInFlight = false
-			local callbacks = self.localPartyLeaveCallbacks or {}
-			self.localPartyLeaveCallbacks = {}
-			online_flow_trace("local_party_leave_complete"
-				.. " room=" .. roomId
-				.. " ok=" .. tostring(primaryOk == true)
-				.. " callbacks=" .. tostring(#callbacks))
-			for cb in ivalues(callbacks) do
-				safe_callback(cb, primaryOk, primaryDecoded, primaryResponse)
-			end
-		end)
-	end)
+	self:LeavePrimaryRoom(callback)
 end
 
 function ITGOnline:FetchRoom(roomId, callback)

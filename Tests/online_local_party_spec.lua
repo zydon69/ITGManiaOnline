@@ -79,8 +79,10 @@ assert(clientSource:find("function ITGOnline:CanLocalPlayerControlOnlineRoom", 1
 	"client must expose local room-control ownership")
 assert(clientSource:find("expectedOnlineGameplayStepsByPlayer", 1, true),
 	"gameplay charts must be tracked independently for both local players")
-assert(clientSource:find("function ITGOnline:RequestCompanionJoinRequest", 1, true),
-	"private-room membership must be synchronized for Player 2")
+assert(clientSource:find("localPartyServerManaged", 1, true),
+	"private-room membership must be managed atomically by the server")
+assert(not clientSource:find("function ITGOnline:RequestCompanionJoinRequest", 1, true),
+	"the client must not create a second, divergent private-room join request for Player 2")
 assert(clientSource:find("function ITGOnline:ActiveLocalPartyId", 1, true),
 	"both local presences must publish the same ephemeral party identity")
 assert(clientSource:find("function ITGOnline:AcceptInvitationForLocalPlayer", 1, true),
