@@ -51,8 +51,10 @@ foreach(REQUIRED_SNIPPET
     "authentication_was_rejected"
     "SecureConnectionFailed"
     "ProfileTokenMismatch"
-    "TLS, DNS and timeout failures must preserve it"
-    "_wrapwidthpixels((safe_qr_panel_width() - 24) / 0.56)")
+    "P2 = new_player_state(PLAYER_2)"
+    "all_required_players_connected"
+    "ApplyAccessTokenForPlayer"
+    "local function panel_width()")
   string(FIND "${ONLINE_LOGIN_SCREEN_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(FATAL_ERROR "Online login invariant failed: missing '${REQUIRED_SNIPPET}'")

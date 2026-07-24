@@ -14,10 +14,16 @@ if type(previousITGOnline) == "table" and previousITGOnline.runtimeLoaded == tru
 	if previousITGOnline.socket and previousITGOnline.socket.Close then
 		pcall(function() previousITGOnline.socket:Close() end)
 	end
+	for _, realtime in pairs(previousITGOnline.localPartyRealtime or {}) do
+		if realtime.socket and realtime.socket.Close then
+			pcall(function() realtime.socket:Close() end)
+		end
+	end
 	previousITGOnline.requests = {}
 	previousITGOnline.socket = nil
 	previousITGOnline.pendingRealtimeConnectCallbacks = {}
 	previousITGOnline.activeRealtimeCallbacks = nil
+	previousITGOnline.localPartyRealtime = {}
 	previousITGOnline.syncCallbacks = {}
 	previousITGOnline.fetchRoomInFlightByRoomId = {}
 	previousITGOnline.leaveRoomCallbacksByRoomId = {}
@@ -54,6 +60,10 @@ ITGOnline.requestIdCounter = ITGOnline.requestIdCounter or 0
 -- authenticated facade, but cannot read or overwrite the session secret.
 local sessionAccessToken = nil
 local pendingSessionAccessToken = nil
+local localPlayerSessions = {
+	P1 = { token = nil, pendingToken = nil, user = nil, authGeneration = 0 },
+	P2 = { token = nil, pendingToken = nil, user = nil, authGeneration = 0 },
+}
 local transientPassword = previousITGOnline and previousITGOnline.transientPassword or nil
 local transientPasswordAccount = previousITGOnline and previousITGOnline.transientPasswordAccount or nil
 ITGOnline.transientPassword = nil
@@ -63,12 +73,14 @@ ITGOnline.logSessionId = ITGOnline.logSessionId or string.format("%08x-%08x",
 	math.floor(((GetTimeSinceStart and GetTimeSinceStart() or 0) * 1000000) % 4294967295))
 ITGOnline.user = ITGOnline.user or nil
 ITGOnline.socket = ITGOnline.socket or nil
+ITGOnline.localPartyRealtime = ITGOnline.localPartyRealtime or {}
 ITGOnline.currentRoomId = ITGOnline.currentRoomId or nil
 ITGOnline.currentRoom = ITGOnline.currentRoom or nil
 ITGOnline.currentRoomBlockedReason = ITGOnline.currentRoomBlockedReason or ""
 ITGOnline.currentRoomBlockedOpenCount = ITGOnline.currentRoomBlockedOpenCount or nil
 ITGOnline.currentRoomBlockedLastNoticeKey = ITGOnline.currentRoomBlockedLastNoticeKey or ""
 ITGOnline.currentSongPayload = ITGOnline.currentSongPayload or nil
+ITGOnline.pendingOnlineOptionStateByPlayer = ITGOnline.pendingOnlineOptionStateByPlayer or {}
 ITGOnline.currentRoomRoundKey = ITGOnline.currentRoomRoundKey or ""
 ITGOnline.lastResultSongPayload = ITGOnline.lastResultSongPayload or nil
 ITGOnline.songPayloadBySelectionId = ITGOnline.songPayloadBySelectionId or {}
@@ -639,6 +651,15 @@ end
 
 local function active_online_player()
 	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
+		if GAMESTATE.IsSideJoined then
+			local p1Ok, p1Joined = safe_call("active_online_player_p1_coordinator", function()
+				return GAMESTATE:IsSideJoined(PLAYER_1)
+			end)
+			local p2Ok, p2Joined = safe_call("active_online_player_p2_companion", function()
+				return GAMESTATE:IsSideJoined(PLAYER_2)
+			end)
+			if p1Ok and p1Joined and p2Ok and p2Joined then return PLAYER_1 end
+		end
 		local ok, players = safe_call("active_online_player_enabled", function()
 			return GAMESTATE:GetEnabledPlayers()
 		end)
@@ -661,8 +682,8 @@ local function active_online_player()
 	return PLAYER_1
 end
 
-local function active_online_player_modifiers()
-	local player = active_online_player()
+local function active_online_player_modifiers(player)
+	player = player or active_online_player()
 	local pn = player and ToEnumShortString(player) or "P1"
 	return player, pn, SL and SL[pn] and SL[pn].ActiveModifiers or nil
 end
@@ -672,15 +693,44 @@ local function online_profile_slot(player)
 	return "ProfileSlot_Player1"
 end
 
+local function local_player_key(player)
+	return player == PLAYER_2 and "P2" or "P1"
+end
+
+local function local_player_session(player)
+	return localPlayerSessions[local_player_key(player)]
+end
+
+local function joined_local_players()
+	local players = {}
+	if not (GAMESTATE and GAMESTATE.GetEnabledPlayers and GAMESTATE.IsSideJoined) then
+		return players
+	end
+	local ok, enabledPlayers = safe_call("online_joined_local_players", function()
+		return GAMESTATE:GetEnabledPlayers()
+	end)
+	if not ok or type(enabledPlayers) ~= "table" then return players end
+	for player in ivalues(enabledPlayers) do
+		local joinedOk, joined = safe_call("online_joined_local_player", function()
+			return GAMESTATE:IsSideJoined(player)
+		end)
+		if joinedOk and joined then players[#players + 1] = player end
+	end
+	table.sort(players, function(left, right)
+		return local_player_key(left) < local_player_key(right)
+	end)
+	return players
+end
+
 -- Remembered online credentials are owned by a persistent local profile, not
 -- by the installation. Portable builds therefore never leak a deleted
 -- profile's online session into a newly-created profile.
-local function active_persistent_online_profile()
+local function persistent_online_profile(player)
 	if not (PROFILEMAN and PROFILEMAN.IsPersistentProfile and PROFILEMAN.GetProfile and PROFILEMAN.GetProfileDir) then
 		return nil
 	end
 
-	local player = active_online_player()
+	player = player or active_online_player()
 	if not player then return nil end
 	local persistentOk, persistent = safe_call("online_token_profile_persistent", function()
 		return PROFILEMAN:IsPersistentProfile(player)
@@ -716,19 +766,21 @@ local function active_persistent_online_profile()
 end
 
 function ITGOnline:OnlineDisplayNameForLocalPlayer(player)
-	if not player or not self.user or not self.HasActiveAccessToken or not self:HasActiveAccessToken() then
+	if not player or not self.HasActiveAccessTokenForPlayer or not self:HasActiveAccessTokenForPlayer(player) then
 		return nil
 	end
 
-	local identity = active_persistent_online_profile()
-	if not identity or identity.player ~= player then return nil end
+	local identity = persistent_online_profile(player)
+	if not identity then return nil end
 
-	local displayName = trim(user_display_name(self.user, ""))
+	local displayName = trim(user_display_name(self:UserForLocalPlayer(player), ""))
 	return displayName ~= "" and displayName or nil
 end
 
-local function profile_prefers_persistent_online_token()
-	local player, pn, modifiers = active_online_player_modifiers()
+local function profile_prefers_persistent_online_token(player)
+	local pn
+	local modifiers
+	player, pn, modifiers = active_online_player_modifiers(player)
 	local rememberToken = modifiers and modifiers.RememberOnlineToken == true
 
 	if not rememberToken and ThemePrefs and ThemePrefs.Get then
@@ -745,17 +797,17 @@ local function profile_prefers_persistent_online_token()
 		return false
 	end
 
-	return active_persistent_online_profile() ~= nil
+	return persistent_online_profile(player) ~= nil
 end
 
-local function active_profile_auth_path()
-	local identity = active_persistent_online_profile()
+local function profile_auth_path(player)
+	local identity = persistent_online_profile(player)
 	if not identity then return nil, nil, nil end
 	return identity.dir .. "Editable.ini", identity.dir, identity
 end
 
-local function access_token_scope(apiBaseUrl, _deviceName)
-	local _, _, identity = active_profile_auth_path()
+local function access_token_scope(apiBaseUrl, _deviceName, player)
+	local _, _, identity = profile_auth_path(player)
 	if not identity then return "" end
 	return "profile-guid:v2:" .. identity.guid .. "|api:" .. normalize_base_url(apiBaseUrl)
 end
@@ -827,8 +879,8 @@ local function secure_password_account(apiBaseUrl, email)
 	return normalize_base_url(apiBaseUrl) .. "|" .. email
 end
 
-local function clear_active_profile_auth()
-	local _, _, identity = active_profile_auth_path()
+local function clear_profile_auth(player)
+	local _, _, identity = profile_auth_path(player)
 	if not identity then return true end
 	if not identity.profile.ClearITGOnlineAuth then return false end
 	local previous = profile_auth_snapshot(identity)
@@ -843,14 +895,15 @@ local function clear_active_profile_auth()
 	return true
 end
 
-local lastInvalidProfileBindingSignature = nil
+local lastInvalidProfileBindingSignature = {}
 
-local function secure_access_token_get(apiBaseUrl, deviceName)
-	if not profile_prefers_persistent_online_token() then
+local function secure_access_token_get(apiBaseUrl, deviceName, player)
+	if not profile_prefers_persistent_online_token(player) then
 		return nil, false, nil
 	end
-	local _, _, identity = active_profile_auth_path()
-	local scope = access_token_scope(apiBaseUrl, deviceName)
+	local _, _, identity = profile_auth_path(player)
+	local scope = access_token_scope(apiBaseUrl, deviceName, player)
+	local playerKey = identity and identity.player and ToEnumShortString(identity.player) or "unknown"
 	local auth = profile_auth_snapshot(identity)
 	if not auth or trim(auth.scope) ~= scope or trim(auth.onlineUserId) == ""
 		or tostring(auth.accessToken or "") == ""
@@ -862,13 +915,14 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 			trim(auth and auth.scope or ""),
 			trim(auth and auth.onlineUserId or ""),
 		}, "|")
-		if signature ~= lastInvalidProfileBindingSignature then
-			lastInvalidProfileBindingSignature = signature
-			online_trace("stored token ignored reason=profile_binding_missing_or_invalid", "auth")
+		if signature ~= lastInvalidProfileBindingSignature[playerKey] then
+			lastInvalidProfileBindingSignature[playerKey] = signature
+			online_trace("stored token ignored reason=profile_binding_missing_or_invalid localPlayer="
+				.. tostring(playerKey), "auth")
 		end
 		return nil, false, nil
 	end
-	lastInvalidProfileBindingSignature = nil
+	lastInvalidProfileBindingSignature[playerKey] = nil
 
 	return tostring(auth.accessToken), true, {
 		profileGuid = identity.guid,
@@ -879,13 +933,13 @@ local function secure_access_token_get(apiBaseUrl, deviceName)
 	}
 end
 
-local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user)
-	if not profile_prefers_persistent_online_token() then
-		clear_active_profile_auth()
+local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user, player)
+	if not profile_prefers_persistent_online_token(player) then
+		clear_profile_auth(player)
 		return false
 	end
-	local scope = access_token_scope(apiBaseUrl, deviceName)
-	local _, _, identity = active_profile_auth_path()
+	local scope = access_token_scope(apiBaseUrl, deviceName, player)
+	local _, _, identity = profile_auth_path(player)
 	local userId = online_user_identifier(user)
 	if not identity or scope == "" or userId == "" or tostring(accessToken or "") == ""
 		or not identity.profile.SetITGOnlineAuth
@@ -905,8 +959,8 @@ local function secure_access_token_set(apiBaseUrl, deviceName, accessToken, user
 	return true
 end
 
-local function secure_access_token_delete(_apiBaseUrl, _deviceName)
-	return clear_active_profile_auth()
+local function secure_access_token_delete(_apiBaseUrl, _deviceName, player)
+	return clear_profile_auth(player)
 end
 
 local function safe_decode(body)
@@ -1308,6 +1362,15 @@ end
 
 local function first_enabled_player()
 	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
+		if GAMESTATE.IsSideJoined then
+			local p1Ok, p1Joined = safe_call("first_enabled_player_p1", function()
+				return GAMESTATE:IsSideJoined(PLAYER_1)
+			end)
+			local p2Ok, p2Joined = safe_call("first_enabled_player_p2", function()
+				return GAMESTATE:IsSideJoined(PLAYER_2)
+			end)
+			if p1Ok and p1Joined and p2Ok and p2Joined then return PLAYER_1 end
+		end
 		local ok, players = safe_call("first_enabled_player_enabled", function()
 			return GAMESTATE:GetEnabledPlayers()
 		end)
@@ -1383,10 +1446,6 @@ local function online_local_player_count()
 		if joinedOk and joined then count = count + 1 end
 	end
 	return count
-end
-
-local function online_single_local_player_allowed()
-	return online_local_player_count() <= 1
 end
 
 local function local_profile_name()
@@ -1499,6 +1558,14 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 	self.pendingOnlineOptionSongHash = currentSong and self.SongHashFor and self:SongHashFor(currentSong) or ""
 	self.pendingOnlineOptionSelectionKey = self.CurrentOptionsSelectionKey
 		and self:CurrentOptionsSelectionKey(self.currentRoom) or ""
+	local optionPlayerKey = local_player_key(player)
+	self.pendingOnlineOptionStateByPlayer[optionPlayerKey] = {
+		steps = steps,
+		at = self.pendingOnlineOptionStepsAt,
+		source = self.pendingOnlineOptionStepsSource,
+		songHash = self.pendingOnlineOptionSongHash,
+		selectionKey = self.pendingOnlineOptionSelectionKey,
+	}
 
 	local chartHash = self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
 	local chartKey = steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
@@ -1515,25 +1582,35 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 		.. " meter=" .. tostring(meter or "nil")
 		.. " notes=" .. tostring(notes or "nil")
 		.. " songHash=" .. tostring(self.pendingOnlineOptionSongHash or ""):sub(1, 12)
-		.. " selectionKey=" .. tostring(self.pendingOnlineOptionSelectionKey or ""))
+		.. " selectionKey=" .. tostring(self.pendingOnlineOptionSelectionKey or "")
+		.. " localPlayer=" .. tostring(optionPlayerKey))
 end
 
-local function selected_steps()
-	local player = first_enabled_player()
+local function selected_steps(player)
+	player = player or first_enabled_player()
 	if not GAMESTATE then return nil end
 	if GAMESTATE:IsCourseMode() then
 		return GAMESTATE:GetCurrentTrail(player)
 	end
 
-	local rememberedSteps = ITGOnline and ITGOnline.pendingOnlineOptionSteps or nil
+	local playerState = ITGOnline and ITGOnline.pendingOnlineOptionStateByPlayer
+		and ITGOnline.pendingOnlineOptionStateByPlayer[local_player_key(player)] or nil
+	local rememberedSteps = playerState and playerState.steps or nil
+	if not rememberedSteps
+		and not (ITGOnline and ITGOnline.IsLocalTwoPlayerSession
+			and ITGOnline:IsLocalTwoPlayerSession()) then
+		rememberedSteps = ITGOnline and ITGOnline.pendingOnlineOptionSteps or nil
+	end
 	if steps_belongs_to_current_song(rememberedSteps) then
 		if online_flow_trace then
-			local age = (GetTimeSinceStart and GetTimeSinceStart() or 0) - (tonumber(ITGOnline.pendingOnlineOptionStepsAt) or 0)
+			local age = (GetTimeSinceStart and GetTimeSinceStart() or 0)
+				- (tonumber(playerState and playerState.at or ITGOnline.pendingOnlineOptionStepsAt) or 0)
 			local chartHash = ITGOnline.ChartHashForSteps and ITGOnline:ChartHashForSteps(rememberedSteps) or ""
 			local difficulty = rememberedSteps.GetDifficulty and enum_short(rememberedSteps:GetDifficulty()) or ""
 			local meter = rememberedSteps.GetMeter and tonumber(rememberedSteps:GetMeter()) or nil
 			online_flow_trace("option_stepchart_using_remembered"
-				.. " source=" .. tostring(ITGOnline.pendingOnlineOptionStepsSource or "unknown")
+				.. " source=" .. tostring(playerState and playerState.source
+					or ITGOnline.pendingOnlineOptionStepsSource or "unknown")
 				.. " age=" .. string.format("%.3f", age)
 				.. " player=" .. tostring(ITGOnline.pendingOnlineOptionStepsPlayer or "nil")
 				.. " chartHash=" .. tostring(chartHash or ""):sub(1, 12)
@@ -1608,10 +1685,10 @@ local function selected_steps()
 	return currentSteps
 end
 
-current_chart_note_count = function(steps)
+current_chart_note_count = function(steps, player)
 	if not steps or not steps.GetRadarValues then return nil end
 
-	local player = first_enabled_player()
+	player = player or first_enabled_player()
 	local ok, radar = pcall(function() return steps:GetRadarValues(player) end)
 	if not ok or not radar or not radar.GetValue then return nil end
 
@@ -1689,8 +1766,8 @@ local function apply_music_rate(rate)
 	return rate
 end
 
-local function current_speed_mod_label()
-	local player = first_enabled_player()
+local function current_speed_mod_label(player)
+	player = player or first_enabled_player()
 	local pn = player and ToEnumShortString(player) or "P1"
 	local activeModifiers = SL and SL[pn] and SL[pn].ActiveModifiers or nil
 	if not activeModifiers then return nil end
@@ -1710,8 +1787,8 @@ local function current_speed_mod_label()
 	return string.format("%g", speedMod)
 end
 
-local function current_stepchart_label()
-	local steps = selected_steps()
+local function current_stepchart_label(player)
+	local steps = selected_steps(player)
 	if not steps then return nil end
 
 	local chartType = tostring(ToEnumShortString(steps:GetStepsType()) or ""):gsub("_", "-"):lower()
@@ -2016,6 +2093,307 @@ function ITGOnline:ClearStoredAccessToken()
 	return deleted == true
 end
 
+function ITGOnline:LocalPlayerKey(player)
+	return local_player_key(player)
+end
+
+function ITGOnline:JoinedLocalPlayers()
+	return joined_local_players()
+end
+
+function ITGOnline:LocalPartyPlan()
+	local sides = {}
+	for _, player in ipairs(joined_local_players()) do
+		sides[#sides + 1] = local_player_key(player)
+	end
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.session_plan then
+		return ITGOnlineLocalParty.session_plan(sides)
+	end
+	return {
+		requiredSides = sides,
+		requiredCount = #sides,
+		coordinatorSide = sides[1],
+		twoPlayer = #sides == 2,
+	}
+end
+
+function ITGOnline:IsPrimaryLocalPlayer(player)
+	if not player then return false end
+	local plan = self:LocalPartyPlan()
+	return local_player_key(player) == tostring(plan.coordinatorSide or "")
+end
+
+function ITGOnline:CanLocalPlayerControlOnlineRoom(player)
+	return not self:IsLocalTwoPlayerSession() or self:IsPrimaryLocalPlayer(player)
+end
+
+function ITGOnline:IsLocalTwoPlayerSession()
+	return self:LocalPartyPlan().twoPlayer == true
+end
+
+function ITGOnline:ActiveLocalPartyId()
+	if not self:IsLocalTwoPlayerSession() then
+		self.localPartyId = nil
+		return nil
+	end
+	local valid = self:ValidateLocalPlayerIdentities()
+	if not valid then
+		self.localPartyId = nil
+		return nil
+	end
+	if tostring(self.localPartyId or "") == "" then
+		if not (CRYPTMAN and CRYPTMAN.GenerateRandomUUID) then
+			online_flow_trace("local_party_id_unavailable reason=no_secure_uuid_generator")
+			return nil
+		end
+		self.localPartyId = CRYPTMAN:GenerateRandomUUID()
+		online_flow_trace("local_party_id_created players=2")
+	end
+	return self.localPartyId
+end
+
+function ITGOnline:UserForLocalPlayer(player)
+	if not player then return nil end
+	if self:IsPrimaryLocalPlayer(player) then return self.user end
+	local session = local_player_session(player)
+	return session and session.user or nil
+end
+
+function ITGOnline:HasActiveAccessTokenForPlayer(player)
+	if not player then return false end
+	if self:IsPrimaryLocalPlayer(player) then
+		return tostring(sessionAccessToken or "") ~= ""
+	end
+	local session = local_player_session(player)
+	return session ~= nil and tostring(session.token or "") ~= ""
+end
+
+function ITGOnline:HasStoredAccessTokenForPlayer(player)
+	if not player or not profile_prefers_persistent_online_token(player) then return false end
+	local config = self:ConnectionConfig()
+	local accessToken = secure_access_token_get(config.apiBaseUrl, config.deviceName, player)
+	local present = tostring(accessToken or "") ~= ""
+	accessToken = nil
+	return present
+end
+
+function ITGOnline:ShouldRememberTokenForPlayer(player)
+	return player ~= nil and profile_prefers_persistent_online_token(player)
+end
+
+function ITGOnline:StoreAccessTokenForPlayer(player, accessToken, user)
+	if not player then return false end
+	local config = self:Config()
+	if not profile_prefers_persistent_online_token(player) then
+		secure_access_token_delete(config.apiBaseUrl, config.deviceName, player)
+		online_flow_trace("stored_access_token_disabled localPlayer=" .. local_player_key(player))
+		return false
+	end
+	local stored = secure_access_token_set(config.apiBaseUrl, config.deviceName, accessToken, user, player)
+	online_flow_trace("stored_access_token_save localPlayer=" .. local_player_key(player)
+		.. " stored=" .. tostring(stored == true)
+		.. " user=" .. tostring(user and (user.id or user.user_id) or "nil"))
+	return stored == true
+end
+
+function ITGOnline:ClearStoredAccessTokenForPlayer(player)
+	if not player then return false end
+	if self:IsPrimaryLocalPlayer(player) then return self:ClearStoredAccessToken() end
+	local config = self:ConnectionConfig()
+	local deleted = secure_access_token_delete(config.apiBaseUrl, config.deviceName, player)
+	online_flow_trace("stored_access_token_clear localPlayer=" .. local_player_key(player)
+		.. " deleted=" .. tostring(deleted == true))
+	return deleted == true
+end
+
+function ITGOnline:ClearLocalPlayerSession(player, options)
+	options = type(options) == "table" and options or {}
+	if not player then return end
+	if self:IsPrimaryLocalPlayer(player) then
+		if options.clearStored == true then self:ClearStoredAccessToken() end
+		sessionAccessToken = nil
+		pendingSessionAccessToken = nil
+		self.user = nil
+		return
+	end
+	local session = local_player_session(player)
+	if session then
+		session.authGeneration = (tonumber(session.authGeneration) or 0) + 1
+		session.token = nil
+		session.pendingToken = nil
+		session.user = nil
+	end
+	if options.clearStored == true then
+		self:ClearStoredAccessTokenForPlayer(player)
+	end
+	safe_broadcast("ITGOnlineLoginStateChanged", {
+		localPlayer = local_player_key(player),
+	})
+end
+
+function ITGOnline:ValidateLocalPlayerIdentities()
+	local plan = self:LocalPartyPlan()
+	local identities = {}
+	for _, player in ipairs(joined_local_players()) do
+		if not self:HasActiveAccessTokenForPlayer(player) then
+			return false, "local_player_not_authenticated", local_player_key(player)
+		end
+		local user = self:UserForLocalPlayer(player)
+		local userId = online_user_identifier(user)
+		if userId == "" then
+			return false, "local_player_identity_missing", local_player_key(player)
+		end
+		identities[local_player_key(player)] = userId
+	end
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.validate_identities then
+		return ITGOnlineLocalParty.validate_identities(plan, identities)
+	end
+	if plan.requiredCount == 0 then return false, "no_local_player" end
+	return true
+end
+
+function ITGOnline:ApplyAccessTokenForPlayer(player, accessToken, callback, expectedBinding)
+	if not player then
+		safe_callback(callback, false, nil, { errorMessage = "No local player provided." })
+		return
+	end
+	if self:IsPrimaryLocalPlayer(player) then
+		self:ApplyAccessToken(accessToken, callback, expectedBinding)
+		return
+	end
+
+	accessToken = tostring(accessToken or "")
+	local playerKey = local_player_key(player)
+	if accessToken == "" then
+		safe_callback(callback, false, nil, { errorMessage = "No access token provided." })
+		return
+	end
+
+	local session = local_player_session(player)
+	session.authGeneration = (tonumber(session.authGeneration) or 0) + 1
+	local generation = session.authGeneration
+	session.pendingToken = accessToken
+	session.token = nil
+	session.user = nil
+	online_flow_trace("local_auth_apply_begin localPlayer=" .. playerKey
+		.. " generation=" .. tostring(generation))
+
+	self:Request("GET", "/me", nil, function(ok, decoded, response)
+		if generation ~= session.authGeneration or tostring(session.pendingToken or "") ~= accessToken then
+			online_flow_trace("local_auth_apply_ignored reason=stale localPlayer=" .. playerKey
+				.. " generation=" .. tostring(generation)
+				.. " currentGeneration=" .. tostring(session.authGeneration))
+			safe_callback(callback, false, nil, {
+				cancelled = true,
+				errorMessage = "A newer authentication attempt superseded this request.",
+			})
+			return
+		end
+		local user = ok and decoded and decoded.user or nil
+		if not user then
+			session.pendingToken = nil
+			online_flow_trace("local_auth_apply_failed localPlayer=" .. playerKey
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			safe_callback(callback, false, nil, response or decoded)
+			return
+		end
+
+		if type(expectedBinding) == "table" then
+			local expectedUserId = trim(expectedBinding.onlineUserId)
+			local actualUserId = online_user_identifier(user)
+			if expectedUserId == "" or actualUserId == "" or expectedUserId ~= actualUserId then
+				session.pendingToken = nil
+				self:ClearStoredAccessTokenForPlayer(player)
+				online_flow_trace("local_auth_apply_failed reason=profile_binding_mismatch localPlayer=" .. playerKey
+					.. " expectedUser=" .. tostring(expectedUserId)
+					.. " actualUser=" .. tostring(actualUserId))
+				safe_callback(callback, false, nil, {
+					errorMessage = "The saved online session belongs to another account. Please sign in again.",
+					code = "profile_token_user_mismatch",
+				})
+				return
+			end
+		end
+
+		local primaryUserId = online_user_identifier(self.user)
+		local userId = online_user_identifier(user)
+		if primaryUserId ~= "" and userId == primaryUserId then
+			session.pendingToken = nil
+			online_flow_trace("local_auth_apply_failed reason=duplicate_identity localPlayer=" .. playerKey
+				.. " user=" .. tostring(userId))
+			safe_callback(callback, false, nil, {
+				errorMessage = "Each local player must use a different online account.",
+				code = "duplicate_local_online_identity",
+			})
+			return
+		end
+
+		session.token = accessToken
+		session.pendingToken = nil
+		session.user = user
+		local persisted = self:StoreAccessTokenForPlayer(player, accessToken, user)
+		online_flow_trace("local_auth_apply_success localPlayer=" .. playerKey
+			.. " user=" .. tostring(userId)
+			.. " persisted=" .. tostring(persisted == true))
+		safe_broadcast("ITGOnlineLoginStateChanged", {
+			localPlayer = playerKey,
+			user = user,
+		})
+		safe_callback(callback, true, user, decoded)
+	end, true, {
+		authToken = accessToken,
+		cancelOnScreenChange = true,
+		localPlayer = playerKey,
+		skipAuthRetry = true,
+	})
+end
+
+function ITGOnline:ApplyStoredAccessTokenForPlayer(player, callback)
+	if not player then
+		safe_callback(callback, false, nil, { errorMessage = "No local player provided." })
+		return false
+	end
+	if self:IsPrimaryLocalPlayer(player) then
+		return self:ApplyStoredAccessToken(callback)
+	end
+	local config = self:ConnectionConfig()
+	local accessToken, storedSecurely, binding =
+		secure_access_token_get(config.apiBaseUrl, config.deviceName, player)
+	if not storedSecurely or tostring(accessToken or "") == "" then
+		safe_callback(callback, false, nil, {
+			message = online_client_text("NoProfileToken", "No access token is associated with this profile."),
+		})
+		return false
+	end
+	self:ApplyAccessTokenForPlayer(player, tostring(accessToken), callback, binding)
+	accessToken = nil
+	return true
+end
+
+function ITGOnline:RequestAsLocalPlayer(player, method, path, payload, callback, options)
+	options = type(options) == "table" and options or {}
+	if not player then
+		safe_callback(callback, false, nil, { errorMessage = "No local player provided." })
+		return
+	end
+	if self:IsPrimaryLocalPlayer(player) then
+		self:Request(method, path, payload, callback, false, options)
+		return
+	end
+	local session = local_player_session(player)
+	if not session or tostring(session.token or "") == "" then
+		safe_callback(callback, false, nil, {
+			error_code = "local_player_not_authenticated",
+			errorMessage = "The local player is not authenticated.",
+		})
+		return
+	end
+	options.authToken = session.token
+	options.localPlayer = local_player_key(player)
+	options.skipAuthRetry = true
+	self:Request(method, path, payload, callback, false, options)
+end
+
 function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	reason = tostring(reason or "session_invalidated")
 	payload = type(payload) == "table" and payload or {}
@@ -2232,6 +2610,26 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 			self.user = nil
 			safe_callback(callback, false, nil, decodedOrResponse)
 			return
+		end
+		local incomingUserId = online_user_identifier(user)
+		for _, player in ipairs(joined_local_players()) do
+			if not self:IsPrimaryLocalPlayer(player) then
+				local otherUserId = online_user_identifier(self:UserForLocalPlayer(player))
+				if incomingUserId ~= "" and incomingUserId == otherUserId then
+					sessionAccessToken = nil
+					pendingSessionAccessToken = nil
+					self.user = nil
+					online_flow_trace("auth_apply_token_failed reason=duplicate_local_identity"
+						.. " localPlayer=" .. tostring(self:LocalPartyPlan().coordinatorSide or "P1")
+						.. " duplicatePlayer=" .. local_player_key(player)
+						.. " user=" .. tostring(incomingUserId))
+					safe_callback(callback, false, nil, {
+						errorMessage = "Each local player must use a different online account.",
+						code = "duplicate_local_online_identity",
+					})
+					return
+				end
+			end
 		end
 		if type(expectedBinding) == "table" then
 			local expectedUserId = trim(expectedBinding.onlineUserId)
@@ -2574,6 +2972,9 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 
 	local didWork = false
+	if self.MaintainCompanionRealtime and self:MaintainCompanionRealtime(source) then
+		didWork = true
+	end
 	if self.ProcessPendingSongPreviewClears and self:ProcessPendingSongPreviewClears() > 0 then
 		didWork = true
 	end
@@ -3124,6 +3525,7 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		screenGeneration = self.screenGeneration,
 		cancelGeneration = self.requestCancelGeneration,
 		callback = callback,
+		localPlayer = tostring(options.localPlayer or local_player_key(active_online_player())),
 	}
 
 	local headers = {
@@ -3146,7 +3548,8 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		.. " screenGeneration=" .. tostring(self.screenGeneration or "nil")
 		.. " cancelGeneration=" .. tostring(self.requestCancelGeneration or "nil")
 		.. " currentScreen=" .. tostring(self.currentScreenName or "nil")
-		.. " room=" .. tostring(self.currentRoomId or "nil"))
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " localPlayer=" .. tostring(options.localPlayer or local_player_key(active_online_player())))
 	self:TraceOnlineState("http_request_begin", {
 		source = "http_request",
 		requestId = requestId,
@@ -3244,7 +3647,9 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 			end
 
 					local requestIsIdempotent = self:IsDeclaredIdempotentRequest(method, path, payload)
-					if response and response.statusCode == 401 and path ~= "/auth/login" and path ~= "/auth/refresh" and not self.disconnecting and not alreadyRetriedAuth
+					if response and response.statusCode == 401 and path ~= "/auth/login" and path ~= "/auth/refresh"
+						and options.skipAuthRetry ~= true
+						and not self.disconnecting and not alreadyRetriedAuth
 						and requestIsIdempotent then
 				local retryRecord = record
 					online_flow_trace("http_auth_retry_begin id=" .. tostring(requestId)
@@ -3291,7 +3696,7 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 				end)
 					return
 				end
-					if response and response.statusCode == 401 and not self.disconnecting
+					if response and response.statusCode == 401 and options.skipAuthRetry ~= true and not self.disconnecting
 						and not alreadyRetriedAuth and not requestIsIdempotent then
 					online_flow_trace("http_auth_retry_refused_non_idempotent id=" .. tostring(requestId)
 						.. " method=" .. tostring(method) .. " path=" .. tostring(path))
@@ -3476,7 +3881,29 @@ function ITGOnline:ConsumeNeedsSyncAfterScreenCancel()
 	return true
 end
 
-function ITGOnline:IsCurrentUserRoomManager(room)
+function ITGOnline:RoomContainsLocalPlayer(room, player)
+	if type(room) ~= "table" or not player then return false end
+	local userId = online_user_identifier(self:UserForLocalPlayer(player))
+	if userId == "" then return false end
+	for _, member in ipairs(room.members or {}) do
+		local memberUser = type(member.user) == "table" and member.user or {}
+		local memberUserId = member.user_id or member.userId or memberUser.id
+		if memberUserId ~= nil and online_protocol_ids_match(memberUserId, userId) then
+			return true
+		end
+	end
+	return false
+end
+
+function ITGOnline:LocalPartyRoomComplete(room)
+	if not self:IsLocalTwoPlayerSession() then return true end
+	for _, player in ipairs(joined_local_players()) do
+		if not self:RoomContainsLocalPlayer(room, player) then return false end
+	end
+	return true
+end
+
+function ITGOnline:IsAuthenticatedUserRoomManager(room)
 	if not room or not self.user then return false end
 	local currentUserId = tostring(self.user.id or "")
 	if currentUserId == "" then return false end
@@ -3495,6 +3922,11 @@ function ITGOnline:IsCurrentUserRoomManager(room)
 	end
 
 	return false
+end
+
+function ITGOnline:IsCurrentUserRoomManager(room)
+	return self:LocalPartyRoomComplete(room)
+		and self:IsAuthenticatedUserRoomManager(room)
 end
 
 function ITGOnline:RoomMatchesId(room, roomId)
@@ -4521,6 +4953,11 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.failedScoreSnapshot = nil
 	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
+	self.companionScoreRuntime = {}
+	self.companionLifecycleState = {}
+	self.companionReadyInFlight = {}
+	self.expectedOnlineGameplaySteps = nil
+	self.expectedOnlineGameplayStepsByPlayer = {}
 	self:ClearActiveGameplayRound(source or "round_runtime_state_reset")
 end
 
@@ -5041,6 +5478,9 @@ function ITGOnline:ApplyDecodedRoomSnapshot(decoded, source)
 		return nil, decoded.error_code
 	end
 	decoded.room = room
+	if self:IsLocalTwoPlayerSession() and self.SynchronizeCompanionRoom then
+		self:SynchronizeCompanionRoom(room, source)
+	end
 	return room
 end
 
@@ -6174,6 +6614,33 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	end
 
 	if phase == "results" then
+		if self:IsLocalTwoPlayerSession()
+			and self.SendCompanionScore
+			and not self:LocalPlayerHasFinalResult(self.currentRoom, PLAYER_2)
+		then
+			self.onlineGameplayEvaluationMarkInFlightKey = roundKey
+			online_flow_trace("mark_terminal_results_recover_companion_final localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " roundKey=" .. tostring(roundKey))
+			self:SendCompanionScore(true, true, function(ok, decoded, response)
+				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+					self.onlineGameplayEvaluationMarkInFlightKey = ""
+				end
+				if ok then
+					self.onlineGameplayEvaluationNextRetryAt = 0
+					if self.FetchPlayState then self:FetchPlayState() end
+				else
+					self.onlineGameplayEvaluationNextRetryAt = GetTimeSinceStart() + 1.0
+					online_flow_trace("mark_terminal_results_companion_final_failed localPlayer=P2"
+						.. " room=" .. tostring(self.currentRoomId or "nil")
+						.. " roundKey=" .. tostring(roundKey)
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " error=" .. tostring(decoded and decoded.error_code
+							or response and response.errorMessage or "nil"))
+				end
+			end)
+			return true
+		end
 		self.onlineGameplayEvaluationMarkKey = roundKey
 		self.onlineGameplayEndedKey = roundKey
 		self.onlineGameplayEvaluationTerminalErrorKey = ""
@@ -6213,6 +6680,35 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			.. " retry=" .. tostring(retryCount)
 			.. " nextIn=" .. string.format("%.1f", retryDelay)
 			.. " message=" .. tostring(response_message(response, decoded, "terminal state rejected")))
+	end
+
+	if phase == "playing"
+		and self:IsLocalTwoPlayerSession()
+		and self.SendCompanionScore
+		and not self:LocalPlayerHasFinalResult(self.currentRoom, PLAYER_2)
+	then
+		local companionState = self:CompanionScoreState(roundKey)
+		if companionState.finalAccepted ~= true then
+			self.onlineGameplayEvaluationMarkInFlightKey = roundKey
+			online_flow_trace("mark_terminal_waiting_for_companion_final localPlayer=P2"
+				.. " source=" .. tostring(source or "unknown")
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " roundKey=" .. tostring(roundKey))
+			self:SendCompanionScore(true, true, function(ok, decoded, response)
+				if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
+					self.onlineGameplayEvaluationMarkInFlightKey = ""
+				end
+				if ok then
+					self.onlineGameplayEvaluationNextRetryAt = 0
+					self:MarkGameplayCompleteForEvaluation(
+						tostring(source or "unknown") .. ":after_companion_final"
+					)
+					return
+				end
+				scheduleTerminalRetry("mark_terminal_companion_final_retry", decoded, response)
+			end)
+			return true
+		end
 	end
 
 	if self.SendScore and phase == "playing" then
@@ -7468,8 +7964,9 @@ function ITGOnline:Login(callback)
 		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
 		.. " sessionExpired=" .. tostring(self.sessionExpired == true))
 	if online_local_player_count() > 1 then
-		online_flow_trace("login_failed reason=two_local_players")
-		safe_callback(callback, false, THEME:GetString("ScreenITGOnlineLogin", "TwoPlayerNotice"))
+		online_flow_trace("login_failed reason=two_local_players_require_independent_device_auth")
+		safe_callback(callback, false,
+			"Both local players must authenticate independently from the online login screen.")
 		return
 	end
 
@@ -8049,6 +8546,369 @@ function ITGOnline:ConnectWebSocket(callbacks)
 	end)
 end
 
+function ITGOnline:CompanionRealtimeContext(player)
+	local key = local_player_key(player)
+	local context = self.localPartyRealtime[key]
+	if type(context) ~= "table" then
+		context = {
+			player = player,
+			key = key,
+			socket = nil,
+			connecting = false,
+			connected = false,
+			generation = 0,
+			reconnectAttempt = 0,
+			reconnectNextAttemptAt = 0,
+			lastMessageAt = 0,
+		}
+		self.localPartyRealtime[key] = context
+	end
+	return context
+end
+
+function ITGOnline:CloseCompanionRealtime(player, reason)
+	local context = self:CompanionRealtimeContext(player)
+	context.generation = (tonumber(context.generation) or 0) + 1
+	if context.socket then
+		safe_call("companion_socket_close:" .. context.key, function()
+			context.socket:Close()
+		end)
+	end
+	context.socket = nil
+	context.connecting = false
+	context.connected = false
+	online_flow_trace("companion_realtime_closed localPlayer=" .. context.key
+		.. " reason=" .. tostring(reason or "unknown"))
+end
+
+function ITGOnline:HandleLocalPartyInvariantFailure(reason, player, payload)
+	if not self:IsLocalTwoPlayerSession() then return end
+	local playerKey = local_player_key(player)
+	local failureKey = table.concat({
+		tostring(reason or "unknown"),
+		playerKey,
+		tostring(self.currentRoomId or ""),
+	}, "|")
+	if self.localPartyInvariantFailureKey == failureKey then return end
+	self.localPartyInvariantFailureKey = failureKey
+	online_flow_trace("local_party_invariant_failed reason=" .. tostring(reason or "unknown")
+		.. " localPlayer=" .. playerKey
+		.. " user=" .. tostring(self:UserForLocalPlayer(player)
+			and self:UserForLocalPlayer(player).id or "nil")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+	safe_broadcast("ITGOnlineLocalPartyInvalidated", {
+		reason = tostring(reason or "unknown"),
+		localPlayer = playerKey,
+		payload = payload,
+	})
+
+	local returnToLobby = function()
+		if SCREENMAN and SCREENMAN.SetNewScreen
+			and tostring(self.currentScreenName or "") ~= "ScreenOnlineLobbies" then
+			SCREENMAN:SetNewScreen("ScreenOnlineLobbies")
+		end
+	end
+	if self.currentRoomId then
+		self:LeaveRoom(function()
+			returnToLobby()
+		end)
+	else
+		returnToLobby()
+	end
+end
+
+function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
+	local normalized, normalizeError
+	if ITGOnlineProtocol and ITGOnlineProtocol.normalize_event then
+		normalized, normalizeError = ITGOnlineProtocol.normalize_event(payload)
+	else
+		normalized = payload
+	end
+	if type(normalized) ~= "table" then
+		return false, normalizeError or "invalid_event"
+	end
+
+	local eventName = tostring(normalized.event or normalized.name or "")
+	local eventPayload = type(normalized.payload) == "table" and normalized.payload or {}
+	online_flow_trace("companion_realtime_event localPlayer=" .. local_player_key(player)
+		.. " id=" .. tostring(normalized.id or "nil")
+		.. " event=" .. tostring(eventName)
+		.. " room=" .. tostring(eventPayload.room_id or eventPayload.roomId or "nil"))
+
+	if eventName == "auth.session_revoked" then
+		self:ClearLocalPlayerSession(player, { clearStored = true })
+		self:HandleLocalPartyInvariantFailure("companion_auth_session_revoked", player, eventPayload)
+	elseif eventName == "room.kicked" or eventName == "room.left" then
+		self:HandleLocalPartyInvariantFailure("companion_" .. eventName:gsub("%.", "_"), player, eventPayload)
+	elseif eventName == "room.invitation.created" then
+		local invitation = type(eventPayload.invitation) == "table" and eventPayload.invitation or {}
+		local invitationId = invitation.id
+		local roomId = invitation.room_id or invitation.roomId
+		local targetRoomMatches = online_room_ids_match(roomId, self.currentRoomId)
+			or online_room_ids_match(roomId, self.pendingJoinRoomId)
+			or online_room_ids_match(roomId, self.localPartyPendingCompanionRoomId)
+		local syncAlreadyAccepting = self:RoomKey(roomId) ~= ""
+			and self.localPartyRoomSyncInFlightKey == self:RoomKey(roomId)
+			and self:IsAuthenticatedUserRoomManager(self.currentRoom)
+		if invitationId and targetRoomMatches and not syncAlreadyAccepting then
+			online_flow_trace("companion_invitation_auto_accept localPlayer=" .. local_player_key(player)
+				.. " room=" .. tostring(roomId)
+				.. " invitation=" .. tostring(invitationId))
+			self:RequestAsLocalPlayer(
+				player,
+				"POST",
+				"/room-invitations/" .. tostring(invitationId) .. "/accept",
+				{},
+				function(ok, decoded, response)
+					online_flow_trace("companion_invitation_auto_accept_result localPlayer="
+						.. local_player_key(player)
+						.. " room=" .. tostring(roomId)
+						.. " ok=" .. tostring(ok == true)
+						.. " status=" .. tostring(response and response.statusCode or "nil"))
+					if ok and decoded and decoded.room then
+						self:ApplyDecodedRoomSnapshot(decoded, "companion_invitation_accepted")
+					elseif ok and self.FetchRoom then
+						self:FetchRoom(roomId)
+					end
+				end
+			)
+		elseif invitationId and not targetRoomMatches then
+			online_flow_trace("companion_invitation_forwarded localPlayer=" .. local_player_key(player)
+				.. " room=" .. tostring(roomId)
+				.. " invitation=" .. tostring(invitationId))
+			safe_broadcast("OnlineRoomInvitation", {
+				invitation = invitation,
+				inviter = eventPayload.inviter,
+				room = eventPayload.room,
+				localPlayer = local_player_key(player),
+			})
+		end
+	elseif eventName == "room.join_request.accepted" then
+		local roomId = eventPayload.room_id or eventPayload.roomId
+		self.localPartyPendingCompanionRoomId = nil
+		self.localPartyPendingCompanionJoinRequestId = nil
+		if roomId and self.FetchRoom then
+			online_flow_trace("companion_join_request_accepted localPlayer=" .. local_player_key(player)
+				.. " room=" .. tostring(roomId))
+			self:FetchRoom(roomId)
+		end
+	elseif eventName == "room.join_request.declined"
+		or eventName == "room.join_request.expired"
+		or eventName == "room.invitation.declined"
+		or eventName == "room.invitation.expired"
+	then
+		self.localPartyPendingCompanionRoomId = nil
+		self.localPartyPendingCompanionJoinRequestId = nil
+		self:HandleLocalPartyInvariantFailure(
+			"companion_" .. eventName:gsub("%.", "_"),
+			player,
+			eventPayload
+		)
+	end
+	return true, nil, normalized
+end
+
+function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
+	callbacks = type(callbacks) == "table" and callbacks or {}
+	if not player or self:IsPrimaryLocalPlayer(player) then
+		safe_callback(callbacks.error, "Invalid companion player.")
+		return
+	end
+	if not self:HasActiveAccessTokenForPlayer(player) then
+		safe_callback(callbacks.error, "Companion player is not authenticated.")
+		return
+	end
+
+	local context = self:CompanionRealtimeContext(player)
+	if context.socket and context.connected and not context.connecting then
+		safe_callback(callbacks.open)
+		return
+	end
+	if context.connecting then
+		context.pendingCallbacks = context.pendingCallbacks or {}
+		append_coalesced_callback(context.pendingCallbacks, callbacks, "companion_realtime", function(bundle)
+			safe_callback(bundle and bundle.error, "Too many companion realtime subscribers.")
+		end)
+		return
+	end
+
+	context.connecting = true
+	context.pendingCallbacks = context.pendingCallbacks or {}
+	append_coalesced_callback(context.pendingCallbacks, callbacks, "companion_realtime", function(bundle)
+		safe_callback(bundle and bundle.error, "Too many companion realtime subscribers.")
+	end)
+	local playerKey = local_player_key(player)
+	online_flow_trace("companion_realtime_ticket_begin localPlayer=" .. playerKey)
+	self:RequestAsLocalPlayer(player, "POST", "/websocket/tickets", {}, function(ok, decoded, response)
+		if not ok or not decoded or not decoded.ticket then
+			context.connecting = false
+			context.connected = false
+			local pending = context.pendingCallbacks or {}
+			context.pendingCallbacks = {}
+			local message = response_message(response, decoded, "WebSocket ticket request failed")
+			online_flow_trace("companion_realtime_ticket_failed localPlayer=" .. playerKey
+				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			for _, bundle in ipairs(pending) do safe_callback(bundle and bundle.error, message) end
+			return
+		end
+
+		self:CloseCompanionRealtime(player, "replace")
+		context.connecting = true
+		context.generation = (tonumber(context.generation) or 0) + 1
+		local generation = context.generation
+		local socket
+		local config = self:ConnectionConfig()
+		local socketOk, socketOrError = safe_call("companion_websocket_open:" .. playerKey, function()
+			return NETWORK:WebSocket{
+				url = config.webSocketUrl,
+				headers = {
+					["Origin"] = origin_from_base_url(config.apiBaseUrl),
+					["Cookie"] = "itgmania_ws_ticket=" .. tostring(decoded.ticket),
+					["Sec-WebSocket-Protocol"] = "itgmania-ticket",
+				},
+				pingInterval = 20,
+				automaticReconnect = false,
+				onMessage = function(message)
+					if generation ~= context.generation or context.socket ~= socket then return end
+					local messageType = ToEnumShortString(message.type)
+					if messageType == "Open" then
+						context.connecting = false
+						context.connected = true
+						context.lastMessageAt = GetTimeSinceStart()
+						context.reconnectAttempt = 0
+						context.reconnectNextAttemptAt = 0
+						local pending = context.pendingCallbacks or {}
+						context.pendingCallbacks = {}
+						online_flow_trace("companion_realtime_open localPlayer=" .. playerKey
+							.. " generation=" .. tostring(generation))
+						for _, bundle in ipairs(pending) do safe_callback(bundle and bundle.open) end
+					elseif messageType == "Message" then
+						context.lastMessageAt = GetTimeSinceStart()
+						local decodedPayload = safe_decode(message.data)
+						local handled, handleError, normalized =
+							self:HandleCompanionRealtimeEvent(player, decodedPayload)
+						if not handled then
+							online_flow_trace("companion_realtime_event_rejected localPlayer=" .. playerKey
+								.. " reason=" .. tostring(handleError or "unknown"))
+							return
+						end
+						local requiresAck = normalized and normalized.requires_ack ~= false
+						if requiresAck and normalized and normalized.id then
+							local encodedOk, encoded = pcall(JsonEncode, {
+								action = "ack",
+								event_id = normalized.id,
+							})
+							if encodedOk and encoded then
+								local sendOk, sent = safe_call("companion_realtime_ack:" .. playerKey, function()
+									return socket:Send(encoded)
+								end)
+								online_flow_trace("companion_realtime_ack localPlayer=" .. playerKey
+									.. " eventId=" .. tostring(normalized.id)
+									.. " sent=" .. tostring(sendOk and sent == true))
+							end
+						end
+					elseif messageType == "Close" or messageType == "Error" then
+						context.connecting = false
+						context.connected = false
+						if context.socket == socket then context.socket = nil end
+						local pending = context.pendingCallbacks or {}
+						context.pendingCallbacks = {}
+						context.reconnectAttempt = (tonumber(context.reconnectAttempt) or 0) + 1
+						local delay = math.min(10, math.pow(2, math.max(0, context.reconnectAttempt - 1)))
+						context.reconnectNextAttemptAt = GetTimeSinceStart() + delay
+						online_flow_trace("companion_realtime_" .. messageType:lower()
+							.. " localPlayer=" .. playerKey
+							.. " reason=" .. tostring(message.reason or "unknown")
+							.. " reconnectDelay=" .. tostring(delay))
+						for _, bundle in ipairs(pending) do
+							safe_callback(bundle and bundle[messageType == "Close" and "close" or "error"], message.reason)
+						end
+					end
+				end,
+			}
+		end)
+		if not socketOk or not socketOrError then
+			context.connecting = false
+			context.connected = false
+			context.socket = nil
+			local pending = context.pendingCallbacks or {}
+			context.pendingCallbacks = {}
+			for _, bundle in ipairs(pending) do
+				safe_callback(bundle and bundle.error, "WebSocket could not be opened.")
+			end
+			return
+		end
+		socket = socketOrError
+		context.socket = socket
+	end, {
+		skipAuthRetry = true,
+	})
+end
+
+function ITGOnline:ConnectLocalPlayerPartyWebSockets(callbacks)
+	callbacks = type(callbacks) == "table" and callbacks or {}
+	local players = joined_local_players()
+	if #players < 2 then
+		self:ConnectWebSocket(callbacks)
+		return
+	end
+
+	local valid, reason = self:ValidateLocalPlayerIdentities()
+	if not valid then
+		safe_callback(callbacks.error, tostring(reason or "Invalid local player identities."))
+		return
+	end
+
+	local pending = 2
+	local completed = false
+	local function opened()
+		if completed then return end
+		pending = pending - 1
+		if pending == 0 then
+			completed = true
+			online_flow_trace("local_party_realtime_open players=2 coordinator=P1")
+			safe_callback(callbacks.open)
+		end
+	end
+	local function failed(reasonText)
+		if completed then return end
+		completed = true
+		online_flow_trace("local_party_realtime_failed reason=" .. tostring(reasonText or "unknown"))
+		safe_callback(callbacks.error, reasonText)
+	end
+
+	self:ConnectWebSocket({
+		open = opened,
+		error = failed,
+		close = function(reasonText)
+			if not completed then failed(reasonText) else safe_callback(callbacks.close, reasonText) end
+		end,
+		message = callbacks.message,
+	})
+	self:ConnectCompanionWebSocket(PLAYER_2, {
+		open = opened,
+		error = failed,
+		close = function(reasonText)
+			if not completed then failed(reasonText) else safe_callback(callbacks.close, reasonText) end
+		end,
+	})
+end
+
+function ITGOnline:MaintainCompanionRealtime(source)
+	if not self:IsLocalTwoPlayerSession() or not self:HasActiveAccessTokenForPlayer(PLAYER_2) then
+		return false
+	end
+	local context = self:CompanionRealtimeContext(PLAYER_2)
+	if context.connected or context.connecting then return false end
+	if GetTimeSinceStart() < (tonumber(context.reconnectNextAttemptAt) or 0) then return false end
+	online_flow_trace("companion_realtime_reconnect source=" .. tostring(source or "unknown")
+		.. " localPlayer=P2"
+		.. " attempt=" .. tostring((tonumber(context.reconnectAttempt) or 0) + 1))
+	self:ConnectCompanionWebSocket(PLAYER_2, {})
+	return true
+end
+
 function ITGOnline:SendRealtimeAck(eventId)
 	local normalizedId = online_canonical_id(eventId)
 	if not self.socket or not normalizedId then
@@ -8158,6 +9018,48 @@ function ITGOnline:Connect(callbacks)
 	end)
 end
 
+function ITGOnline:QueueBestEffortLocalPlayerRequest(player, method, path, payload)
+	if not player or not (NETWORK and NETWORK.HttpRequest) then return false end
+	local token
+	if self:IsPrimaryLocalPlayer(player) then
+		token = sessionAccessToken
+	else
+		local session = local_player_session(player)
+		token = session and session.token or nil
+	end
+	if tostring(token or "") == "" then return false end
+	local encodeOk, body = pcall(JsonEncode, payload or {})
+	if not encodeOk then return false end
+	local config = self:ConnectionConfig()
+	local playerKey = local_player_key(player)
+	local queuedOk, request = safe_call("best_effort_local_request:" .. playerKey, function()
+		return NETWORK:HttpRequest{
+			url = tostring(config.apiBaseUrl or "") .. tostring(path or ""),
+			method = tostring(method or "POST"),
+			body = body,
+			headers = {
+				["Accept"] = "application/json",
+				["Content-Type"] = "application/json",
+				["Authorization"] = "Bearer " .. tostring(token),
+				["X-Request-ID"] = request_id(),
+			},
+			connectTimeout = 2,
+			transferTimeout = 5,
+			onResponse = function(response)
+				online_flow_trace("best_effort_local_response localPlayer=" .. playerKey
+					.. " method=" .. tostring(method or "POST")
+					.. " path=" .. tostring(path or "")
+					.. " status=" .. tostring(response and response.statusCode or "nil"))
+			end,
+		}
+	end)
+	online_flow_trace("best_effort_local_queued localPlayer=" .. playerKey
+		.. " method=" .. tostring(method or "POST")
+		.. " path=" .. tostring(path or "")
+		.. " queued=" .. tostring(queuedOk and request ~= nil))
+	return queuedOk and request ~= nil
+end
+
 function ITGOnline:Disconnect(options)
 	options = options or {}
 	local revokeToken = options.revokeToken == true
@@ -8181,6 +9083,23 @@ function ITGOnline:Disconnect(options)
 		realtimeConnected = self.realtimeConnected == true,
 		syncInFlight = self.syncInFlight == true,
 	})
+	for _, player in ipairs(joined_local_players()) do
+		if not self:IsPrimaryLocalPlayer(player) and self:HasActiveAccessTokenForPlayer(player) then
+			if roomIdToLeave and options.leaveRoom ~= false then
+				self:QueueBestEffortLocalPlayerRequest(
+					player,
+					"POST",
+					"/rooms/" .. tostring(roomIdToLeave) .. "/leave",
+					{ client_action_id = self:NewClientActionId("companion-disconnect-leave") }
+				)
+			end
+			if revokeToken then
+				self:QueueBestEffortLocalPlayerRequest(player, "POST", "/auth/logout", {})
+			end
+			self:CloseCompanionRealtime(player, "disconnect")
+			self:ClearLocalPlayerSession(player, { clearStored = revokeToken })
+		end
+	end
 	self.disconnecting = true
 	self.authAttemptGeneration = (tonumber(self.authAttemptGeneration) or 0) + 1
 	self.authRefreshInFlight = false
@@ -8273,6 +9192,11 @@ function ITGOnline:Disconnect(options)
 	self.failedScoreSnapshot = nil
 	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
+	self.companionScoreRuntime = {}
+	self.companionLifecycleState = {}
+	self.companionReadyInFlight = {}
+	self.expectedOnlineGameplaySteps = nil
+	self.expectedOnlineGameplayStepsByPlayer = {}
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
@@ -9128,9 +10052,11 @@ local function online_member_user_id(member)
 	return tostring(member.user_id or member.userId or member.id or member.account_id or member.accountId or "")
 end
 
-function ITGOnline:LocalRoomMember(room)
+function ITGOnline:LocalRoomMember(room, player)
 	room = type(room) == "table" and room or self.currentRoom or {}
-	local userId = tostring(self.user and self.user.id or "")
+	player = player or first_enabled_player()
+	local user = self:UserForLocalPlayer(player)
+	local userId = tostring(user and user.id or "")
 	if userId == "" or type(room.members) ~= "table" then return nil end
 	for _, member in ipairs(room.members) do
 		if online_member_user_id(member) == userId then
@@ -9140,8 +10066,8 @@ function ITGOnline:LocalRoomMember(room)
 	return nil
 end
 
-function ITGOnline:LocalMemberOptionSummary(room)
-	local member = self:LocalRoomMember(room)
+function ITGOnline:LocalMemberOptionSummary(room, player)
+	local member = self:LocalRoomMember(room, player)
 	if type(member) ~= "table" then return nil end
 	return type(member.options) == "table" and member.options or nil
 end
@@ -9232,17 +10158,25 @@ local function find_steps_from_local_preference(song, player)
 	return nil, "preferred_difficulty_no_match"
 end
 
-function ITGOnline:RememberExpectedOnlineGameplaySteps(steps, source)
+function ITGOnline:RememberExpectedOnlineGameplaySteps(steps, source, player)
+	player = player or first_enabled_player()
 	local summary = online_steps_trace_summary(self, steps)
 	summary.source = tostring(source or "unknown")
 	summary.roomId = tostring(self.currentRoomId or "")
 	summary.roundKey = tostring(self.PlayStateKey and self:PlayStateKey() or self.currentRoomRoundKey or "")
 	summary.recordedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
-	self.expectedOnlineGameplaySteps = summary
+	summary.localPlayer = local_player_key(player)
+	self.expectedOnlineGameplayStepsByPlayer = self.expectedOnlineGameplayStepsByPlayer or {}
+	self.expectedOnlineGameplayStepsByPlayer[summary.localPlayer] = summary
+	if self:IsPrimaryLocalPlayer(player) then
+		self.expectedOnlineGameplaySteps = summary
+	end
 	self:TraceOnlineState("gameplay_expected_steps_recorded", summary)
 end
 
-function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSteps, source)
+function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSteps, source, player)
+	player = player or first_enabled_player()
+	local playerKey = local_player_key(player)
 	local room = self.currentRoom or {}
 	local phase = self.NormalizeRoomPhase and self:NormalizeRoomPhase(room.phase) or tostring(room.phase or "")
 	local screen = tostring(self.currentScreenName or "")
@@ -9252,7 +10186,6 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 		or screen == "ScreenEvaluation"
 	if not shouldUseMemberOptions then
 		if phase == "config" or screen == "ScreenPlayerOptions" then
-			local player = first_enabled_player()
 			local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
 			local localSteps, localReason = find_steps_from_local_preference(song, player)
 			local resolvedSteps = localSteps or fallbackSteps
@@ -9270,6 +10203,7 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 				resolvedDifficulty = resolvedSummary.difficulty,
 				resolvedMeter = resolvedSummary.meter,
 				managerChartUsedAsFallback = localSteps == nil,
+				localPlayer = playerKey,
 			})
 			return resolvedSteps
 		end
@@ -9279,13 +10213,19 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 			phase = phase,
 			screen = screen,
 			fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
+			localPlayer = playerKey,
 		})
 		return fallbackSteps
 	end
 
 	local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
-	local options = self:LocalMemberOptionSummary(room)
-	local pending = self.pendingOnlineOptionSteps
+	local options = self:LocalMemberOptionSummary(room, player)
+	local playerState = self.pendingOnlineOptionStateByPlayer
+		and self.pendingOnlineOptionStateByPlayer[playerKey] or nil
+	local pending = playerState and playerState.steps
+	if not pending and not self:IsLocalTwoPlayerSession() then
+		pending = self.pendingOnlineOptionSteps
+	end
 	local pendingBelongs = steps_belongs_to_current_song(pending)
 	local selectedSteps = nil
 	local selectedSource = ""
@@ -9306,6 +10246,7 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 				screen = screen,
 				optionChartHash = option_value(options, "chart_hash", "chartHash", "simfile_hash", "simfileHash"),
 				fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
+				localPlayer = playerKey,
 			})
 			return nil
 		end
@@ -9331,57 +10272,73 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 		resolvedChartHash = selectedSummary.chartHash,
 		resolvedDifficulty = selectedSummary.difficulty,
 		resolvedMeter = selectedSummary.meter,
+		localPlayer = playerKey,
 	})
-	self:RememberExpectedOnlineGameplaySteps(selectedSteps, "resolve:" .. tostring(source or "unknown") .. ":" .. selectedSource)
+	self:RememberExpectedOnlineGameplaySteps(
+		selectedSteps,
+		"resolve:" .. tostring(source or "unknown") .. ":" .. selectedSource,
+		player
+	)
 	return selectedSteps
 end
 
 function ITGOnline:ApplyResolvedLocalGameplaySteps(source)
 	if not GAMESTATE then return false end
-	local player = first_enabled_player()
-	local fallbackSteps = GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
 	local selectedSong = self.currentRoom and self.currentRoom.selected_song or self.currentSongPayload or {}
-	local resolvedSteps = self:ResolveLocalGameplayStepsForSelectedSong(selectedSong, fallbackSteps, source or "apply_resolved_gameplay_steps")
-	if not resolvedSteps then
-		self:TraceOnlineState("gameplay_steps_apply_skipped", {
-			source = source,
-			reason = "no_resolved_steps",
-			fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
-		})
-		return false
-	end
-
-	local before = online_steps_trace_summary(self, fallbackSteps)
-	local after = online_steps_trace_summary(self, resolvedSteps)
 	local ok, players = safe_call("apply_resolved_steps_enabled_players", function()
 		return GAMESTATE:GetEnabledPlayers()
 	end)
+	local appliedAll = ok and type(players) == "table" and #players > 0
 	for enabledPlayer in ivalues(ok and type(players) == "table" and players or {}) do
-		if GAMESTATE.SetCurrentSteps then
-			safe_call("apply_resolved_steps_set_current", function()
+		local fallbackSteps = GAMESTATE.GetCurrentSteps
+			and GAMESTATE:GetCurrentSteps(enabledPlayer) or nil
+		local resolvedSteps = self:ResolveLocalGameplayStepsForSelectedSong(
+			selectedSong,
+			fallbackSteps,
+			tostring(source or "apply_resolved_gameplay_steps")
+				.. ":" .. local_player_key(enabledPlayer),
+			enabledPlayer
+		)
+		if not resolvedSteps then
+			appliedAll = false
+			self:TraceOnlineState("gameplay_steps_apply_skipped", {
+				source = source,
+				reason = "no_resolved_steps",
+				localPlayer = local_player_key(enabledPlayer),
+				fallbackChartHash = online_steps_trace_summary(self, fallbackSteps).chartHash,
+			})
+		elseif GAMESTATE.SetCurrentSteps then
+			local before = online_steps_trace_summary(self, fallbackSteps)
+			local after = online_steps_trace_summary(self, resolvedSteps)
+			local setOk = safe_call("apply_resolved_steps_set_current", function()
 				GAMESTATE:SetCurrentSteps(enabledPlayer, resolvedSteps)
 			end)
+			appliedAll = appliedAll and setOk == true
+			self:TraceOnlineState("gameplay_steps_applied_to_gamestate", {
+				source = source,
+				localPlayer = local_player_key(enabledPlayer),
+				beforeChartHash = before.chartHash,
+				beforeDifficulty = before.difficulty,
+				beforeMeter = before.meter,
+				appliedChartHash = after.chartHash,
+				appliedDifficulty = after.difficulty,
+				appliedMeter = after.meter,
+				changed = before.chartHash ~= after.chartHash,
+			})
 		end
 	end
-	self:TraceOnlineState("gameplay_steps_applied_to_gamestate", {
-		source = source,
-		beforeChartHash = before.chartHash,
-		beforeDifficulty = before.difficulty,
-		beforeMeter = before.meter,
-		appliedChartHash = after.chartHash,
-		appliedDifficulty = after.difficulty,
-		appliedMeter = after.meter,
-		changed = before.chartHash ~= after.chartHash,
-	})
-	return true
+	return appliedAll
 end
 
 function ITGOnline:TraceActualOnlineGameplaySteps(source)
-	local expected = type(self.expectedOnlineGameplaySteps) == "table" and self.expectedOnlineGameplaySteps or {}
 	local ok, players = safe_call("trace_actual_steps_enabled_players", function()
 		return GAMESTATE and GAMESTATE.GetEnabledPlayers and GAMESTATE:GetEnabledPlayers() or {}
 	end)
 	for player in ivalues(ok and type(players) == "table" and players or {}) do
+		local expected = self.expectedOnlineGameplayStepsByPlayer
+			and self.expectedOnlineGameplayStepsByPlayer[local_player_key(player)]
+			or type(self.expectedOnlineGameplaySteps) == "table" and self.expectedOnlineGameplaySteps
+			or {}
 		local stepsOk, steps = safe_call("trace_actual_steps_current", function()
 			return GAMESTATE and GAMESTATE.GetCurrentSteps and GAMESTATE:GetCurrentSteps(player) or nil
 		end)
@@ -10420,8 +11377,8 @@ end
 -- Live and final score delivery
 -- -----------------------------------------------------------------------
 
-function ITGOnline:BuildCurrentScoreSnapshot()
-	local player = online_score_source_player()
+function ITGOnline:BuildCurrentScoreSnapshot(player)
+	player = player or online_score_source_player()
 	local stats = online_stage_stats_for_score(player)
 	if not player or not stats then return nil end
 
@@ -10505,7 +11462,7 @@ function ITGOnline:BuildCurrentScoreSnapshot()
 		combo = combo,
 		failed = failed,
 	}
-	if failed then
+	if failed and player == online_score_source_player() then
 		return self:FreezeFailedScoreSnapshot(snapshot, "BuildCurrentScoreSnapshot")
 	end
 	return snapshot
@@ -10593,10 +11550,6 @@ end
 function ITGOnline:QueueLiveScore(snapshot)
 	if type(snapshot) ~= "table" then
 		online_flow_trace("live_score_queue_skipped reason=invalid_snapshot")
-		return false
-	end
-	if not online_single_local_player_allowed() then
-		online_flow_trace("ignored_live_score_multiple_local_players")
 		return false
 	end
 	if not self:HasActiveLiveScoreRoom() then
@@ -10695,6 +11648,24 @@ function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
 		self:StopLiveScoreFlush("tick_final_score_already_accepted")
 		self.liveScoreInFlight = false
 		return false
+	end
+	if self:IsLocalTwoPlayerSession()
+		and self.SendCompanionScore
+		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "playing"
+	then
+		self:SendCompanionScore(false, false, function(ok, decoded, response)
+			if not ok
+				and not (response and response.inFlight)
+				and not (response and response.retryAfter)
+			then
+				online_flow_trace_throttled("companion_live_score_tick_failed", 2.0,
+					"companion_live_score_tick_failed localPlayer=P2"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " status=" .. tostring(response and response.statusCode or "nil")
+					.. " error=" .. tostring(decoded and decoded.error_code
+						or response and response.errorMessage or "nil"))
+			end
+		end)
 	end
 
 	if type(snapshot) == "table" then
@@ -10988,9 +11959,11 @@ function ITGOnline:HandleRoomNotPlayingScoreReject(final, decoded)
 	end
 end
 
-function ITGOnline:CurrentUserHasFinalResult(room)
+function ITGOnline:LocalPlayerHasFinalResult(room, player)
 	room = room or self.currentRoom
-	local userId = self.LocalUserId and self:LocalUserId() or tostring(self.user and self.user.id or "")
+	player = player or online_score_source_player()
+	local localUser = self.UserForLocalPlayer and self:UserForLocalPlayer(player) or self.user
+	local userId = tostring(localUser and localUser.id or "")
 	if userId == "" then return false end
 
 	local playState = room and room.play_state or {}
@@ -11009,6 +11982,10 @@ function ITGOnline:CurrentUserHasFinalResult(room)
 	end
 
 	return false
+end
+
+function ITGOnline:CurrentUserHasFinalResult(room)
+	return self:LocalPlayerHasFinalResult(room, online_score_source_player())
 end
 
 function ITGOnline:SendScore(force, final, snapshot, callback, options)
@@ -11046,11 +12023,6 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		inFlight = self.scoreInFlightFingerprint ~= nil,
 	})
 
-	if not online_single_local_player_allowed() then
-		online_flow_trace("send_score_failed reason=multiple_local_players final=" .. tostring(final == true))
-		finish(false, nil, { errorMessage = "Online play supports one local player per client." })
-		return
-	end
 	if not self.currentRoomId then
 		online_flow_trace("send_score_failed reason=no_current_room_id final=" .. tostring(final == true))
 		finish(false, nil, { errorMessage = "No active online room." })
@@ -11753,8 +12725,369 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end)
 end
 
+function ITGOnline:CompanionScoreState(roundKey)
+	self.companionScoreRuntime = self.companionScoreRuntime or {}
+	local state = self.companionScoreRuntime
+	roundKey = tostring(roundKey or "")
+	if tostring(state.roundKey or "") ~= roundKey then
+		for key in pairs(state) do state[key] = nil end
+		state.roundKey = roundKey
+		state.lastSentAt = 0
+		state.lastSongPosition = 0
+		state.lastAcceptedSongPosition = 0
+		state.judgments = {}
+	end
+	return state
+end
+
+function ITGOnline:SendCompanionScore(force, final, callback)
+	local player = PLAYER_2
+	local finish = function(ok, decoded, response, meta)
+		safe_callback(callback, ok, decoded, response, meta or {})
+	end
+	if not self:IsLocalTwoPlayerSession() then
+		finish(true, nil, nil, { skipped = true })
+		return
+	end
+	if not self.currentRoomId or not self.currentRoom or not self:LocalPartyRoomComplete(self.currentRoom) then
+		finish(false, nil, {
+			error_code = "local_party_room_incomplete",
+			errorMessage = "Both local players must belong to the room before sending scores.",
+		})
+		return
+	end
+
+	local roundKey = tostring(self:CanonicalGameplayRoundKey("companion_score") or "")
+	if not self:PlayStateKeyIsValid(roundKey) then
+		finish(false, nil, { error_code = "invalid_round_key", errorMessage = "Invalid online round key." })
+		return
+	end
+	local state = self:CompanionScoreState(roundKey)
+	if final and (state.finalAccepted == true or self:LocalPlayerHasFinalResult(self.currentRoom, player)) then
+		state.finalAccepted = true
+		finish(true, nil, nil, { alreadyAccepted = true, roundKey = roundKey })
+		return
+	end
+	if state.inFlight == true then
+		finish(false, nil, { inFlight = true, retryAfter = 0.5 })
+		return
+	end
+
+	local roomPhase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if roomPhase ~= "playing" and not (final and roomPhase == "results") then
+		finish(false, nil, {
+			error_code = "room_not_playing",
+			errorMessage = "Room is not accepting this score update.",
+			room_phase = roomPhase,
+		})
+		return
+	end
+	local now = GetTimeSinceStart()
+	local minInterval = self:LiveScoreMinIntervalSeconds()
+	if not final and not force and now - (tonumber(state.lastSentAt) or 0) < minInterval then
+		finish(false, nil, { retryAfter = minInterval })
+		return
+	end
+
+	local snapshot = self:BuildCurrentScoreSnapshot(player)
+	local stats = online_stage_stats_for_score(player)
+	if not snapshot or not stats then
+		finish(false, nil, { error_code = "missing_player_stats", errorMessage = "Player 2 score is not available." })
+		return
+	end
+	local statsFailed = online_score_failed(player, stats)
+	if final and statsFailed and type(state.lastSnapshot) == "table" then
+		local currentDisplayed = self:ScoreSnapshotDisplayedPercent(snapshot) or 0
+		local previousDisplayed = self:ScoreSnapshotDisplayedPercent(state.lastSnapshot) or 0
+		if previousDisplayed > currentDisplayed then
+			snapshot = state.lastSnapshot
+			online_flow_trace("companion_final_failed_snapshot_preserved localPlayer=P2"
+				.. " roundKey=" .. roundKey
+				.. " currentDisplayed=" .. tostring(currentDisplayed)
+				.. " preservedDisplayed=" .. tostring(previousDisplayed))
+		end
+	end
+	state.lastSnapshot = {}
+	for key, value in pairs(snapshot) do state.lastSnapshot[key] = value end
+	local optionSummary = self:CurrentOnlineOptionSummary(player)
+	local song = self:CurrentSelectedSongPayload()
+	if not song or not optionSummary.chart_hash then
+		finish(false, nil, {
+			error_code = "missing_companion_chart",
+			errorMessage = "Player 2 chart metadata is not available.",
+		})
+		return
+	end
+
+	local scoreMode = tostring(snapshot.scoreMode or (self:CurrentGlobalOptions() or {}).score_mode or "itg")
+	local displayedPercent = math.max(0, math.min(100,
+		tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or 0))
+	local itgScorePercent = math.max(0, math.min(100,
+		tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0))
+	local exScorePercent = math.max(0, math.min(100,
+		tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0))
+	local hardExScorePercent = math.max(0, math.min(100,
+		tonumber(snapshot.hardExScorePercent or snapshot.HardExScorePercent) or 0))
+	local maxScore = tonumber(optionSummary.max_score)
+		or server_max_score_for_note_count(optionSummary.chart_note_count)
+		or tonumber(song.max_score)
+		or server_max_score_for_note_count(song.chart_note_count)
+		or 1000000
+	local outgoingScore = math.max(0, math.floor((displayedPercent / 100) * maxScore + 0.5))
+
+	local judgments = self:CopyServerJudgments(self:ServerJudgments(player))
+	if self:HasScoredJudgments(judgments) then
+		judgments = self:MergeMonotonicServerJudgments(judgments, state.judgments)
+		state.judgments = self:CopyServerJudgments(judgments)
+	elseif final and type(state.judgments) == "table" then
+		judgments = self:CopyServerJudgments(state.judgments)
+	end
+	local failed = snapshot.failed == true or snapshot.Failed == true or statsFailed
+	if final and not failed and not self:HasScoredJudgments(judgments) then
+		finish(false, nil, {
+			error_code = "final_missing_judgments",
+			errorMessage = "Player 2 final judgments are not ready yet.",
+			retryAfter = 0.5,
+		})
+		return
+	end
+	local accuracy = self:ServerAccuracyFromJudgments(judgments)
+		or tonumber(snapshot.scorePercent or snapshot.ScorePercent)
+		or 0
+	accuracy = math.max(0, math.min(100, accuracy))
+
+	local combo = math.max(0, tonumber(snapshot.combo or snapshot.Combo) or 0)
+	local maxCombo = combo
+	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
+		local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
+		if ok and tonumber(value) then
+			maxCombo = math.max(maxCombo, tonumber(value))
+			break
+		end
+	end
+	maxCombo = math.max(maxCombo, tonumber(state.maxCombo) or 0)
+	state.maxCombo = maxCombo
+	local songPosition = tonumber(state.lastSongPosition) or 0
+	if GAMESTATE and GAMESTATE.GetPlayerState then
+		local ok, value = pcall(function()
+			local position = GAMESTATE:GetPlayerState(player):GetSongPosition()
+			local visibleOk, visible = pcall(function() return position:GetMusicSecondsVisible() end)
+			if visibleOk and tonumber(visible) then return tonumber(visible) end
+			return tonumber(position:GetMusicSeconds())
+		end)
+		if ok and tonumber(value) then songPosition = tonumber(value) end
+	end
+	songPosition = math.max(0, songPosition, tonumber(state.lastAcceptedSongPosition) or 0)
+	local startAtMs = tonumber(self.currentRoom.start_at_ms or "") or iso_utc_milliseconds(self.currentRoom.start_at)
+	if startAtMs and self.serverClockOffsetSeconds then
+		local rate = math.max(0.25, math.min(3, tonumber(song.rate) or 1))
+		local serverNow = GetTimeSinceStart() + self.serverClockOffsetSeconds
+		songPosition = math.max(songPosition, math.max(0, (serverNow - (startAtMs / 1000)) * rate - 0.5))
+	end
+	if final and not failed then
+		local duration = tonumber(song.chart_duration_seconds) or tonumber(song.music_length_seconds)
+		if duration then
+			local rate = math.max(0.25, math.min(3, tonumber(song.rate) or 1))
+			songPosition = math.max(songPosition, duration / rate)
+		end
+	end
+	state.lastSongPosition = songPosition
+
+	local fingerprint = self:ScoreFingerprint(outgoingScore, combo, maxCombo, failed, judgments)
+	if not final and state.lastAcceptedFingerprint == fingerprint then
+		finish(true, nil, nil, { duplicate = true })
+		return
+	end
+	if final and not state.finalActionId then state.finalActionId = request_id() end
+	local payload = {
+		selection_id = self:CurrentSelectionId(),
+		score = outgoingScore,
+		score_percent = displayedPercent,
+		displayed_percent = displayedPercent,
+		itg_score_percent = itgScorePercent,
+		ex_score_percent = exScorePercent,
+		hard_ex_score_percent = hardExScorePercent,
+		combo = combo,
+		max_combo = maxCombo,
+		accuracy = accuracy,
+		song_position_seconds = songPosition,
+		song_hash = song.song_hash,
+		chart_hash = optionSummary.chart_hash,
+		failed = failed,
+		final = final == true,
+		score_mode = scoreMode,
+		judgments = judgments,
+		client_action_id = final and state.finalActionId or nil,
+	}
+
+	state.inFlight = true
+	state.lastSentAt = now
+	online_flow_trace("companion_score_request localPlayer=P2"
+		.. " room=" .. tostring(self.currentRoomId)
+		.. " roundKey=" .. roundKey
+		.. " final=" .. tostring(final == true)
+		.. " failed=" .. tostring(failed)
+		.. " score=" .. tostring(outgoingScore)
+		.. " displayedPercent=" .. tostring(displayedPercent)
+		.. " chartHash=" .. tostring(optionSummary.chart_hash):sub(1, 12)
+		.. " songPosition=" .. tostring(songPosition)
+		.. " judgments=" .. tostring(self:JudgmentTotal(judgments)))
+	self:RequestAsLocalPlayer(player, "POST", "/rooms/" .. tostring(self.currentRoomId) .. "/score",
+		payload, function(ok, decoded, response)
+			if self.companionScoreRuntime ~= state
+				or tostring(self:CanonicalGameplayRoundKey("companion_score_response") or "") ~= roundKey
+			then
+				online_flow_trace("companion_score_response_ignored reason=stale_round localPlayer=P2"
+					.. " roundKey=" .. roundKey
+					.. " currentRoundKey="
+						.. tostring(self:CanonicalGameplayRoundKey("companion_score_stale") or ""))
+				finish(false, decoded, {
+					cancelled = true,
+					error_code = "stale_companion_score_response",
+				}, { stale = true, roundKey = roundKey })
+				return
+			end
+			state.inFlight = false
+			local errorCode = response_error_code(response, decoded)
+			if ok then
+				state.lastAcceptedFingerprint = fingerprint
+				state.lastAcceptedSongPosition = math.max(
+					tonumber(state.lastAcceptedSongPosition) or 0,
+					songPosition
+				)
+				if final then state.finalAccepted = true end
+				if decoded and decoded.room then
+					self:ApplyDecodedRoomSnapshot(decoded, "companion_score")
+				end
+			elseif final and errorCode == "score_already_finalized" then
+				state.finalAccepted = true
+				ok = true
+			end
+			online_flow_trace("companion_score_response localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. roundKey
+				.. " final=" .. tostring(final == true)
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " errorCode=" .. tostring(errorCode or "nil"))
+			if not ok and final then
+				safe_broadcast("OnlineResponseStatus", {
+					event = "finalScoreP2",
+					success = false,
+					message = response_message(response, decoded, "Player 2 final score upload failed"),
+				})
+			end
+			finish(ok, decoded, response, {
+				localPlayer = "P2",
+				final = final == true,
+				failed = failed,
+				roundKey = roundKey,
+			})
+		end)
+end
+
 -- Ready state and room start
 -- -----------------------------------------------------------------------
+
+function ITGOnline:SetCompanionReady(phase, isReady, callback)
+	if not self:IsLocalTwoPlayerSession() then
+		safe_callback(callback, true, { room = self.currentRoom })
+		return
+	end
+	if not self.currentRoomId or not self:LocalPartyRoomComplete(self.currentRoom) then
+		safe_callback(callback, false, {
+			error_code = "local_party_room_incomplete",
+			deferred = true,
+		}, nil)
+		return
+	end
+
+	local player = PLAYER_2
+	local payload = {
+		client_action_id = self:NewClientActionId("companion-ready"),
+		selection_id = self:CurrentSelectionId(),
+		phase = phase,
+		is_ready = isReady == true,
+	}
+	if phase == "config_ready" then
+		local optionsOk, options = pcall(function()
+			return self:CurrentOnlineOptionSummary(player)
+		end)
+		if not optionsOk or type(options) ~= "table" then
+			online_flow_trace("companion_ready_failed reason=options_payload localPlayer=P2"
+				.. " error=" .. tostring(options))
+			safe_callback(callback, false, {
+				error_code = "config_ready_options_payload_error",
+			}, nil)
+			return
+		end
+		payload.options = options
+		local selectedSong = self.currentRoom and self.currentRoom.selected_song or {}
+		local selectedSongHash = tostring(
+			selectedSong.song_hash or selectedSong.songHash or ""
+		):lower()
+		local optionSongHash = tostring(payload.options.song_hash or ""):lower()
+		if isReady and (selectedSongHash == "" or optionSongHash ~= selectedSongHash) then
+			online_flow_trace("companion_ready_failed reason=song_context localPlayer=P2"
+				.. " selectedSongHash=" .. tostring(selectedSongHash):sub(1, 12)
+				.. " optionSongHash=" .. tostring(optionSongHash):sub(1, 12))
+			safe_callback(callback, false, {
+				error_code = "config_ready_song_context_mismatch",
+				deferred = true,
+			}, nil)
+			return
+		end
+	end
+
+	local requestKey = table.concat({
+		tostring(self.currentRoomId),
+		tostring(payload.selection_id or ""),
+		tostring(phase or ""),
+		isReady and "1" or "0",
+	}, "|")
+	self.companionReadyInFlight = self.companionReadyInFlight or {}
+	if self.companionReadyInFlight[requestKey] then
+		online_flow_trace("companion_ready_skipped reason=in_flight key=" .. requestKey)
+		safe_callback(callback, false, {
+			error_code = "companion_ready_in_flight",
+			deferred = true,
+		}, nil)
+		return
+	end
+	self.companionReadyInFlight[requestKey] = true
+	online_flow_trace("companion_ready_request localPlayer=P2"
+		.. " room=" .. tostring(self.currentRoomId)
+		.. " phase=" .. tostring(phase)
+		.. " isReady=" .. tostring(isReady == true)
+		.. " stepchart=" .. tostring(payload.options and payload.options.stepchart or "nil"))
+	self:RequestAsLocalPlayer(
+		player,
+		"POST",
+		"/rooms/" .. tostring(self.currentRoomId) .. "/ready",
+		payload,
+		function(ok, decoded, response)
+			self.companionReadyInFlight[requestKey] = nil
+			online_flow_trace("companion_ready_response localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(phase)
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " error=" .. tostring(decoded and decoded.error_code
+					or response and response.errorMessage or "nil"))
+			if ok and decoded and decoded.room then
+				self:ApplyDecodedRoomSnapshot(decoded, "companion_ready")
+				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
+			elseif not ok then
+				safe_broadcast("ITGOnlineLocalPartyReadyFailed", {
+					localPlayer = "P2",
+					phase = phase,
+					errorCode = decoded and decoded.error_code or nil,
+				})
+			end
+			safe_callback(callback, ok, decoded, response)
+		end
+	)
+end
 
 function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 	if not self.currentRoomId then
@@ -11908,6 +13241,16 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			.. " meter=" .. tostring(payload.options.meter or "nil")
 			.. " notes=" .. tostring(payload.options.chart_note_count or "nil")
 			.. " maxScore=" .. tostring(payload.options.max_score or "nil"))
+	end
+
+	if self:IsLocalTwoPlayerSession() then
+		self:SetCompanionReady(phase, isReady, function(companionOk, companionDecoded, companionResponse)
+			online_flow_trace("companion_ready_fanout_result phase=" .. tostring(phase)
+				.. " ok=" .. tostring(companionOk == true)
+				.. " status=" .. tostring(companionResponse and companionResponse.statusCode or "nil")
+				.. " error=" .. tostring(companionDecoded and companionDecoded.error_code
+					or companionResponse and companionResponse.errorMessage or "nil"))
+		end)
 	end
 
 	local options = payload.options or {}
@@ -12272,8 +13615,13 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 	end)
 end
 
-function ITGOnline:CurrentOnlineOptionSummary()
-	local steps = selected_steps()
+function ITGOnline:CurrentOnlineOptionSummary(player)
+	player = player or first_enabled_player()
+	local playerKey = local_player_key(player)
+	local playerState = self.pendingOnlineOptionStateByPlayer
+		and self.pendingOnlineOptionStateByPlayer[playerKey] or nil
+	local useLegacyRememberedState = not self:IsLocalTwoPlayerSession()
+	local steps = selected_steps(player)
 	local song = GAMESTATE:GetCurrentSong()
 	local songHash = song and self.SongHashFor and self:SongHashFor(song) or ""
 	local chartHash = steps and self.ChartHashForSteps and self:ChartHashForSteps(steps) or ""
@@ -12283,34 +13631,34 @@ function ITGOnline:CurrentOnlineOptionSummary()
 		and tostring(selectedSong.song_hash or selectedSong.songHash or "") or ""
 	local selectedChartHash = type(selectedSong) == "table"
 		and tostring(selectedSong.chart_hash or selectedSong.chartHash or "") or ""
-	local rememberedSongHash = tostring(self.pendingOnlineOptionSongHash or "")
-	local rememberedSelectionKey = tostring(self.pendingOnlineOptionSelectionKey or "")
+	local rememberedSongHash = tostring(playerState and playerState.songHash
+		or useLegacyRememberedState and self.pendingOnlineOptionSongHash or "")
+	local rememberedSelectionKey = tostring(playerState and playerState.selectionKey
+		or useLegacyRememberedState and self.pendingOnlineOptionSelectionKey or "")
 	local currentSelectionKey = self.CurrentOptionsSelectionKey
 		and tostring(self:CurrentOptionsSelectionKey(self.currentRoom) or "") or ""
 	if songHash == ""
-		and chartHash ~= ""
 		and selectedSongHash ~= ""
-		and selectedChartHash ~= ""
+		and rememberedSongHash ~= ""
 		and rememberedSelectionKey ~= ""
 		and rememberedSelectionKey == currentSelectionKey
-		and (rememberedSongHash == "" or rememberedSongHash:lower() == selectedSongHash:lower())
-		and chartHash:lower() == selectedChartHash:lower() then
+		and rememberedSongHash:lower() == selectedSongHash:lower() then
 		-- ScreenPlayerOptions can clear GAMESTATE's song while returning to the
-		-- lobby.  Recover only when the remembered chart proves that it belongs
-		-- to the room's immutable selection.
+		-- lobby. Each local player's remembered option state is bound to the
+		-- immutable room selection, so a different P2 difficulty remains valid.
 		songHash = selectedSongHash
-		songHashSource = "room_selected_song_chart_match"
+		songHashSource = "remembered_player_selection_match"
 	end
 	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
 	local chartType = steps and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or ""
 	local difficulty = steps and enum_short(steps:GetDifficulty()) or ""
 	local meter = steps and steps.GetMeter and tonumber(steps:GetMeter()) or nil
-	local noteCount = current_chart_note_count(steps)
+	local noteCount = current_chart_note_count(steps, player)
 	local maxScore = noteCount and server_max_score_for_note_count(noteCount) or nil
 	local summary = {
-		speed_mod = current_speed_mod_label(),
+		speed_mod = current_speed_mod_label(player),
 		music_rate_bpm = string.format("%.2fx", current_music_rate()),
-		stepchart = current_stepchart_label(),
+		stepchart = current_stepchart_label(player),
 		song_hash = songHash ~= "" and songHash or nil,
 		chart_hash = chartHash ~= "" and chartHash or nil,
 		chart_key = chartKey ~= "" and chartKey or nil,
@@ -12334,8 +13682,12 @@ function ITGOnline:CurrentOnlineOptionSummary()
 		.. " meter=" .. tostring(summary.meter or "nil")
 		.. " notes=" .. tostring(summary.chart_note_count or "nil")
 		.. " maxScore=" .. tostring(summary.max_score or "nil")
-		.. " rememberedSource=" .. tostring(self.pendingOnlineOptionStepsSource or "nil")
-		.. " rememberedAge=" .. tostring((GetTimeSinceStart and GetTimeSinceStart() or 0) - (tonumber(self.pendingOnlineOptionStepsAt) or 0)))
+		.. " localPlayer=" .. tostring(playerKey)
+		.. " rememberedSource=" .. tostring(playerState and playerState.source
+			or useLegacyRememberedState and self.pendingOnlineOptionStepsSource or "nil")
+		.. " rememberedAge=" .. tostring((GetTimeSinceStart and GetTimeSinceStart() or 0)
+			- (tonumber(playerState and playerState.at
+				or useLegacyRememberedState and self.pendingOnlineOptionStepsAt) or 0)))
 	return summary
 end
 
@@ -12942,7 +14294,82 @@ function ITGOnline:PlayStateKey()
 	return self:SelectedSongRoundKey(song, self.currentRoomId)
 end
 
-function ITGOnline:MarkPlayEntered(callback)
+function ITGOnline:RequestCompanionLifecycleAction(action, path, payload, callback)
+	if not self:IsLocalTwoPlayerSession() then
+		safe_callback(callback, true, nil, nil, { skipped = true })
+		return
+	end
+	if not self.currentRoomId or not self:LocalPartyRoomComplete(self.currentRoom) then
+		safe_callback(callback, false, nil, {
+			error_code = "local_party_room_incomplete",
+			errorMessage = "Both local players must be present before gameplay can continue.",
+		})
+		return
+	end
+	local roundKey = tostring(self:PlayStateKey() or "")
+	local key = table.concat({ tostring(action or ""), roundKey }, "|")
+	self.companionLifecycleState = self.companionLifecycleState or {}
+	local state = self.companionLifecycleState[key]
+	if state == "accepted" then
+		safe_callback(callback, true, nil, nil, { alreadyAccepted = true })
+		return
+	end
+	if state == "in_flight" then
+		safe_callback(callback, false, nil, { inFlight = true, retryAfter = 0.5 })
+		return
+	end
+	local companionPayload = {}
+	for field, value in pairs(type(payload) == "table" and payload or {}) do
+		companionPayload[field] = value
+	end
+	companionPayload.client_action_id = self:NewClientActionId("p2-" .. tostring(action or "lifecycle"))
+	self.companionLifecycleState[key] = "in_flight"
+	online_flow_trace("companion_lifecycle_request localPlayer=P2"
+		.. " action=" .. tostring(action)
+		.. " room=" .. tostring(self.currentRoomId)
+		.. " roundKey=" .. roundKey)
+	self:RequestAsLocalPlayer(PLAYER_2, "POST",
+		"/rooms/" .. tostring(self.currentRoomId) .. tostring(path or ""),
+		companionPayload, function(ok, decoded, response)
+			if tostring(self:PlayStateKey() or "") ~= roundKey then
+				self.companionLifecycleState[key] = nil
+				online_flow_trace("companion_lifecycle_response_ignored reason=stale_round localPlayer=P2"
+					.. " action=" .. tostring(action)
+					.. " roundKey=" .. roundKey
+					.. " currentRoundKey=" .. tostring(self:PlayStateKey() or ""))
+				safe_callback(callback, false, decoded, {
+					cancelled = true,
+					error_code = "stale_companion_lifecycle_response",
+				})
+				return
+			end
+			self.companionLifecycleState[key] = ok and "accepted" or nil
+			if ok then
+				self:UpdatePlayStateFromResponse(decoded)
+				if decoded and decoded.room then
+					self:ApplyDecodedRoomSnapshot(decoded, "companion_lifecycle:" .. tostring(action))
+				end
+			end
+			online_flow_trace("companion_lifecycle_response localPlayer=P2"
+				.. " action=" .. tostring(action)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. roundKey
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " error=" .. tostring(decoded and decoded.error_code
+					or response and response.errorMessage or "nil"))
+			if not ok then
+				safe_broadcast("ITGOnlineLocalPartyLifecycleFailed", {
+					localPlayer = "P2",
+					action = action,
+					errorCode = decoded and decoded.error_code or nil,
+				})
+			end
+			safe_callback(callback, ok, decoded, response)
+		end)
+end
+
+function ITGOnline:MarkPlayEntered(callback, companionSynchronized)
 	if not self.currentRoomId then
 		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
 		return
@@ -12999,6 +14426,18 @@ function ITGOnline:MarkPlayEntered(callback)
 		safe_callback(callback, true, { play_state = self.currentRoom and self.currentRoom.play_state or nil }, nil)
 		return
 	end
+	if self:IsLocalTwoPlayerSession() and companionSynchronized ~= true then
+		self:RequestCompanionLifecycleAction("play-entered", "/play/entered", {
+			selection_id = self:CurrentSelectionId(),
+		}, function(ok, decoded, response)
+			if ok then
+				self:MarkPlayEntered(callback, true)
+			else
+				safe_callback(callback, false, decoded, response)
+			end
+		end)
+		return
+	end
 
 	self.onlineGameplayEnteredInFlightKey = key
 	self:TraceOnlineState("mark_play_entered_request", {
@@ -13033,7 +14472,7 @@ function ITGOnline:MarkPlayEntered(callback)
 	end)
 end
 
-function ITGOnline:MarkReturnedToLobby(callback)
+function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized)
 	if not self.currentRoomId then
 		online_flow_trace("mark_returned_to_lobby_failed reason=no_current_room")
 		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
@@ -13061,6 +14500,18 @@ function ITGOnline:MarkReturnedToLobby(callback)
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(key))
 		safe_callback(callback, false, nil, { retryAfter = 0.5, inFlight = true })
+		return
+	end
+	if self:IsLocalTwoPlayerSession() and companionSynchronized ~= true then
+		self:RequestCompanionLifecycleAction("play-returned", "/play/returned-to-lobby", {
+			selection_id = self:CurrentSelectionId(),
+		}, function(ok, decoded, response)
+			if ok then
+				self:MarkReturnedToLobby(callback, true)
+			else
+				safe_callback(callback, false, decoded, response)
+			end
+		end)
 		return
 	end
 
@@ -13536,7 +14987,7 @@ function ITGOnline:FetchPlayState(callback)
 	end)
 end
 
-function ITGOnline:MarkSongLoaded(callback, clockRetry)
+function ITGOnline:MarkSongLoaded(callback, clockRetry, companionSynchronized)
 	if not self.currentRoomId then
 		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
 		return
@@ -13545,7 +14996,7 @@ function ITGOnline:MarkSongLoaded(callback, clockRetry)
 	if not clockRetry and not self:ClockSyncIsFresh() then
 		self:Sync(function(ok)
 			if ok and self:ClockSyncIsFresh() then
-				self:MarkSongLoaded(callback, true)
+				self:MarkSongLoaded(callback, true, companionSynchronized)
 				return
 			end
 
@@ -13564,6 +15015,18 @@ function ITGOnline:MarkSongLoaded(callback, clockRetry)
 			self.songLoadedPendingCallbacks[songKey] = self.songLoadedPendingCallbacks[songKey] or {}
 			self.songLoadedPendingCallbacks[songKey][#self.songLoadedPendingCallbacks[songKey] + 1] = callback
 		end
+		return
+	end
+	if self:IsLocalTwoPlayerSession() and companionSynchronized ~= true then
+		self:RequestCompanionLifecycleAction("song-loaded", "/loaded", {
+			selection_id = self:CurrentSelectionId(),
+		}, function(ok, decoded, response)
+			if ok then
+				self:MarkSongLoaded(callback, clockRetry, true)
+			else
+				safe_callback(callback, false, decoded, response)
+			end
+		end)
 		return
 	end
 
@@ -13608,7 +15071,7 @@ function ITGOnline:MarkSongLoaded(callback, clockRetry)
 		end)
 	end
 
-function ITGOnline:MaybeAckScheduledStart(room)
+function ITGOnline:MaybeAckScheduledStart(room, companionSynchronized)
 	room = room or self.currentRoom
 	if not room or room.phase ~= "starting" or not room.start_at then
 		online_flow_trace("start_ack_skipped reason=no_scheduled_start"
@@ -13661,6 +15124,23 @@ function ITGOnline:MaybeAckScheduledStart(room)
 			.. " key=" .. tostring(key)
 			.. " completed=" .. tostring(self.startScheduleAckKey == key)
 			.. " inFlight=" .. tostring(self.startScheduleAckInFlightKey == key))
+		return
+	end
+	if self:IsLocalTwoPlayerSession() and companionSynchronized ~= true then
+		self:RequestCompanionLifecycleAction("start-ack", "/start-ack", {
+			selection_id = self:CurrentSelectionId(room),
+		}, function(ok, decoded, response)
+			if ok then
+				self:MaybeAckScheduledStart(self.currentRoom or room, true)
+			else
+				safe_broadcast("OnlineResponseStatus", {
+					event = "startAckP2",
+					success = false,
+					message = response_message(response, decoded,
+						"Player 2 could not acknowledge the synchronized start."),
+				})
+			end
+		end)
 		return
 	end
 
@@ -13819,6 +15299,82 @@ end
 -- Presence, heartbeat, and lobby discovery
 -- -----------------------------------------------------------------------
 
+function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
+	if not player or self:IsPrimaryLocalPlayer(player)
+		or not self:HasActiveAccessTokenForPlayer(player) then
+		return false
+	end
+	local session = local_player_session(player)
+	if not session then return false end
+	local localPartyId = self:ActiveLocalPartyId()
+	local fingerprint = tostring(status or "available") .. "|" .. tostring(roomId or "")
+		.. "|" .. tostring(localPartyId or "")
+	local now = GetTimeSinceStart()
+	if session.heartbeatInFlight then
+		session.heartbeatQueued = {
+			status = status,
+			roomId = roomId,
+			force = force == true,
+			activity = activity == true,
+			fingerprint = fingerprint,
+		}
+		return false
+	end
+	if force ~= true
+		and fingerprint == tostring(session.lastHeartbeatFingerprint or "")
+		and now - (tonumber(session.lastHeartbeatSentAt) or 0)
+			< (tonumber(self.heartbeatMinIntervalSeconds) or 30) then
+		return false
+	end
+
+	local payload = { status = status or "available" }
+	if roomId then payload.room_id = roomId end
+	if activity == true then payload.activity = true end
+	if localPartyId then payload.local_party_id = localPartyId end
+	session.heartbeatInFlight = true
+	session.lastHeartbeatSentAt = now
+	session.lastHeartbeatFingerprint = fingerprint
+	online_flow_trace("companion_heartbeat_request localPlayer=" .. local_player_key(player)
+		.. " status=" .. tostring(status)
+		.. " room=" .. tostring(roomId or "nil")
+		.. " force=" .. tostring(force == true)
+		.. " activity=" .. tostring(activity == true))
+	self:RequestAsLocalPlayer(player, "POST", "/presence/heartbeat", payload, function(ok, decoded, response)
+		session.heartbeatInFlight = false
+		local queued = session.heartbeatQueued
+		session.heartbeatQueued = nil
+		local errorCode = response_error_code(response, decoded)
+		online_flow_trace("companion_heartbeat_response localPlayer=" .. local_player_key(player)
+			.. " ok=" .. tostring(ok == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " error=" .. tostring(errorCode ~= "" and errorCode or "nil")
+			.. " room=" .. tostring(roomId or "nil"))
+		if not ok and tonumber(response and response.statusCode) == 401 then
+			self:ClearLocalPlayerSession(player, { clearStored = true })
+			self:HandleLocalPartyInvariantFailure("companion_heartbeat_unauthorized", player, decoded)
+			return
+		end
+		if not ok and (
+			errorCode == "presence_room_not_available"
+			or errorCode == "presence_room_required"
+			or errorCode == "presence_open_room_required"
+		) then
+			self:HandleLocalPartyInvariantFailure("companion_presence_room_mismatch", player, decoded)
+			return
+		end
+		if queued then
+			self:HeartbeatCompanion(
+				player,
+				queued.status,
+				queued.roomId,
+				queued.force,
+				queued.activity
+			)
+		end
+	end)
+	return true
+end
+
 function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	status = status or "available"
 	activityRetryCount = math.max(0, tonumber(activityRetryCount) or 0)
@@ -13832,6 +15388,10 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 		activity = false
 	end
 	local isLobbyPresenceHeartbeat = roomId == nil and tostring(status) == "available"
+	local localPartyId = self:ActiveLocalPartyId()
+	if self:IsLocalTwoPlayerSession() then
+		self:HeartbeatCompanion(PLAYER_2, status, roomId, force, activity)
+	end
 	online_flow_trace("heartbeat_begin status=" .. tostring(status)
 		.. " force=" .. tostring(force == true)
 		.. " activity=" .. tostring(activity == true)
@@ -13846,7 +15406,8 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 		force = force == true,
 		inFlight = self.heartbeatInFlight == true,
 		queued = self.heartbeatQueuedStatus or "nil",
-		fingerprint = tostring(status) .. "|" .. tostring(roomId or ""),
+		fingerprint = tostring(status) .. "|" .. tostring(roomId or "")
+			.. "|" .. tostring(localPartyId or ""),
 	})
 	if tostring(self.currentRoomBlockedReason or "") ~= "" and not isLobbyPresenceHeartbeat then
 		online_trace("Heartbeat suppressed while current room is blocked: status="
@@ -13860,6 +15421,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	end
 
 	local fingerprint = tostring(status) .. "|" .. tostring(roomId or "")
+		.. "|" .. tostring(localPartyId or "")
 	local now = GetTimeSinceStart()
 
 	if self.heartbeatInFlight then
@@ -13913,6 +15475,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	local payload = { status = status }
 	if roomId then payload.room_id = roomId end
 	if activity == true then payload.activity = true end
+	if localPartyId then payload.local_party_id = localPartyId end
 
 	self.heartbeatInFlight = true
 	self.lastHeartbeatSentAt = now
@@ -14781,6 +16344,214 @@ end
 -- Room membership and invitations
 -- -----------------------------------------------------------------------
 
+function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
+	if not self:IsLocalTwoPlayerSession() then
+		safe_callback(callback, true, room)
+		return
+	end
+	if type(room) ~= "table" then
+		safe_callback(callback, false, nil, { errorMessage = "Missing room snapshot." })
+		return
+	end
+
+	local roomId = room.id or room.room_id or room.roomId
+	local roomKey = self:RoomKey(roomId)
+	if roomKey == "" then
+		safe_callback(callback, false, nil, { errorMessage = "Invalid room id." })
+		return
+	end
+	if self:LocalPartyRoomComplete(room) then
+		self.localPartyRoomSyncInFlightKey = ""
+		self.localPartyRoomSynchronizedId = roomKey
+		online_flow_trace("local_party_room_sync_complete room=" .. roomKey
+			.. " source=" .. tostring(source or "unknown")
+			.. " members=" .. tostring(room.members and #room.members or 0))
+		safe_callback(callback, true, room)
+		return
+	end
+
+	local companion = PLAYER_2
+	if self:RoomContainsLocalPlayer(room, companion) then
+		safe_callback(callback, true, room)
+		return
+	end
+	if not self:HasActiveAccessTokenForPlayer(companion) then
+		self:HandleLocalPartyInvariantFailure("companion_not_authenticated_for_room_sync", companion, {
+			room_id = roomId,
+		})
+		safe_callback(callback, false, nil, { errorMessage = "Companion player is not authenticated." })
+		return
+	end
+
+	local phase = self:NormalizeRoomPhase(room.phase)
+	if phase ~= "lobby" and phase ~= "lobby_ready" and phase ~= "config" then
+		online_flow_trace("local_party_room_sync_failed reason=phase_not_joinable"
+			.. " room=" .. roomKey
+			.. " phase=" .. tostring(phase)
+			.. " source=" .. tostring(source or "unknown"))
+		self:HandleLocalPartyInvariantFailure("companion_missing_after_room_started", companion, {
+			room_id = roomId,
+			room_phase = phase,
+		})
+		safe_callback(callback, false, nil, { errorMessage = "The room started without the companion player." })
+		return
+	end
+
+	self.localPartyRoomSyncCallbacks = self.localPartyRoomSyncCallbacks or {}
+	if self.localPartyRoomSyncInFlightKey == roomKey then
+		if callback then
+			append_coalesced_callback(self.localPartyRoomSyncCallbacks, callback, "local_party_room_sync", function(cb)
+				safe_callback(cb, false, nil, { errorMessage = "Too many local party room callbacks." })
+			end)
+		end
+		return
+	end
+	self.localPartyRoomSyncInFlightKey = roomKey
+	self.localPartyRoomSyncCallbacks = callback and { callback } or {}
+
+	local function finish(ok, decoded, response, deferred)
+		local callbacks = self.localPartyRoomSyncCallbacks or {}
+		self.localPartyRoomSyncCallbacks = {}
+		if self.localPartyRoomSyncInFlightKey == roomKey then
+			self.localPartyRoomSyncInFlightKey = ""
+		end
+		local responseRoom = decoded and decoded.room or nil
+		if ok and responseRoom then
+			local applied = self:ApplyDecodedRoomSnapshot(decoded, "local_party_room_sync")
+			ok = applied ~= nil
+			if applied and self:LocalPartyRoomComplete(applied) then
+				self.localPartyRoomSynchronizedId = roomKey
+			end
+		end
+		online_flow_trace("local_party_room_sync_finish room=" .. roomKey
+			.. " ok=" .. tostring(ok == true)
+			.. " deferred=" .. tostring(deferred == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " error=" .. tostring(decoded and decoded.error_code
+				or response and response.errorMessage or "nil")
+			.. " callbacks=" .. tostring(#callbacks))
+		if not ok and deferred ~= true
+			and self.currentRoomId
+			and online_room_ids_match(self.currentRoomId, roomId)
+		then
+			self:HandleLocalPartyInvariantFailure("companion_room_sync_failed", PLAYER_2, {
+				room_id = roomId,
+				error_code = decoded and decoded.error_code or nil,
+				status = response and response.statusCode or nil,
+			})
+		end
+		for _, cb in ipairs(callbacks) do safe_callback(cb, ok, decoded, response) end
+	end
+
+	local visibility = tostring(room.visibility or "public"):lower()
+	local companionUser = self:UserForLocalPlayer(companion)
+	local companionUserId = online_user_identifier(companionUser)
+	local primaryIsManager = self:IsAuthenticatedUserRoomManager(room)
+	online_flow_trace("local_party_room_sync_begin room=" .. roomKey
+		.. " source=" .. tostring(source or "unknown")
+		.. " visibility=" .. visibility
+		.. " primaryManager=" .. tostring(primaryIsManager == true)
+		.. " companionUser=" .. tostring(companionUserId))
+
+	local function performCompanionJoin()
+		if visibility ~= "private" then
+			self:RequestAsLocalPlayer(companion, "POST", "/rooms/" .. roomKey .. "/join", {}, function(ok, decoded, response)
+				local errorCode = response_error_code(response, decoded)
+				if not ok and errorCode == "already_in_room" then
+					self:FetchRoom(roomId, function(fetchOk, fetchDecoded, fetchResponse)
+						finish(fetchOk, fetchDecoded, fetchResponse)
+					end)
+					return
+				end
+				finish(ok, decoded, response)
+			end)
+			return
+		end
+
+		if primaryIsManager then
+			self:InviteUser(roomId, companionUserId, function(inviteOk, inviteDecoded, inviteResponse)
+				local invitation = inviteDecoded and inviteDecoded.invitation or nil
+				local invitationId = invitation and invitation.id or nil
+				if not inviteOk or not invitationId then
+					finish(false, inviteDecoded, inviteResponse)
+					return
+				end
+				self:RequestAsLocalPlayer(
+					companion,
+					"POST",
+					"/room-invitations/" .. tostring(invitationId) .. "/accept",
+					{},
+					function(acceptOk, acceptDecoded, acceptResponse)
+						finish(acceptOk, acceptDecoded, acceptResponse)
+					end
+				)
+			end)
+			return
+		end
+
+		self:RequestAsLocalPlayer(
+			companion,
+			"POST",
+			"/rooms/" .. roomKey .. "/join-requests",
+			{},
+			function(ok, decoded, response)
+				if ok then
+					self.localPartyPendingCompanionRoomId = roomKey
+					self.localPartyPendingCompanionJoinRequestId = decoded
+						and decoded.join_request and decoded.join_request.id or nil
+					online_flow_trace("local_party_room_sync_pending_manager_approval room=" .. roomKey
+						.. " joinRequest=" .. tostring(self.localPartyPendingCompanionJoinRequestId or "nil"))
+				end
+				finish(ok, decoded, response, ok)
+			end
+		)
+	end
+
+	-- A remembered P2 token may still own a room from an interrupted session.
+	-- P1 is the coordinator, so P2 deterministically leaves that stale room
+	-- before following P1 into the selected target.
+	self:RequestAsLocalPlayer(companion, "GET", "/rooms/current", nil,
+		function(currentOk, currentDecoded, currentResponse)
+			local companionRoom = currentDecoded and currentDecoded.room or nil
+			local companionRoomId = companionRoom
+				and (companionRoom.id or companionRoom.room_id or companionRoom.roomId) or nil
+			if companionRoomId and online_room_ids_match(companionRoomId, roomId) then
+				online_flow_trace("local_party_room_sync_preflight already_in_target"
+					.. " room=" .. roomKey
+					.. " localPlayer=P2")
+				self:FetchRoom(roomId, function(fetchOk, fetchDecoded, fetchResponse)
+					finish(fetchOk, fetchDecoded, fetchResponse)
+				end)
+				return
+			end
+			if companionRoomId then
+				online_flow_trace("local_party_room_sync_preflight leave_previous"
+					.. " previousRoom=" .. tostring(companionRoomId)
+					.. " targetRoom=" .. roomKey
+					.. " localPlayer=P2")
+				self:RequestAsLocalPlayer(companion, "POST",
+					"/rooms/" .. tostring(companionRoomId) .. "/leave", {
+						client_action_id = self:NewClientActionId("p2-preflight-leave"),
+					}, function(leaveOk, leaveDecoded, leaveResponse)
+						local gone = leaveResponse
+							and (leaveResponse.statusCode == 404 or leaveResponse.statusCode == 410)
+						if leaveOk or gone then
+							performCompanionJoin()
+						else
+							finish(false, leaveDecoded, leaveResponse)
+						end
+					end)
+				return
+			end
+			local statusCode = tonumber(currentResponse and currentResponse.statusCode) or 0
+			if currentOk or statusCode == 404 or statusCode == 410 then
+				performCompanionJoin()
+			else
+				finish(false, currentDecoded, currentResponse)
+			end
+		end)
+end
+
 function ITGOnline:CreateRoom(callback, visibility)
 	local roomName = local_profile_name() .. "'s room"
 	online_flow_trace("create_room_begin visibility=" .. tostring(visibility or "public")
@@ -15011,6 +16782,24 @@ function ITGOnline:RequestJoinRoom(roomId, callback, options)
 				online_flow_trace("join_room_request_pending room=" .. tostring(joinIntentRoomId)
 					.. " joinRequestId=" .. tostring(self.pendingJoinRequestId or "nil")
 					.. " status=" .. tostring(decoded.join_request.status or "nil"))
+				if self:IsLocalTwoPlayerSession() then
+					self.localPartyPendingCompanionRoomId = self:RoomKey(joinIntentRoomId)
+					self:RequestCompanionJoinRequest(joinIntentRoomId,
+						function(companionOk, companionDecoded, companionResponse)
+							if not companionOk then
+								online_flow_trace("local_party_companion_join_request_failed"
+									.. " room=" .. tostring(joinIntentRoomId)
+									.. " status=" .. tostring(companionResponse
+										and companionResponse.statusCode or "nil"))
+								self:CancelJoinRequest()
+								self.localPartyPendingCompanionRoomId = nil
+								safe_broadcast("ITGOnlineLocalPartyJoinFailed", {
+									roomId = joinIntentRoomId,
+									localPlayer = "P2",
+								})
+							end
+						end)
+				end
 			elseif privateRoom and ok then
 				online_flow_trace("join_room_response_rejected reason=missing_join_request_payload"
 					.. " room=" .. tostring(joinIntentRoomId))
@@ -15044,7 +16833,29 @@ function ITGOnline:RequestJoinRoom(roomId, callback, options)
 	self:FetchLobby(submitJoinRequest)
 end
 
-function ITGOnline:CancelJoinRequest(callback)
+function ITGOnline:CancelJoinRequest(callback, companionCancelled)
+	local companionJoinRequestId = self.localPartyPendingCompanionJoinRequestId
+	if self:IsLocalTwoPlayerSession()
+		and companionCancelled ~= true
+		and companionJoinRequestId
+	then
+		online_flow_trace("cancel_join_request_companion_begin localPlayer=P2"
+			.. " joinRequest=" .. tostring(companionJoinRequestId))
+		self:RequestAsLocalPlayer(PLAYER_2, "POST",
+			"/room-join-requests/" .. tostring(companionJoinRequestId) .. "/cancel",
+			{}, function(ok, decoded, response)
+				local gone = response
+					and (response.statusCode == 404 or response.statusCode == 410)
+				if ok or gone then
+					self.localPartyPendingCompanionJoinRequestId = nil
+					self.localPartyPendingCompanionRoomId = nil
+					self:CancelJoinRequest(callback, true)
+				else
+					safe_callback(callback, false, decoded, response)
+				end
+			end)
+		return
+	end
 	local joinRequestId = self.pendingJoinRequestId
 	local joinRoomId = self.pendingJoinRoomId
 	if not joinRequestId then
@@ -15200,6 +17011,42 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		.. " songHash=" .. tostring(payload.song_hash or "nil")
 		.. " chartHash=" .. tostring(payload.chart_hash or "nil"))
 
+	if self:IsLocalTwoPlayerSession() and self:LocalPartyRoomComplete(self.currentRoom) then
+		local companionKey = "P2|" .. availabilityKey
+		self.companionSongAvailabilityInFlight = self.companionSongAvailabilityInFlight or {}
+		if not self.companionSongAvailabilityInFlight[companionKey] then
+			self.companionSongAvailabilityInFlight[companionKey] = true
+			online_flow_trace("companion_song_availability_request localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " missing=" .. tostring(missing == true)
+				.. " key=" .. companionKey)
+			self:RequestAsLocalPlayer(
+				PLAYER_2,
+				"POST",
+				"/rooms/" .. tostring(self.currentRoomId) .. "/song-availability",
+				payload,
+				function(companionOk, companionDecoded, companionResponse)
+					self.companionSongAvailabilityInFlight[companionKey] = nil
+					online_flow_trace("companion_song_availability_response localPlayer=P2"
+						.. " room=" .. tostring(self.currentRoomId or "nil")
+						.. " ok=" .. tostring(companionOk == true)
+						.. " status=" .. tostring(companionResponse
+							and companionResponse.statusCode or "nil")
+						.. " error=" .. tostring(companionDecoded
+							and companionDecoded.error_code
+							or companionResponse and companionResponse.errorMessage
+							or "nil"))
+					if companionOk and companionDecoded and companionDecoded.room then
+						self:ApplyDecodedRoomSnapshot(
+							companionDecoded,
+							"companion_song_availability"
+						)
+					end
+				end
+			)
+		end
+	end
+
 	self:Request("POST", "/rooms/" .. tostring(self.currentRoomId) .. "/song-availability", payload, function(ok, decoded, response)
 		if availabilityGeneration ~= (tonumber(self.songAvailabilityGeneration) or 0) then
 			online_flow_trace("song_availability_response_ignored reason=invalidated_request"
@@ -15273,6 +17120,69 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 	self:ReportSongAvailability(false, "reloaded", callback)
 end
 
+function ITGOnline:RequestCompanionJoinRequest(roomId, callback)
+	if not self:IsLocalTwoPlayerSession() then
+		safe_callback(callback, true, nil, nil, { skipped = true })
+		return
+	end
+	local roomKey = self:RoomKey(roomId)
+	if roomKey == "" then
+		safe_callback(callback, false, nil, { errorMessage = "Invalid target room." })
+		return
+	end
+	local function submit()
+		self:RequestAsLocalPlayer(PLAYER_2, "POST",
+			"/rooms/" .. roomKey .. "/join-requests", {},
+			function(ok, decoded, response)
+				if ok then
+					self.localPartyPendingCompanionRoomId = roomKey
+					self.localPartyPendingCompanionJoinRequestId = decoded
+						and decoded.join_request and decoded.join_request.id or nil
+				end
+				online_flow_trace("companion_join_request_response localPlayer=P2"
+					.. " room=" .. roomKey
+					.. " ok=" .. tostring(ok == true)
+					.. " joinRequest="
+						.. tostring(self.localPartyPendingCompanionJoinRequestId or "nil")
+					.. " status=" .. tostring(response and response.statusCode or "nil"))
+				safe_callback(callback, ok, decoded, response)
+			end)
+	end
+	self:RequestAsLocalPlayer(PLAYER_2, "GET", "/rooms/current", nil,
+		function(ok, decoded, response)
+			local currentRoom = decoded and decoded.room or nil
+			local currentRoomId = currentRoom
+				and (currentRoom.id or currentRoom.room_id or currentRoom.roomId) or nil
+			if currentRoomId and online_room_ids_match(currentRoomId, roomId) then
+				self.localPartyPendingCompanionRoomId = roomKey
+				safe_callback(callback, true, { already_in_target = true }, nil)
+				return
+			end
+			if currentRoomId then
+				self:RequestAsLocalPlayer(PLAYER_2, "POST",
+					"/rooms/" .. tostring(currentRoomId) .. "/leave", {
+						client_action_id = self:NewClientActionId("p2-join-request-preflight-leave"),
+					}, function(leaveOk, leaveDecoded, leaveResponse)
+						local gone = leaveResponse and (
+							leaveResponse.statusCode == 404 or leaveResponse.statusCode == 410
+						)
+						if leaveOk or gone then
+							submit()
+						else
+							safe_callback(callback, false, leaveDecoded, leaveResponse)
+						end
+					end)
+				return
+			end
+			local statusCode = tonumber(response and response.statusCode) or 0
+			if ok or statusCode == 404 or statusCode == 410 then
+				submit()
+			else
+				safe_callback(callback, false, decoded, response)
+			end
+		end)
+end
+
 function ITGOnline:RequestJoinUserRoom(userId, callback)
 	self:TraceOnlineState("join_user_room_request", {
 		source = "request_join_user_room",
@@ -15300,6 +17210,22 @@ function ITGOnline:RequestJoinUserRoom(userId, callback)
 		elseif ok and decoded and decoded.join_request then
 			self.pendingJoinRoomId = decoded.join_request.room_id
 			self.pendingJoinRequestId = decoded.join_request.id
+			if self:IsLocalTwoPlayerSession() then
+				self:RequestCompanionJoinRequest(self.pendingJoinRoomId,
+					function(companionOk, companionDecoded, companionResponse)
+						if not companionOk then
+							online_flow_trace("join_user_room_companion_failed localPlayer=P2"
+								.. " room=" .. tostring(self.pendingJoinRoomId or "nil")
+								.. " status=" .. tostring(companionResponse
+									and companionResponse.statusCode or "nil"))
+							self:CancelJoinRequest()
+							safe_broadcast("ITGOnlineLocalPartyJoinFailed", {
+								roomId = self.pendingJoinRoomId,
+								localPlayer = "P2",
+							})
+						end
+					end)
+			end
 		elseif not ok then
 			self.pendingJoinRoomId = nil
 			self.pendingJoinRequestId = nil
@@ -15385,6 +17311,44 @@ function ITGOnline:AcceptInvitation(invitationId, callback)
 	end)
 end
 
+function ITGOnline:AcceptInvitationForLocalPlayer(player, invitationId, callback)
+	if not player or self:IsPrimaryLocalPlayer(player) then
+		self:AcceptInvitation(invitationId, callback)
+		return
+	end
+	local playerKey = local_player_key(player)
+	self:TraceOnlineState("accept_invitation_local_player_request", {
+		source = "accept_invitation_local_player",
+		localPlayer = playerKey,
+		invitationId = invitationId,
+	})
+	self:RequestAsLocalPlayer(
+		player,
+		"POST",
+		"/room-invitations/" .. tostring(invitationId) .. "/accept",
+		{},
+		function(ok, decoded, response)
+			self:TraceOnlineState("accept_invitation_local_player_response", {
+				source = "accept_invitation_local_player",
+				localPlayer = playerKey,
+				invitationId = invitationId,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+				roomSnapshot = decoded and decoded.room or nil,
+			})
+			if ok and decoded and decoded.room then
+				local room = self:ApplyDecodedRoomSnapshot(
+					decoded,
+					"accept_invitation_local_player:" .. playerKey
+				)
+				ok = room ~= nil
+				if room then safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room)) end
+			end
+			safe_callback(callback, ok, decoded, response)
+		end
+	)
+end
+
 function ITGOnline:DeclineInvitation(invitationId, callback)
 	self:TraceOnlineState("decline_invitation_request", {
 		source = "decline_invitation",
@@ -15400,6 +17364,35 @@ function ITGOnline:DeclineInvitation(invitationId, callback)
 		})
 		safe_callback(callback, ok, decoded, response)
 	end)
+end
+
+function ITGOnline:DeclineInvitationForLocalPlayer(player, invitationId, callback)
+	if not player or self:IsPrimaryLocalPlayer(player) then
+		self:DeclineInvitation(invitationId, callback)
+		return
+	end
+	local playerKey = local_player_key(player)
+	self:TraceOnlineState("decline_invitation_local_player_request", {
+		source = "decline_invitation_local_player",
+		localPlayer = playerKey,
+		invitationId = invitationId,
+	})
+	self:RequestAsLocalPlayer(
+		player,
+		"POST",
+		"/room-invitations/" .. tostring(invitationId) .. "/decline",
+		{},
+		function(ok, decoded, response)
+			self:TraceOnlineState("decline_invitation_local_player_response", {
+				source = "decline_invitation_local_player",
+				localPlayer = playerKey,
+				invitationId = invitationId,
+				ok = ok == true,
+				status = response and response.statusCode or "nil",
+			})
+			safe_callback(callback, ok, decoded, response)
+		end
+	)
 end
 
 function ITGOnline:AcceptJoinRequest(joinRequestId, callback)
@@ -15474,6 +17467,15 @@ function ITGOnline:ClearCurrentRoomState(source)
 	end
 	self.liveScoreInFlight = false
 	self.pendingJoinRoomId = nil
+	self.companionScoreRuntime = {}
+	self.companionLifecycleState = {}
+	self.companionReadyInFlight = {}
+	self.expectedOnlineGameplaySteps = nil
+	self.expectedOnlineGameplayStepsByPlayer = {}
+	self.localPartyRoomSyncInFlightKey = ""
+	self.localPartyPendingCompanionRoomId = nil
+	self.localPartyPendingCompanionJoinRequestId = nil
+	self.localPartyInvariantFailureKey = ""
 	self:ClearOptimisticConfigReady(source or "clear_room")
 	self:ClearOnlineOptionsReadyDeadline(source or "clear_room")
 	self:ClearPendingConfigReadyIntent(source or "clear_room")
@@ -15490,7 +17492,7 @@ function ITGOnline:ClearCurrentRoomState(source)
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
 end
 
-function ITGOnline:LeaveRoom(callback)
+function ITGOnline:LeavePrimaryRoom(callback)
 	if not self.currentRoomId then
 		online_flow_trace("leave_room_skipped reason=no_current_room")
 		safe_callback(callback, true, {})
@@ -15580,6 +17582,121 @@ function ITGOnline:LeaveRoom(callback)
 		online_flow_trace("leave_room_callbacks_end room=" .. tostring(roomId)
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 			.. " leaving=" .. tostring(self:IsLeavingRoom(roomId) == true))
+	end)
+end
+
+function ITGOnline:LeaveRoom(callback, companionPendingCancelled)
+	local pendingCompanionJoinId = self.localPartyPendingCompanionJoinRequestId
+	if self:IsLocalTwoPlayerSession()
+		and companionPendingCancelled ~= true
+		and pendingCompanionJoinId
+		and self:HasActiveAccessTokenForPlayer(PLAYER_2)
+	then
+		self.localPartyPendingCancelCallbacks = self.localPartyPendingCancelCallbacks or {}
+		if callback then
+			append_coalesced_callback(
+				self.localPartyPendingCancelCallbacks,
+				callback,
+				"local_party_pending_cancel",
+				function(cb)
+					safe_callback(cb, false, nil, {
+						errorMessage = "Too many pending local-party cancellation requests.",
+					})
+				end
+			)
+		end
+		if self.localPartyPendingCancelInFlight == true then return end
+		self.localPartyPendingCancelInFlight = true
+		online_flow_trace("local_party_pending_join_cancel_begin localPlayer=P2"
+			.. " joinRequest=" .. tostring(pendingCompanionJoinId)
+			.. " room=" .. tostring(self.localPartyPendingCompanionRoomId or "nil"))
+		self:RequestAsLocalPlayer(PLAYER_2, "POST",
+			"/room-join-requests/" .. tostring(pendingCompanionJoinId) .. "/cancel",
+			{}, function(ok, decoded, response)
+				local gone = response
+					and (response.statusCode == 404 or response.statusCode == 410)
+				self.localPartyPendingCancelInFlight = false
+				local callbacks = self.localPartyPendingCancelCallbacks or {}
+				self.localPartyPendingCancelCallbacks = {}
+				if not ok and not gone then
+					online_flow_trace("local_party_pending_join_cancel_failed localPlayer=P2"
+						.. " joinRequest=" .. tostring(pendingCompanionJoinId)
+						.. " status=" .. tostring(response and response.statusCode or "nil"))
+					for cb in ivalues(callbacks) do
+						safe_callback(cb, false, decoded, response)
+					end
+					return
+				end
+				self.localPartyPendingCompanionJoinRequestId = nil
+				self.localPartyPendingCompanionRoomId = nil
+				self:LeaveRoom(function(leaveOk, leaveDecoded, leaveResponse)
+					for cb in ivalues(callbacks) do
+						safe_callback(cb, leaveOk, leaveDecoded, leaveResponse)
+					end
+				end, true)
+			end)
+		return
+	end
+
+	if not self:IsLocalTwoPlayerSession()
+		or not self.currentRoomId
+		or not self:RoomContainsLocalPlayer(self.currentRoom, PLAYER_2)
+	then
+		self:LeavePrimaryRoom(callback)
+		return
+	end
+
+	self.localPartyLeaveCallbacks = self.localPartyLeaveCallbacks or {}
+	if callback then
+		append_coalesced_callback(self.localPartyLeaveCallbacks, callback, "local_party_leave", function(cb)
+			safe_callback(cb, false, nil, { errorMessage = "Too many pending local-party leave requests." })
+		end)
+	end
+	if self.localPartyLeaveInFlight == true then
+		online_flow_trace("local_party_leave_join_inflight"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " callbacks=" .. tostring(#self.localPartyLeaveCallbacks))
+		return
+	end
+
+	local roomId = tostring(self.currentRoomId)
+	self.localPartyLeaveInFlight = true
+	online_flow_trace("local_party_leave_begin localPlayer=P2"
+		.. " room=" .. roomId
+		.. " callbacks=" .. tostring(#self.localPartyLeaveCallbacks))
+	self:RequestAsLocalPlayer(PLAYER_2, "POST", "/rooms/" .. roomId .. "/leave", {
+		client_action_id = self:NewClientActionId("p2-room-leave"),
+	}, function(ok, decoded, response)
+		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
+		online_flow_trace("local_party_leave_companion_response localPlayer=P2"
+			.. " room=" .. roomId
+			.. " ok=" .. tostring(ok == true)
+			.. " gone=" .. tostring(gone == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " error=" .. tostring(decoded and decoded.error_code
+				or response and response.errorMessage or "nil"))
+		if not ok and not gone then
+			self.localPartyLeaveInFlight = false
+			local callbacks = self.localPartyLeaveCallbacks or {}
+			self.localPartyLeaveCallbacks = {}
+			for cb in ivalues(callbacks) do
+				safe_callback(cb, false, decoded, response)
+			end
+			return
+		end
+
+		self:LeavePrimaryRoom(function(primaryOk, primaryDecoded, primaryResponse)
+			self.localPartyLeaveInFlight = false
+			local callbacks = self.localPartyLeaveCallbacks or {}
+			self.localPartyLeaveCallbacks = {}
+			online_flow_trace("local_party_leave_complete"
+				.. " room=" .. roomId
+				.. " ok=" .. tostring(primaryOk == true)
+				.. " callbacks=" .. tostring(#callbacks))
+			for cb in ivalues(callbacks) do
+				safe_callback(cb, primaryOk, primaryDecoded, primaryResponse)
+			end
+		end)
 	end)
 end
 
@@ -16754,6 +18871,11 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local selfPresenceDevices = {}
 	local retainedSameAccountPresenceIds = {}
 	local retainedSameAccountSessionIds = {}
+	local localCompanionUserId = ""
+	if self:IsLocalTwoPlayerSession() then
+		local companionUser = self:UserForLocalPlayer(PLAYER_2)
+		localCompanionUserId = online_user_identifier(companionUser)
+	end
 
 	if decoded and decoded.visible_rooms ~= nil then
 		for room in ivalues(decoded.visible_rooms or {}) do
@@ -16823,6 +18945,10 @@ function ITGOnline:LobbySearchPayload(decoded)
 					selfPresenceDevices[#selfPresenceDevices + 1] = tostring(viewerSession.device_name or viewerSession.deviceName)
 				end
 			else
+				local localParty = type(user.local_party) == "table" and user.local_party or {}
+				local partyCompanion = type(localParty.companion) == "table" and localParty.companion or nil
+				local isLocalCompanion = localCompanionUserId ~= ""
+					and online_protocol_ids_match(user.id, localCompanionUserId)
 				local sameAccountNonViewer = self.user and online_protocol_ids_match(user.id, self.user.id)
 				if sameAccountNonViewer then
 					retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = "present"
@@ -16848,6 +18974,11 @@ function ITGOnline:LobbySearchPayload(decoded)
 					lastSeenAt = user.last_seen_at,
 					presenceIdentity = user.presence_identity,
 					isSelf = false,
+					isLocalCompanion = isLocalCompanion,
+					partyCompanionId = partyCompanion and partyCompanion.id or nil,
+					partyCompanionName = partyCompanion
+						and user_display_name(partyCompanion, "")
+						or nil,
 				}
 				displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
 			end
@@ -16900,6 +19031,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " selfPresenceDeviceCount=" .. tostring(#selfPresenceDevices)
 		.. " retainedSameAccountPresenceIds=" .. table.concat(retainedSameAccountPresenceIds, ",")
 		.. " retainedSameAccountSessionCount=" .. tostring(#retainedSameAccountSessionIds)
+		.. " localCompanionUserId=" .. tostring(localCompanionUserId ~= "" and localCompanionUserId or "nil")
 		.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
 		.. " authInvalidated=" .. tostring(self.authSessionInvalidated == true)
 		.. " authInvalidatedReason=" .. tostring(self.authSessionInvalidatedReason or "")

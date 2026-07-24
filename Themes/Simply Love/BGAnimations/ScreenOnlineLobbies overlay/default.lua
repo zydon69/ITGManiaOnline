@@ -2582,6 +2582,12 @@ local function build_player_action_options(user)
 			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
 		}
 	end
+	if user.isLocalCompanion then
+		return {
+			{label=online_lobby_text("AlreadyWithYou", "Already with you"), action="cancel"},
+			{label=online_lobby_text("Cancel", "Cancel"), action="cancel"},
+		}
+	end
 	if user.room and user.room.visibility == "public" then
 		if not room_accepts_new_members(user.room) then
 			return {
@@ -3207,6 +3213,7 @@ local function handle_private_join_prompt_input(event)
 				MESSAGEMAN:Broadcast("AnswerRoomInvitation", {
 					invitation_id=invitation.id,
 					accept=option.accept,
+					localPlayer=private_join_request and private_join_request.localPlayer or "P1",
 				})
 				play_online_sound_once("Common", "Start")
 			end
@@ -3978,6 +3985,18 @@ local InputHandler = function(event)
 	end
 	if not event or not event.PlayerNumber or not event.button then return false end
 	if not t then return false end
+	if ITGOnline
+		and ITGOnline.CanLocalPlayerControlOnlineRoom
+		and not ITGOnline:CanLocalPlayerControlOnlineRoom(event.PlayerNumber)
+	then
+		lobby_flow_trace("input_ignored reason=local_companion_read_only"
+			.. " player=" .. tostring(event.PlayerNumber)
+			.. " type=" .. tostring(event.type)
+			.. " button=" .. tostring(event.GameButton or event.button)
+			.. " mode=" .. tostring(mode)
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+		return true
+	end
 	if not is_active_lobby_overlay() then
 		lobby_flow_trace("input_ignored reason=inactive_overlay type=" .. tostring(event.type)
 			.. " button=" .. tostring(event.GameButton or event.button))
@@ -4312,9 +4331,19 @@ local af = Def.ActorFrame{
 			local unknownPlayer = online_lobby_text("UnknownPlayer", "Player")
 			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, unknownPlayer)
 				or tostring(user.display_name or user.displayName or user.name or unknownPlayer)
+			local partyLabel = ""
+			if user.isLocalCompanion then
+				partyLabel = " " .. online_lobby_text("WithYou", "(with you)")
+			elseif tostring(user.partyCompanionName or "") ~= "" then
+				partyLabel = " " .. online_lobby_text(
+					"WithPlayer",
+					"(with %s)",
+					clamp_text(tostring(user.partyCompanionName), 24)
+				)
+			end
 			-- Keep the room suffix intact: it carries the room number required to
 			-- identify private rooms. The actor's maxwidth handles final scaling.
-			local line = selected .. i .. ". " .. clamp_text(display_name, 24) .. status .. room
+			local line = selected .. i .. ". " .. clamp_text(display_name, 24) .. partyLabel .. status .. room
 			if list_selected and lobby_view == "players" and i == online_player_index then
 				selected_start = text_length
 				selected_length = online_utf8_length(line)

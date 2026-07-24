@@ -1,0 +1,73 @@
+ITGOnlineLocalParty = ITGOnlineLocalParty or {}
+
+local Party = ITGOnlineLocalParty
+
+local function normalized_side(value)
+	local side = tostring(value or ""):upper()
+	if side == "PLAYERNUMBER_P1" or side == "PLAYER_1" then return "P1" end
+	if side == "PLAYERNUMBER_P2" or side == "PLAYER_2" then return "P2" end
+	if side == "P1" or side == "P2" then return side end
+	return nil
+end
+
+function Party.normalized_side(value)
+	return normalized_side(value)
+end
+
+function Party.session_plan(joinedSides)
+	local joined = {}
+	for _, value in ipairs(type(joinedSides) == "table" and joinedSides or {}) do
+		local side = normalized_side(value)
+		if side then joined[side] = true end
+	end
+
+	local required = {}
+	if joined.P1 then required[#required + 1] = "P1" end
+	if joined.P2 then required[#required + 1] = "P2" end
+	local coordinator = joined.P1 and "P1" or (joined.P2 and "P2" or nil)
+
+	return {
+		requiredSides = required,
+		requiredCount = #required,
+		coordinatorSide = coordinator,
+		twoPlayer = #required == 2,
+	}
+end
+
+function Party.validate_identities(plan, identities)
+	plan = type(plan) == "table" and plan or { requiredSides = {} }
+	identities = type(identities) == "table" and identities or {}
+	local seen = {}
+	for _, side in ipairs(plan.requiredSides or {}) do
+		local userId = tostring(identities[side] or "")
+		if userId == "" then
+			return false, "local_player_not_authenticated", side
+		end
+		if seen[userId] then
+			return false, "duplicate_local_online_identity", side
+		end
+		seen[userId] = side
+	end
+	if #(plan.requiredSides or {}) == 0 then
+		return false, "no_local_player"
+	end
+	return true
+end
+
+function Party.online_mode_supported(isCouple, isRoutine)
+	if isCouple == true then return false, "couple_not_supported_online" end
+	if isRoutine == true then return false, "routine_not_supported_online" end
+	return true
+end
+
+function Party.role_for_side(plan, side)
+	side = normalized_side(side)
+	if not side or type(plan) ~= "table" then return nil end
+	if side == plan.coordinatorSide then return "coordinator" end
+	for _, requiredSide in ipairs(plan.requiredSides or {}) do
+		if side == requiredSide then return "companion" end
+	end
+	return nil
+end
+
+return Party

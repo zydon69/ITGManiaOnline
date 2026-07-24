@@ -22,6 +22,7 @@ local sensitiveLogKeys = {
 	shortcode = true,
 	usercode = true,
 	verificationurl = true,
+	localpartyid = true,
 	email = true,
 }
 

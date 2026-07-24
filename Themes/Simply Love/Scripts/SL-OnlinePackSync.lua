@@ -929,12 +929,25 @@ local function set_current_selection(song, steps, songInfo, source)
 			return
 		end
 	end
-	if ITGOnline and ITGOnline.ResolveLocalGameplayStepsForSelectedSong then
-		steps = ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, steps, source or "pack_sync_set_current_selection")
-	end
 	if steps and GAMESTATE.GetEnabledPlayers and GAMESTATE.SetCurrentSteps then
 		for player in ivalues(GAMESTATE:GetEnabledPlayers() or {}) do
-			local ok, err = pcall(function() GAMESTATE:SetCurrentSteps(player, steps) end)
+			local playerSteps = steps
+			if ITGOnline and ITGOnline.ResolveLocalGameplayStepsForSelectedSong then
+				playerSteps = ITGOnline:ResolveLocalGameplayStepsForSelectedSong(
+					songInfo,
+					steps,
+					source or "pack_sync_set_current_selection",
+					player
+				)
+			end
+			if not playerSteps then
+				trace("SetCurrentSteps skipped reason=no_player_chart"
+					.. " source=" .. tostring(source or "unknown")
+					.. " player=" .. tostring(player))
+			end
+			local ok, err = pcall(function()
+				if playerSteps then GAMESTATE:SetCurrentSteps(player, playerSteps) end
+			end)
 			if not ok then
 				trace("SetCurrentSteps failed source=" .. tostring(source or "unknown")
 					.. " player=" .. tostring(player)
@@ -1538,6 +1551,43 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		if currentSelectedAt ~= "" then
 			payload.selected_at = currentSelectedAt
 		end
+	end
+
+	if ITGOnline.IsLocalTwoPlayerSession
+		and ITGOnline:IsLocalTwoPlayerSession()
+		and ITGOnline.LocalPartyRoomComplete
+		and ITGOnline:LocalPartyRoomComplete(ITGOnline.currentRoom)
+		and ITGOnline.RequestAsLocalPlayer
+	then
+		local companionPayload = {}
+		for key, value in pairs(payload) do companionPayload[key] = value end
+		companionPayload.client_action_id = ITGOnline:NewClientActionId("p2-pack-status")
+		trace("Status companion request localPlayer=P2"
+			.. " status=" .. tostring(status)
+			.. " room=" .. tostring(requestRoomId)
+			.. " sequence=" .. tostring(requestSequence)
+			.. " selected_at=" .. tostring(requestSelectedAt))
+		ITGOnline:RequestAsLocalPlayer(PLAYER_2, "POST",
+			"/rooms/" .. requestRoomId .. "/pack-sync-status",
+			companionPayload, function(ok, decoded, response)
+				trace("Status companion response localPlayer=P2"
+					.. " status=" .. tostring(status)
+					.. " room=" .. tostring(requestRoomId)
+					.. " ok=" .. tostring(ok == true)
+					.. " statusCode=" .. tostring(response and response.statusCode or "nil")
+					.. " error=" .. tostring(decoded and decoded.error_code
+						or response and response.errorMessage or "nil"))
+				if ok and decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
+					ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_sync_status_p2")
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+				elseif not ok then
+					MESSAGEMAN:Broadcast("ITGOnlineLocalPartyPackSyncFailed", {
+						localPlayer = "P2",
+						status = status,
+						errorCode = decoded and decoded.error_code or nil,
+					})
+				end
+			end)
 	end
 
 	ITGOnline:Request("POST", "/rooms/" .. requestRoomId .. "/pack-sync-status", payload, function(ok, decoded, response)

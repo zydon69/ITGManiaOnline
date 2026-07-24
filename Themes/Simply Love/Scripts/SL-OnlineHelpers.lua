@@ -1229,7 +1229,16 @@ ApplyOnlineSongSelection = function(songInfo)
 	local applyOk = safe_online_call("apply online song selection", function()
 		GAMESTATE:SetCurrentSong(song)
 		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-			GAMESTATE:SetCurrentSteps(player, matchedSteps)
+			local playerSteps = matchedSteps
+			if ITGOnline and ITGOnline.ResolveLocalGameplayStepsForSelectedSong then
+				playerSteps = ITGOnline:ResolveLocalGameplayStepsForSelectedSong(
+					songInfo,
+					matchedSteps,
+					"legacy_apply_song_selection",
+					player
+				)
+			end
+			if playerSteps then GAMESTATE:SetCurrentSteps(player, playerSteps) end
 		end
 	end)
 	if not applyOk then
@@ -4359,6 +4368,7 @@ CreateOnlineHandler = function()
 						.. " socket=" .. tostring(self.socket ~= nil)
 						.. " busy=" .. tostring(self.roomInvitationAnswerBusy == true)
 						.. " invitationId=" .. tostring(params and params.invitation_id or "nil")
+						.. " localPlayer=" .. tostring(params and params.localPlayer or "P1")
 						.. " accept=" .. tostring(params and params.accept == true))
 	        if self.connected and self.socket ~= nil and ITGOnline and params and params.invitation_id then
 						if self.roomInvitationAnswerBusy then
@@ -4366,12 +4376,18 @@ CreateOnlineHandler = function()
 							return
 						end
 						local invitationToken = begin_actor_operation(self, "room_invitation_answer", "roomInvitationAnswerBusy", "roomInvitationAnswer")
+						local invitationPlayer = tostring(params.localPlayer or "P1") == "P2"
+							and PLAYER_2 or PLAYER_1
 						if params.accept then
-							if not ITGOnline.AcceptInvitation then
+							if not ITGOnline.AcceptInvitationForLocalPlayer and not ITGOnline.AcceptInvitation then
 								cancel_actor_operation(self, "room_invitation_answer", invitationToken, "accept_api_unavailable")
 								return
 							end
-							ITGOnline:AcceptInvitation(params.invitation_id, function(ok, decoded, response)
+							local acceptInvitation = ITGOnline.AcceptInvitationForLocalPlayer
+								or function(client, _, invitationId, callback)
+									client:AcceptInvitation(invitationId, callback)
+								end
+							acceptInvitation(ITGOnline, invitationPlayer, params.invitation_id, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "room_invitation_answer", invitationToken) then
 									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation busy_preserved=true")
 									return
@@ -4396,11 +4412,15 @@ CreateOnlineHandler = function()
 								})
 							end)
 						else
-							if not ITGOnline.DeclineInvitation then
+							if not ITGOnline.DeclineInvitationForLocalPlayer and not ITGOnline.DeclineInvitation then
 								cancel_actor_operation(self, "room_invitation_answer", invitationToken, "decline_api_unavailable")
 								return
 							end
-							ITGOnline:DeclineInvitation(params.invitation_id, function(ok, decoded, response)
+							local declineInvitation = ITGOnline.DeclineInvitationForLocalPlayer
+								or function(client, _, invitationId, callback)
+									client:DeclineInvitation(invitationId, callback)
+								end
+							declineInvitation(ITGOnline, invitationPlayer, params.invitation_id, function(ok, decoded, response)
 								if not actor_operation_is_current(self, "room_invitation_answer", invitationToken) then
 									online_flow_trace("answer_room_invitation_callback_ignored reason=stale_operation busy_preserved=true")
 									return

@@ -93,6 +93,7 @@ local sensitiveLog = protocol.safe_log_text(
 	'https://online.example/device?poll_token=query-secret#fragment '
 		.. 'Authorization: Bearer bearer-secret access_token=access-secret refresh-token=refresh-secret '
 		.. 'pollToken=poll-secret password=pass-secret email=player@example.test '
+		.. 'local_party_id=party-secret '
 		.. 'json={"apiKey":"json-secret","device_code":"device-secret"} '
 		.. 'path=/Users/player/Library/Application Support/ITGmania/token.ini '
 		.. 'windows=C:\\Users\\player\\token.ini',
@@ -100,7 +101,7 @@ local sensitiveLog = protocol.safe_log_text(
 )
 for _, secret in ipairs({
 	"query-secret", "fragment", "bearer-secret", "access-secret", "refresh-secret",
-	"poll-secret", "pass-secret", "player@example.test", "json-secret", "device-secret", "player/Library",
+	"poll-secret", "pass-secret", "player@example.test", "party-secret", "json-secret", "device-secret", "player/Library",
 }) do
 	assert(not sensitiveLog:find(secret, 1, true), "sensitive log value leaked: " .. secret)
 end

@@ -582,9 +582,24 @@ Branch.AllowScreenSelectOnlineMode = function()
 end
 
 Branch.AfterSelectOnlineMode = function()
+	local styleName = tostring(SafeCurrentStyleName() or ""):lower()
 	StyleFlowTrace("AfterSelectOnlineMode enabled=" .. tostring(SL and SL.Global and SL.Global.ITGOnline and SL.Global.ITGOnline.Enabled)
-		.. " style=" .. tostring(SafeCurrentStyleName()))
+		.. " style=" .. tostring(styleName))
 	if SL and SL.Global and SL.Global.ITGOnline and SL.Global.ITGOnline.Enabled then
+		local supported = styleName ~= "couple" and styleName ~= "routine"
+		local unsupportedReason = "shared_score_style_not_supported"
+		if ITGOnlineLocalParty and ITGOnlineLocalParty.online_mode_supported then
+			supported, unsupportedReason = ITGOnlineLocalParty.online_mode_supported(
+				styleName == "couple",
+				styleName == "routine"
+			)
+		end
+		if not supported then
+			SL.Global.ITGOnline.Enabled = false
+			StyleFlowTrace("AfterSelectOnlineMode online_rejected style=" .. tostring(styleName)
+				.. " reason=" .. tostring(unsupportedReason))
+			return "ScreenProfileLoad"
+		end
 		return "ScreenITGOnlineLogin"
 	end
 
