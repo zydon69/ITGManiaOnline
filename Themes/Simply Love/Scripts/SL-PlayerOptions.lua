@@ -494,6 +494,41 @@ end
 local Overrides = {
 
 	-------------------------------------------------------------------------
+	GameplayPresets = {
+		ApplyOnProfileLoad = false,
+		Choices = {
+			"Preset 1", "Preset 2", "Preset 3",
+			"Preset 4", "Preset 5", "Preset 6",
+		},
+		ExportOnChange = true,
+		LayoutType = "ShowOneInRow",
+		LoadSelections = function(self, list, player)
+			local selected = SL and SL.GameplayPresets and SL.GameplayPresets:GetSelected(player) or 1
+			list[Clamp(selected, 1, #self.Choices)] = true
+			return list
+		end,
+		SaveSelections = function(self, list, player)
+			if not (SL and SL.GameplayPresets) then return end
+			local selected = FindSelectedIndex(list, #self.Choices)
+			if not selected then return end
+
+			local current = SL.GameplayPresets:GetSelected(player)
+			if selected == current then return end
+
+			local screen = SCREENMAN and SCREENMAN:GetTopScreen() or nil
+			local presetRow = screen and screen.GetCurrentRowIndex
+				and screen:GetCurrentRowIndex(player) or -1
+			if screen and screen.ExportOptionsForPlayer then
+				screen:ExportOptionsForPlayer(player, presetRow)
+			end
+
+			if SL.GameplayPresets:Select(player, selected)
+			and screen and screen.ImportOptionsForPlayer then
+				screen:ImportOptionsForPlayer(player, presetRow)
+			end
+		end,
+	},
+	-------------------------------------------------------------------------
 	SpeedModType = {
 		Values = function()
 			-- if ThemePrefs.Get("EnableTournamentMode") and ThemePrefs.Get("EnforceNoCmod") then

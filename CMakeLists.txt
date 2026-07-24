@@ -29,6 +29,11 @@ if(BUILD_TESTING)
       COMMAND ${ITGMANIA_LUA_EXECUTABLE}
               ${CMAKE_SOURCE_DIR}/Tests/profile_io_cache_spec.lua
               ${CMAKE_SOURCE_DIR})
+    add_test(
+      NAME gameplay_presets_behavior
+      COMMAND ${ITGMANIA_LUA_EXECUTABLE}
+              ${CMAKE_SOURCE_DIR}/Tests/gameplay_presets_spec.lua
+              ${CMAKE_SOURCE_DIR})
   endif()
   add_test(
     NAME audio_refactor_source_invariants

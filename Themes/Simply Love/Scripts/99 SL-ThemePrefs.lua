@@ -15,8 +15,12 @@ if type(ThemePrefs) ~= "table" or type(ThemePrefs.Get) ~= "function" then
 end
 
 SL_CustomPrefs.Get = function()
-	 -- emojis are our lingua franca for the 21st century
-	local visualStyleChoices = { "❤", "↖", "🐻", "🦆", "😺", "🎃", "🌈", "⭐", "🤔", "🌀" }
+	-- Keep the icon for quick visual recognition while also exposing the style's
+	-- name.  The saved values remain unchanged; these strings are display-only.
+	local visualStyleChoices = {
+		"❤ Hearts", "↖ Arrows", "🐻 Bears", "🦆 Ducks", "😺 Cats",
+		"🎃 Spooky", "🌈 Gay", "⭐ Stars", "🤔 Thonk", "🌀 Technique"
+	}
 	local visualStyleValues  = { "Hearts", "Arrows", "Bears", "Ducks", "Cats", "Spooky", "Gay", "Stars", "Thonk", "Technique" }
 
 	local year = Year()
@@ -25,7 +29,7 @@ SL_CustomPrefs.Get = function()
 	local today = year * 10000 + month * 100 + day
 
 	if today >= 20260629 then
-		visualStyleChoices[#visualStyleChoices+1] = "🖌"
+		visualStyleChoices[#visualStyleChoices+1] = "🖌 SRPG10"
 		visualStyleValues[#visualStyleValues+1] = "SRPG10"
 	else
 		local prefs = {}
@@ -35,7 +39,7 @@ SL_CustomPrefs.Get = function()
 		local theme = PREFSMAN:GetPreference("Theme")
 		local lastActiveEvent = nil
 		if prefs[theme] and prefs[theme].LastActiveEvent == "SRPG10" then
-			visualStyleChoices[#visualStyleChoices+1] = "🖌"
+			visualStyleChoices[#visualStyleChoices+1] = "🖌 SRPG10"
 			visualStyleValues[#visualStyleValues+1] = "SRPG10"
 		end
 	end

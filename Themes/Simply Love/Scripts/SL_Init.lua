@@ -109,6 +109,7 @@ local PlayerDefaults = {
 				Stats = {}
 			}
 			self.PlayerOptionsString = nil
+			self.GameplayPresets = nil
 			self.ITLData = {
 				["pathMap"] = {},
 				["hashMap"] = {},
@@ -198,6 +199,7 @@ SL = {
 	P1 = setmetatable( {}, PlayerDefaults),
 	P2 = setmetatable( {}, PlayerDefaults),
 	Global = setmetatable( {}, GlobalDefaults),
+	GameplayPresets = SL_GameplayPresets or {},
 
 	-- Colors that Simply Love's background can be
 	-- These colors are used for text on dark backgrounds and backgrounds containing dark text:

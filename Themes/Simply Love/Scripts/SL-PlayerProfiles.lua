@@ -17,6 +17,7 @@ local permitted_profile_settings = {
 	SpeedMod         = "number",
 	Mini             = "string",
 	NoteSkin         = "string",
+	NoteSkinVariant  = "string",
 	JudgmentGraphic  = "string",
 	ComboFont        = "string",
 	HoldJudgment     = "string",
@@ -96,6 +97,18 @@ local permitted_profile_settings = {
 
 	PlayerOptionsString = "string",
 }
+
+local GAMEPLAY_PRESET_COUNT = 6
+local GAMEPLAY_PRESET_VERSION = 1
+
+-- Authentication/session preferences remain profile-wide.  Everything else
+-- in this allowlist represents gameplay state and belongs to each preset.
+local gameplay_preset_settings = {}
+for key, valueType in pairs(permitted_profile_settings) do
+	if key ~= "RememberOnlineToken" then
+		gameplay_preset_settings[key] = valueType
+	end
+end
 
 -- -----------------------------------------------------------------------
 
@@ -243,6 +256,13 @@ local function sanitize_profile_string(key, value)
 		value = value:sub(1, 4096)
 	end
 	if key == "PlayerOptionsString" then return value end
+	if key == "NoteSkinVariant" then
+		if not (NOTESKIN and type(NOTESKIN.DoesNoteSkinExist) == "function") then return nil end
+		local ok, exists = safe_call("NOTESKIN.DoesNoteSkinExist " .. value, function()
+			return NOTESKIN:DoesNoteSkinExist(value)
+		end)
+		return ok and exists == true and value or nil
+	end
 
 	local row = option_row_for_key(key)
 	if not row then return nil end
@@ -330,19 +350,25 @@ local function judgment_flash_trace(message)
 	end
 end
 
+local function migrate_deprecated_gameplay_settings(settings)
+	if type(settings) ~= "table" then return settings end
+	if settings.ColumnFlashOnMiss ~= nil then
+		judgment_flash_trace(("profile_migration_begin pn=%s ColumnFlashOnMiss=%s FlashMissBefore=%s")
+			:format("snapshot", tostring(settings.ColumnFlashOnMiss), tostring(settings.FlashMiss)))
+	end
+	if settings.ColumnFlashOnMiss == true and settings.FlashMiss ~= true then
+		settings.FlashMiss = true
+	end
+	settings.ColumnFlashOnMiss = nil
+	return settings
+end
+
 local function migrate_deprecated_profile_modifiers(pn)
 	local mods = pn and SL and SL[pn] and SL[pn].ActiveModifiers or nil
 	if type(mods) ~= "table" then return end
-
-	if mods.ColumnFlashOnMiss ~= nil then
-		judgment_flash_trace(("profile_migration_begin pn=%s ColumnFlashOnMiss=%s FlashMissBefore=%s")
-			:format(tostring(pn), tostring(mods.ColumnFlashOnMiss), tostring(mods.FlashMiss)))
-	end
-	if mods.ColumnFlashOnMiss == true and mods.FlashMiss ~= true then
-		mods.FlashMiss = true
-	end
-	mods.ColumnFlashOnMiss = nil
-	if mods.FlashMiss == true then
+	local hadDeprecatedSetting = mods.ColumnFlashOnMiss ~= nil
+	migrate_deprecated_gameplay_settings(mods)
+	if hadDeprecatedSetting and mods.FlashMiss == true then
 		judgment_flash_trace(("profile_migration_end pn=%s FlashMiss=%s")
 			:format(tostring(pn), tostring(mods.FlashMiss)))
 	end
@@ -373,6 +399,300 @@ local function restore_player_options_string(player, pn, value)
 	return okSet == true
 end
 
+local function copy_value(value)
+	if type(value) ~= "table" then return value end
+	local copied = {}
+	for key, nested in pairs(value) do
+		copied[key] = copy_value(nested)
+	end
+	return copied
+end
+
+local function copy_snapshot(snapshot)
+	local copied = {}
+	for key, value in pairs(type(snapshot) == "table" and snapshot or {}) do
+		copied[key] = copy_value(value)
+	end
+	return copied
+end
+
+local function default_gameplay_preset_name(index)
+	return ("Preset %d"):format(index)
+end
+
+local function normalize_gameplay_preset_index(index)
+	index = math.floor(tonumber(index) or 1)
+	return clamp_number(index, 1, GAMEPLAY_PRESET_COUNT, 1)
+end
+
+local function normalize_gameplay_preset_name(name, index)
+	name = tostring(name or ""):gsub("[\r\n]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if type(string.utf8len) == "function" and type(string.utf8sub) == "function" then
+		local ok, length = pcall(string.utf8len, name)
+		if ok and length > 32 then
+			local truncated, value = pcall(string.utf8sub, name, 1, 32)
+			if truncated then name = value end
+		end
+	elseif #name > 32 then
+		name = name:sub(1, 32)
+	end
+	if name == "" then return default_gameplay_preset_name(index) end
+	return name
+end
+
+local function gameplay_preset_metadata_section(theme_name)
+	return theme_name .. " Gameplay Presets"
+end
+
+local function gameplay_preset_section(theme_name, index)
+	return ("%s Gameplay Preset %d"):format(theme_name, index)
+end
+
+local function sanitize_settings(source, allowed_settings)
+	local output = {}
+	for key, value in pairs(type(source) == "table" and source or {}) do
+		if allowed_settings[key] then
+			local sanitized = sanitize_profile_value(key, value)
+			if sanitized ~= nil then output[key] = copy_value(sanitized) end
+		end
+	end
+	if output.ShowHardEXScore then output.ShowExScore = false end
+	return output
+end
+
+local function current_player_options_string(player, pn)
+	local playerState = safe_player_state(player)
+	local optionsString = safe_method(
+		"PlayerState.GetPlayerOptionsString",
+		playerState,
+		"GetPlayerOptionsString",
+		"ModsLevel_Preferred"
+	)
+	if type(optionsString) == "string" and optionsString ~= "" then
+		if pn and SL and SL[pn] then SL[pn].PlayerOptionsString = optionsString end
+		return optionsString
+	end
+	local cached = pn and SL and SL[pn] and SL[pn].PlayerOptionsString or nil
+	return type(cached) == "string" and cached or nil
+end
+
+local function capture_gameplay_preset_snapshot(player, pn)
+	local modifiers = pn and SL and SL[pn] and SL[pn].ActiveModifiers or {}
+	local snapshot = sanitize_settings(modifiers, gameplay_preset_settings)
+	local optionsString = current_player_options_string(player, pn)
+	if optionsString then
+		snapshot.PlayerOptionsString = sanitize_profile_value("PlayerOptionsString", optionsString)
+	end
+	return snapshot
+end
+
+local function new_gameplay_preset_state(seed)
+	local state = {
+		Version = GAMEPLAY_PRESET_VERSION,
+		Selected = 1,
+		Names = {},
+		Slots = {},
+	}
+	for index=1, GAMEPLAY_PRESET_COUNT do
+		state.Names[index] = default_gameplay_preset_name(index)
+		state.Slots[index] = migrate_deprecated_gameplay_settings(copy_snapshot(seed))
+	end
+	return state
+end
+
+local function ensure_gameplay_preset_state(player, pn)
+	if not (pn and SL and SL[pn]) then return nil end
+	local state = SL[pn].GameplayPresets
+	if type(state) ~= "table" or type(state.Names) ~= "table" or type(state.Slots) ~= "table" then
+		state = new_gameplay_preset_state(capture_gameplay_preset_snapshot(player, pn))
+		SL[pn].GameplayPresets = state
+	end
+	state.Selected = normalize_gameplay_preset_index(state.Selected)
+	for index=1, GAMEPLAY_PRESET_COUNT do
+		state.Names[index] = normalize_gameplay_preset_name(state.Names[index], index)
+		if type(state.Slots[index]) ~= "table" then
+			state.Slots[index] = capture_gameplay_preset_snapshot(player, pn)
+		end
+		migrate_deprecated_gameplay_settings(state.Slots[index])
+	end
+	return state
+end
+
+local function replace_active_gameplay_modifiers(pn, snapshot)
+	local modifiers = pn and SL and SL[pn] and SL[pn].ActiveModifiers or nil
+	if type(modifiers) ~= "table" then return false end
+	for key in pairs(gameplay_preset_settings) do
+		if key ~= "PlayerOptionsString" then
+			modifiers[key] = copy_value(snapshot[key])
+		end
+	end
+	return true
+end
+
+local function apply_gameplay_preset_snapshot(player, pn, snapshot, apply_theme_mods)
+	if type(snapshot) ~= "table" or not replace_active_gameplay_modifiers(pn, snapshot) then
+		return false
+	end
+	if type(snapshot.PlayerOptionsString) == "string" then
+		restore_player_options_string(player, pn, snapshot.PlayerOptionsString)
+	end
+	migrate_deprecated_profile_modifiers(pn)
+	apply_hard_ex_exclusivity(pn)
+	if apply_theme_mods and type(ApplyMods) == "function" then
+		safe_call("ApplyMods gameplay preset", function() ApplyMods(player) end)
+	end
+	return true
+end
+
+local function load_gameplay_preset_state(contents, theme_name, player, pn)
+	local seed = capture_gameplay_preset_snapshot(player, pn)
+	local state = new_gameplay_preset_state(seed)
+	local metadata = type(contents[gameplay_preset_metadata_section(theme_name)]) == "table"
+		and contents[gameplay_preset_metadata_section(theme_name)] or nil
+
+	if metadata then
+		state.Version = GAMEPLAY_PRESET_VERSION
+		state.Selected = normalize_gameplay_preset_index(metadata.SelectedPreset)
+		for index=1, GAMEPLAY_PRESET_COUNT do
+			state.Names[index] = normalize_gameplay_preset_name(metadata["Preset" .. index .. "Name"], index)
+			local stored = contents[gameplay_preset_section(theme_name, index)]
+			if type(stored) == "table" then
+				local snapshot = copy_snapshot(seed)
+				for key, value in pairs(sanitize_settings(stored, gameplay_preset_settings)) do
+					snapshot[key] = copy_value(value)
+				end
+				state.Slots[index] = migrate_deprecated_gameplay_settings(snapshot)
+			end
+		end
+	end
+
+	SL[pn].GameplayPresets = state
+	apply_gameplay_preset_snapshot(player, pn, state.Slots[state.Selected], false)
+	return state
+end
+
+-- Theme scripts are loaded alphabetically, so this file is evaluated before
+-- SL_Init.lua creates SL.  Keep the service in a dedicated bootstrap global;
+-- SL_Init.lua attaches the same table to SL.GameplayPresets.
+SL_GameplayPresets = SL_GameplayPresets or {}
+local GameplayPresets = SL_GameplayPresets
+if SL then SL.GameplayPresets = GameplayPresets end
+GameplayPresets.Count = GAMEPLAY_PRESET_COUNT
+
+function GameplayPresets:GetSelected(player)
+	local pn = safe_enum_short(player, nil)
+	local state = ensure_gameplay_preset_state(player, pn)
+	return state and state.Selected or 1
+end
+
+function GameplayPresets:GetName(player, index)
+	local pn = safe_enum_short(player, nil)
+	local state = ensure_gameplay_preset_state(player, pn)
+	index = normalize_gameplay_preset_index(index)
+	return state and state.Names[index] or default_gameplay_preset_name(index)
+end
+
+function GameplayPresets:Capture(player)
+	local pn = safe_enum_short(player, nil)
+	local state = ensure_gameplay_preset_state(player, pn)
+	if not state then return false end
+	state.Slots[state.Selected] = capture_gameplay_preset_snapshot(player, pn)
+	return true
+end
+
+function GameplayPresets:Select(player, index)
+	local pn = safe_enum_short(player, nil)
+	local state = ensure_gameplay_preset_state(player, pn)
+	if not state then return false end
+	index = normalize_gameplay_preset_index(index)
+	if index == state.Selected then return true end
+
+	local previous = state.Selected
+	self:Capture(player)
+	state.Selected = index
+	if not apply_gameplay_preset_snapshot(player, pn, state.Slots[index], true) then
+		state.Selected = previous
+		return false
+	end
+	if MESSAGEMAN and type(MESSAGEMAN.Broadcast) == "function" then
+		MESSAGEMAN:Broadcast("GameplayPresetChanged", {
+			Player = player,
+			Index = index,
+			Name = state.Names[index],
+		})
+	end
+	return true
+end
+
+function GameplayPresets:Rename(player, index, name)
+	local pn = safe_enum_short(player, nil)
+	local state = ensure_gameplay_preset_state(player, pn)
+	if not state then return false end
+	index = normalize_gameplay_preset_index(index)
+	local normalized = normalize_gameplay_preset_name(name, index)
+	if tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "") == "" then return false end
+	state.Names[index] = normalized
+	if MESSAGEMAN and type(MESSAGEMAN.Broadcast) == "function" then
+		MESSAGEMAN:Broadcast("GameplayPresetRenamed", {
+			Player = player,
+			Index = index,
+			Name = normalized,
+		})
+	end
+	return true
+end
+
+function GameplayPresets:Save(player)
+	if safe_method(
+		"PROFILEMAN.IsPersistentProfile",
+		PROFILEMAN,
+		"IsPersistentProfile",
+		player
+	) ~= true then
+		return false
+	end
+	local profile = safe_method("PROFILEMAN.GetProfile", PROFILEMAN, "GetProfile", player)
+	local dir = safe_profile_dir(player)
+	if not (profile and dir ~= "" and type(SaveProfileCustom) == "function") then
+		return false
+	end
+	local ok, saved = safe_call("SaveProfileCustom gameplay presets", function()
+		return SaveProfileCustom(profile, dir)
+	end)
+	return ok and saved == true
+end
+
+local function gameplay_preset_string(name, fallback)
+	if not (THEME and type(THEME.GetString) == "function") then return fallback end
+	local ok, value = safe_call("THEME.GetString OptionNames." .. name, function()
+		return THEME:GetString("OptionNames", name)
+	end)
+	return ok and value ~= name and tostring(value) or fallback
+end
+
+function GameplayPresets:OpenRenameScreen(player)
+	local index = self:GetSelected(player)
+	if not (SCREENMAN and type(SCREENMAN.AddNewScreenToTop) == "function") then return false end
+	SCREENMAN:AddNewScreenToTop("ScreenTextEntry")
+	local screen = SCREENMAN:GetTopScreen()
+	if not (screen and type(screen.Load) == "function") then return false end
+	screen:Load({
+		Question = gameplay_preset_string("RenameGameplayPresetPrompt", "Enter a name for this preset."),
+		InitialAnswer = self:GetName(player, index),
+		MaxInputLength = 32,
+		Validate = function(answer)
+			if tostring(answer or ""):gsub("^%s+", ""):gsub("%s+$", "") == "" then
+				return false, gameplay_preset_string("GameplayPresetNameBlank", "Preset name cannot be blank.")
+			end
+			return true, ""
+		end,
+		OnOK = function(answer)
+			if self:Rename(player, index, answer) then self:Save(player) end
+		end,
+	})
+	return true
+end
+
 
 -- Function called when a [GUEST] joins during SSM, either by late joining or via the fast
 -- profile switcher. It does two things:
@@ -394,6 +714,7 @@ LoadGuest = function(player)
 	SL[pn].Stages = stages
 	migrate_deprecated_profile_modifiers(pn)
 	apply_hard_ex_exclusivity(pn)
+	SL[pn].GameplayPresets = new_gameplay_preset_state(capture_gameplay_preset_snapshot(player, pn))
 	return true
 end
 
@@ -402,7 +723,8 @@ end
 LoadProfileCustom = function(profile, dir)
 	local theme_name = theme_display_name()
 	local path =  tostring(dir or "") .. user_prefs_filename()
-	local player, pn, filecontents
+	local player, pn
+	local filecontents = {}
 
 	-- we've been passed a profile object as the variable "profile"
 	-- see if it matches against anything returned by PROFILEMAN:GetProfile(player)
@@ -439,10 +761,11 @@ LoadProfileCustom = function(profile, dir)
 	end
 
 	if pn and safe_file_exists(path) then
-		filecontents = safe_ini_read(path)[theme_name]
+		filecontents = safe_ini_read(path)
+		local legacy = filecontents[theme_name]
 
 		-- for each key/value pair read in from the player's profile
-		for k,v in pairs(type(filecontents) == "table" and filecontents or {}) do
+		for k,v in pairs(type(legacy) == "table" and legacy or {}) do
 			-- ensure that the key has a corresponding key in permitted_profile_settings
 			local sanitized = sanitize_profile_value(k, v)
 			if sanitized ~= nil then
@@ -455,6 +778,7 @@ LoadProfileCustom = function(profile, dir)
 		end
 	end
 
+	if pn then load_gameplay_preset_state(filecontents, theme_name, player, pn) end
 	apply_hard_ex_exclusivity(pn)
 	return true
 end
@@ -471,6 +795,7 @@ SaveProfileCustom = function(profile, dir)
 		if profile == safe_method("PROFILEMAN.GetProfile", PROFILEMAN, "GetProfile", player) then
 			matched = true
 			local pn = safe_enum_short(player, nil)
+			if SL.GameplayPresets then SL.GameplayPresets:Capture(player) end
 			local output = {}
 			local modifiers = pn and SL and SL[pn] and SL[pn].ActiveModifiers or {}
 			for k,v in pairs(type(modifiers) == "table" and modifiers or {}) do
@@ -491,7 +816,25 @@ SaveProfileCustom = function(profile, dir)
 				output.PlayerOptionsString = sanitize_profile_value("PlayerOptionsString", playerOptionsString)
 			end
 
-			ok = safe_ini_write(path, {[theme_name]=output}) and ok
+			local sections = {[theme_name]=output}
+			local state = ensure_gameplay_preset_state(player, pn)
+			if state then
+				local metadata = {
+					Version = GAMEPLAY_PRESET_VERSION,
+					SelectedPreset = state.Selected,
+				}
+				for index=1, GAMEPLAY_PRESET_COUNT do
+					metadata["Preset" .. index .. "Name"] =
+						normalize_gameplay_preset_name(state.Names[index], index)
+					sections[gameplay_preset_section(theme_name, index)] =
+						migrate_deprecated_gameplay_settings(
+							sanitize_settings(state.Slots[index], gameplay_preset_settings)
+						)
+				end
+				sections[gameplay_preset_metadata_section(theme_name)] = metadata
+			end
+
+			ok = safe_ini_write(path, sections) and ok
 
 			if type(WriteGrooveStatsIni) == "function" then
 				local grooveOk, grooveResult = safe_call("WriteGrooveStatsIni", function() return WriteGrooveStatsIni(player) end)

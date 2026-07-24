@@ -196,10 +196,43 @@ end
 
 -- SpeedModBMTs is a table that will contain the BitmapText actors within the SpeedMod OptionRow for available players
 local SpeedModBMTs = {}
+-- PresetBMTs holds the per-player text actors so renamed presets can differ
+-- between P1 and P2 even though the engine shares one OptionRow definition.
+local PresetBMTs = {}
 -- VariantBMTs is a table that will contain the BitmapText actors within the NoteSkinVariant OptionRow for available players
 local VariantBMTs = {}
 local refreshInProgress = false
 local refreshVariantsInProgress = false
+
+local RefreshGameplayPresetPreviews = function(player, pn)
+	local mods = SL and SL[pn] and SL[pn].ActiveModifiers or nil
+	if not mods then return end
+
+	local function display_asset_name(value)
+		if type(StripSpriteHints) == "function" then
+			return StripSpriteHints(value or "")
+		end
+		return value or ""
+	end
+
+	local previews = {
+		{ Name="NoteSkin", Value=mods.NoteSkin },
+		{ Name="NoteSkinVariant", Value=mods.NoteSkinVariant or mods.NoteSkin },
+		{ Name="JudgmentGraphic", Value=display_asset_name(mods.JudgmentGraphic) },
+		{ Name="ComboFont", Value=mods.ComboFont },
+		{ Name="HoldJudgment", Value=display_asset_name(mods.HoldJudgment) },
+	}
+	for _, preview in ipairs(previews) do
+		if preview.Value and preview.Value ~= "" then
+			MESSAGEMAN:Broadcast("RefreshActorProxy", {
+				Player=player,
+				Name=preview.Name,
+				Value=preview.Value,
+			})
+		end
+	end
+end
+
 local t = Def.ActorFrame{
 	InitCommand=function(self) self:xy(_screen.cx,0) end,
 	OnCommand=function(self)
@@ -215,9 +248,15 @@ local t = Def.ActorFrame{
 		for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 			local pn = ToEnumShortString(player)
 
+			local PresetRowIndex = FindOptionRowIndex(ScreenOptions,"GameplayPresets")
+			local SpeedModTypeRowIndex = FindOptionRowIndex(ScreenOptions,"SpeedModType")
 			local SpeedModRowIndex = FindOptionRowIndex(ScreenOptions,"SpeedMod")
 			local NoteSkinRowIndex = FindOptionRowIndex(ScreenOptions,"NoteSkin")
 			local VariantRowIndex = FindOptionRowIndex(ScreenOptions,"NoteSkinVariant")
+			if PresetRowIndex then
+				PresetBMTs[pn] = ScreenOptions:GetOptionRow(PresetRowIndex):GetChild(""):GetChild("Item")[ PlayerNumber:Reverse()[player]+1 ]
+				self:playcommand("Set"..pn.."Preset")
+			end
 			if SpeedModRowIndex then
 				-- The BitmapText actors for P1 and P2 speedmod are both named "Item", so we need to provide a 1 or 2 to index
 				SpeedModBMTs[pn] = ScreenOptions:GetOptionRow(SpeedModRowIndex):GetChild(""):GetChild("Item")[ PlayerNumber:Reverse()[player]+1 ]
@@ -238,6 +277,44 @@ local t = Def.ActorFrame{
 				VariantBMTs[pn] = ScreenOptions:GetOptionRow(VariantRowIndex):GetChild(""):GetChild("Item")[ PlayerNumber:Reverse()[player]+1 ]
 				self:playcommand("Set"..pn.."Variant")
 			end
+			if ScreenOptions:GetName() == "ScreenPlayerOptions" and SpeedModTypeRowIndex then
+				ScreenOptions:SetOptionRowIndex(player, SpeedModTypeRowIndex)
+			end
+		end
+	end,
+	GameplayPresetRenameRequestedMessageCommand=function(self, params)
+		local player = params and params.Player or nil
+		if player and SL and SL.GameplayPresets then
+			SL.GameplayPresets:OpenRenameScreen(player)
+		end
+	end,
+	GameplayPresetChangedMessageCommand=function(self)
+		self:queuecommand("RefreshGameplayPresetUI")
+	end,
+	GameplayPresetRenamedMessageCommand=function(self, params)
+		local player = params and params.Player or nil
+		local pn = player and ToEnumShortString(player) or nil
+		if pn then self:playcommand("Set"..pn.."Preset") end
+	end,
+	GameplayPresetOptionsExportedMessageCommand=function(self)
+		if not (SL and SL.GameplayPresets and type(SL.GameplayPresets.Save) == "function") then
+			return
+		end
+		for player in ivalues(GAMESTATE:GetHumanPlayers()) do
+			local ok, error_message = pcall(function() SL.GameplayPresets:Save(player) end)
+			if not ok then
+				Trace(("Gameplay preset save failed after options export for %s: %s")
+					:format(tostring(player), tostring(error_message)))
+			end
+		end
+	end,
+	RefreshGameplayPresetUICommand=function(self)
+		for player in ivalues(GAMESTATE:GetHumanPlayers()) do
+			local pn = ToEnumShortString(player)
+			self:playcommand("Set"..pn.."Preset")
+			self:playcommand("Set"..pn)
+			self:playcommand("Set"..pn.."Variant")
+			RefreshGameplayPresetPreviews(player, pn)
 		end
 	end,
 	MusicRateChangedMessageCommand=function(self)
@@ -323,6 +400,13 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 
 	t[#t+1] = Def.Actor{
 
+		["Set" .. pn .. "PresetCommand"]=function(self)
+			if PresetBMTs[pn] and SL and SL.GameplayPresets then
+				local selected = SL.GameplayPresets:GetSelected(player)
+				PresetBMTs[pn]:settext(SL.GameplayPresets:GetName(player, selected))
+			end
+		end,
+
 		-- this is called from ./Scripts/SL-PlayerOptions.lua when the player changes their SpeedModType (X, M, C)
 		["SpeedModType" .. pn .. "SetMessageCommand"]=function(self,params)
 			if params.Player ~= player then return end
@@ -382,10 +466,20 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 		end,
 		["Set" .. pn .. "VariantCommand"]=function(self)
 			local current_variant = SL[pn].ActiveModifiers.NoteSkinVariant or SL[pn].ActiveModifiers.NoteSkin or ""
-			-- Get all text after first _ to get the variant name
-			current_variant = current_variant:match("_(.*)") or current_variant
+			local base_noteskin = SL[pn].ActiveModifiers.NoteSkin or ""
+			local variant_label = current_variant
+
+			-- Variant identifiers must retain their exact engine value (for example,
+			-- "couples__blue").  Remove the parent name and decorative underscores
+			-- only from the display label, yielding "blue".
+			local parent_prefix = base_noteskin .. "_"
+			if base_noteskin ~= "" and current_variant:sub(1, #parent_prefix) == parent_prefix then
+				variant_label = current_variant:sub(#parent_prefix + 1)
+			end
+			variant_label = variant_label:gsub("^_+", "")
+
 			if VariantBMTs[pn] then
-				VariantBMTs[pn]:settext( current_variant )
+				VariantBMTs[pn]:settext( variant_label )
 			end
 			self:GetParent():playcommand("RefreshVariants")
 		end,

@@ -176,19 +176,22 @@ for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 		if optrow and optrow:GetName() == params.Name then
 
 			local offscreen_actor_name
-			if params.Name=="ComboFont" or params.Name=="MusicRate" then
-				-- the BitmapTexts for ComboFont and MusicRate helper text need to be able to
-				-- display different values per-player, so I prefixed the relevant Actors in
-				--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/ComboFont.lua
-				--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/MusicRate.lua
-				-- with "P1_" or "P2_"
-				offscreen_actor_name = ("%s_%s_%s"):format(pn, params.Name, params.Value)
-			else
-				offscreen_actor_name = ("%s_%s"):format(params.Name, params.Value)
-			end
-			-- attempt to find the offscreen actor added by ./BGAnimations/ScreenPlayerOptions overlay.lua
-			local overlay = SCREENMAN:GetTopScreen():GetChild("Overlay")
-			local offscreen_actor = overlay and overlay:GetChild(offscreen_actor_name)
+				if params.Name=="ComboFont" or params.Name=="MusicRate" then
+					-- the BitmapTexts for ComboFont and MusicRate helper text need to be able to
+					-- display different values per-player, so I prefixed the relevant Actors in
+					--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/ComboFont.lua
+					--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/MusicRate.lua
+					-- with "P1_" or "P2_"
+					offscreen_actor_name = ("%s_%s_%s"):format(pn, params.Name, params.Value)
+				else
+					offscreen_actor_name = ("%s_%s"):format(params.Name, params.Value)
+				end
+				-- attempt to find the offscreen actor added by ./BGAnimations/ScreenPlayerOptions overlay.lua
+				local top_screen = SCREENMAN and SCREENMAN:GetTopScreen()
+				if not (top_screen and type(top_screen.GetChild) == "function") then return end
+				local overlay = top_screen:GetChild("Overlay")
+				if not (overlay and type(overlay.GetChild) == "function") then return end
+				local offscreen_actor = overlay:GetChild(offscreen_actor_name)
 			if not offscreen_actor and params.Name=="JudgmentGraphic" and overlay then
 				offscreen_actor = TryLoadDeferredJudgmentGraphic(overlay, offscreen_actor_name, params.Value)
 			end

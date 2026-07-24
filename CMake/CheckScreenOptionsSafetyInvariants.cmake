@@ -71,6 +71,82 @@ require_contains(
   "if (m_sprDisqualify[p].IsLoaded())"
   "ScreenPlayerOptions must not dereference a missing disqualification actor")
 require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "row->GetRowType() == OptionRow::RowType_Exit"
+  "Player option preset synchronization must not export or import the exit row")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "UpdateDisqualified(rowIndex, pn)"
+  "Player option preset imports must refresh disqualification state")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "row->Reload()"
+  "Player option preset imports must refresh dynamic row availability")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "GameplayPresetRenameRequested"
+  "Start on the gameplay preset row must open rename flow instead of leaving options")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "row->GetRowDef().m_sName == \"GameplayPresets\""
+  "Gameplay preset rename must inspect the option handler name, not the actor name")
+require_not_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "row->GetName() == \"GameplayPresets\""
+  "Gameplay preset rename must not inspect the unrelated actor name")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "ExportOptionsForPlayer(pn, rowIndex)"
+  "Renaming a preset must preserve edits made on the current option page")
+require_contains(
+  "Themes/Simply Love/Scripts/SL-PlayerProfiles.lua"
+  "SL_GameplayPresets = SL_GameplayPresets or {}"
+  "Gameplay presets must tolerate the real theme-script load order")
+require_contains(
+  "Themes/Simply Love/metrics.ini"
+  "local lines = \"GameplayPresets,SpeedModType"
+  "Gameplay presets must remain first while speed type remains the initial editable row")
+require_contains(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
+  "ScreenOptions:SetOptionRowIndex(player, SpeedModTypeRowIndex)"
+  "Player options must initially focus the speed type row")
+require_contains(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
+  "GameplayPresetRenamedMessageCommand=function(self, params)"
+  "Preset rename must have a dedicated label-only refresh path")
+require_contains(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
+  "if pn then self:playcommand(\"Set\"..pn..\"Preset\") end"
+  "Preset rename must refresh only the renamed player's label")
+require_contains(
+  "Themes/Simply Love/Graphics/OptionRow Frame.lua"
+  "type(overlay.GetChild) == \"function\""
+  "Option preview refresh must tolerate a modal or destroyed overlay")
+require_contains(
+  "Themes/Simply Love/Scripts/SL-PlayerProfiles.lua"
+  "function GameplayPresets:Save(player)"
+  "Gameplay presets must expose a targeted persistence path")
+require_contains(
+  "Themes/Simply Love/Scripts/SL-PlayerProfiles.lua"
+  "settings.ColumnFlashOnMiss = nil"
+  "Every gameplay preset slot must remove the deprecated flash setting")
+require_not_contains(
+  "Themes/Simply Love/Scripts/SL-PlayerProfiles.lua"
+  "PROFILEMAN.SaveProfile gameplay preset rename"
+  "Preset rename must not rewrite the entire profile and Stats.xml")
+require_contains(
+  "src/ScreenPlayerOptions.cpp"
+  "Message message(\"GameplayPresetOptionsExported\")"
+  "Accepted player-option exports must trigger targeted preset persistence")
+require_contains(
+  "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
+  "GameplayPresetOptionsExportedMessageCommand=function(self)"
+  "Every player-options page must persist presets after its complete export")
+require_not_contains(
+  "Themes/Simply Love/Scripts/SL-PlayerOptions.lua"
+  "PersistGameplayPreset(pn)"
+  "Individual option-row exports must never trigger disk writes")
+require_contains(
   "src/OptionRowHandler.h"
   "ExportOptionForPreview"
   "Option row handlers must expose an explicitly side-effect-free preview path")

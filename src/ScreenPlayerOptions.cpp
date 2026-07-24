@@ -153,6 +153,45 @@ void ScreenPlayerOptions::ResizeDisqualificationCache() {
   }
 }
 
+void ScreenPlayerOptions::ExportOptionsForPlayer(
+    PlayerNumber pn, int excludedRow) {
+  if (!IsUsablePlayer(pn)) {
+    return;
+  }
+
+  const std::vector<PlayerNumber> players{pn};
+  for (int rowIndex = 0; rowIndex < GetNumRows(); ++rowIndex) {
+    OptionRow* row = GetRow(rowIndex);
+    if (rowIndex == excludedRow || row == nullptr ||
+        row->GetRowType() == OptionRow::RowType_Exit) {
+      continue;
+    }
+    ExportOptions(rowIndex, players);
+  }
+}
+
+void ScreenPlayerOptions::ImportOptionsForPlayer(
+    PlayerNumber pn, int excludedRow) {
+  if (!IsUsablePlayer(pn)) {
+    return;
+  }
+
+  ResizeDisqualificationCache();
+  const std::vector<PlayerNumber> players{pn};
+  for (int rowIndex = 0; rowIndex < GetNumRows(); ++rowIndex) {
+    OptionRow* row = GetRow(rowIndex);
+    if (rowIndex == excludedRow || row == nullptr ||
+        row->GetRowType() == OptionRow::RowType_Exit) {
+      continue;
+    }
+    row->Reload();
+    ImportOptions(rowIndex, players);
+    row->AfterImportOptions(pn);
+    UpdateDisqualified(rowIndex, pn);
+  }
+  RedrawOptions();
+}
+
 bool ScreenPlayerOptions::Input(const InputEventPlus& input) {
   bool bHandled = false;
   PlayerNumber pn = input.pn;
@@ -203,6 +242,25 @@ bool ScreenPlayerOptions::Input(const InputEventPlus& input) {
     bHandled = true;
   }
 
+  if (usablePlayer && input.type == IET_FIRST_PRESS &&
+      input.MenuI == GAME_BUTTON_START) {
+    const int rowIndex = GetCurrentRow(pn);
+    OptionRow* row = GetRow(rowIndex);
+    if (row != nullptr &&
+        row->GetRowDef().m_sName == "GameplayPresets") {
+      // Persist any edits made on this page before the rename dialog saves
+      // the profile.  The preset row itself is excluded to avoid re-entering
+      // its Lua SaveSelections callback.
+      ExportOptionsForPlayer(pn, rowIndex);
+      Message message("GameplayPresetRenameRequested");
+      message.SetParam("Player", pn);
+      if (MESSAGEMAN != nullptr) {
+        MESSAGEMAN->Broadcast(message);
+      }
+      return true;
+    }
+  }
+
   bHandled = ScreenOptionsMaster::Input(input) || bHandled;
 
   // UGLY: Update m_Disqualified whenever Start is pressed
@@ -216,6 +274,7 @@ bool ScreenPlayerOptions::Input(const InputEventPlus& input) {
 }
 
 void ScreenPlayerOptions::HandleScreenMessage(const ScreenMessage SM) {
+  const bool exportedOptions = SM == SM_ExportOptions;
   if (SM == SM_BeginFadingOut &&
       m_bAskOptionsMessage && !m_bAcceptedChoices &&
       !m_Cancel.IsTransitioning())  // user accepts the page of options
@@ -227,6 +286,15 @@ void ScreenPlayerOptions::HandleScreenMessage(const ScreenMessage SM) {
   }
 
   ScreenOptionsMaster::HandleScreenMessage(SM);
+
+  // ScreenOptionsMaster has exported every row before returning from
+  // SM_ExportOptions.  Notify the theme only at this lifecycle boundary so
+  // preset navigation and preview exports never cause disk writes.
+  if (exportedOptions && MESSAGEMAN != nullptr) {
+    Message message("GameplayPresetOptionsExported");
+    message.SetParam("Screen", m_sName);
+    MESSAGEMAN->Broadcast(message);
+  }
 }
 
 void ScreenPlayerOptions::UpdateDisqualified(int row, PlayerNumber pn) {
@@ -300,7 +368,25 @@ class LunaScreenPlayerOptions : public Luna<ScreenPlayerOptions> {
     return 1;
   }
 
-  LunaScreenPlayerOptions() { ADD_METHOD(GetGoToOptions); }
+  static int ExportOptionsForPlayer(T* p, lua_State* L) {
+    const PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true, true);
+    const int excludedRow = lua_isnoneornil(L, 2) ? -1 : IArg(2);
+    p->ExportOptionsForPlayer(pn, excludedRow);
+    COMMON_RETURN_SELF;
+  }
+
+  static int ImportOptionsForPlayer(T* p, lua_State* L) {
+    const PlayerNumber pn = Enum::Check<PlayerNumber>(L, 1, true, true);
+    const int excludedRow = lua_isnoneornil(L, 2) ? -1 : IArg(2);
+    p->ImportOptionsForPlayer(pn, excludedRow);
+    COMMON_RETURN_SELF;
+  }
+
+  LunaScreenPlayerOptions() {
+    ADD_METHOD(GetGoToOptions);
+    ADD_METHOD(ExportOptionsForPlayer);
+    ADD_METHOD(ImportOptionsForPlayer);
+  }
 };
 
 LUA_REGISTER_DERIVED_CLASS(ScreenPlayerOptions, ScreenOptions)

@@ -19,6 +19,8 @@ class ScreenPlayerOptions : public ScreenOptionsMaster {
   bool Input(const InputEventPlus& input) override;
   void HandleScreenMessage(const ScreenMessage SM) override;
   bool GetGoToOptions() const { return m_bGoToOptions; }
+  void ExportOptionsForPlayer(PlayerNumber pn, int excludedRow);
+  void ImportOptionsForPlayer(PlayerNumber pn, int excludedRow);
 
   // Lua
   void PushSelf(lua_State* L) override;
