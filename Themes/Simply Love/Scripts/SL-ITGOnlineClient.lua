@@ -1449,7 +1449,13 @@ local function online_score_failed(player, stats)
 		local healthOk, healthState = safe_call("online_score_failed_health", function()
 			return GAMESTATE:GetPlayerState(player):GetHealthState()
 		end)
-		if healthOk and tostring(healthState) == "HealthState_Dead" then return true end
+		local normalizedHealth = healthOk and tostring(healthState) or ""
+		if normalizedHealth == "HealthState_Dead"
+			or normalizedHealth == "Dead"
+			or normalizedHealth == "0"
+		then
+			return true
+		end
 	end
 	return false
 end
@@ -13377,7 +13383,12 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, com
 			.. " maxScore=" .. tostring(payload.options.max_score or "nil"))
 	end
 
-	if self:IsLocalTwoPlayerSession() and isReady and not companionReadyAlready then
+	local partyPlan = self:LocalPartyPlan()
+	if ITGOnlineLocalParty.should_submit_companion_ready(
+		partyPlan,
+		isReady,
+		companionReadyAlready
+	) then
 		-- P1 must not become ready before the paired P2 request succeeds.  The
 		-- previous fire-and-forget fan-out let the server start with only P1.
 		self:SetCompanionReady(phase, isReady, function(companionOk, companionDecoded, companionResponse)
@@ -13393,7 +13404,11 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, com
 			self:SetReady(phase, isReady, callback, refreshedUnknownPhase, true)
 		end)
 		return
-	elseif self:IsLocalTwoPlayerSession() then
+	elseif ITGOnlineLocalParty.should_fan_out_companion_not_ready(
+		partyPlan,
+		isReady,
+		companionReadyAlready
+	) then
 		self:SetCompanionReady(phase, isReady, function(companionOk, companionDecoded, companionResponse)
 			online_flow_trace("companion_ready_fanout_result phase=" .. tostring(phase)
 				.. " ok=" .. tostring(companionOk == true)
@@ -14935,6 +14950,77 @@ end
 function ITGOnline:MarkPlayFailed(callback)
 	online_flow_trace("mark_play_failed_invoked room=" .. tostring(self.currentRoomId or "nil"))
 	self:MarkPlayTerminal("/play/failed", "failed", callback)
+end
+
+function ITGOnline:MarkLocalPlayerFailedEarly(player, source, callback)
+	local playerKey = local_player_key(player)
+	local route = ITGOnlineLocalParty.failed_player_route(self:LocalPartyPlan(), playerKey)
+	if route == "primary" then
+		return self:MarkPlayFailedEarly(source, callback)
+	end
+	if route ~= "companion" then
+		online_flow_trace("mark_local_player_failed_early_skipped"
+			.. " localPlayer=" .. tostring(playerKey)
+			.. " source=" .. tostring(source or "unknown")
+			.. " reason=unknown_local_player")
+		safe_callback(callback, false, nil, {
+			error_code = "unknown_local_player",
+			errorMessage = "The failed local player does not belong to this online session.",
+		})
+		return false
+	end
+
+	local roundKey = tostring(self:CanonicalGameplayRoundKey(
+		"mark_local_player_failed_early:" .. playerKey
+	) or "")
+	if not self:PlayStateKeyIsValid(roundKey) then
+		online_flow_trace("mark_local_player_failed_early_skipped"
+			.. " localPlayer=" .. tostring(playerKey)
+			.. " source=" .. tostring(source or "unknown")
+			.. " reason=invalid_round_key")
+		safe_callback(callback, false, nil, {
+			error_code = "invalid_round_key",
+			errorMessage = "No active song round.",
+		})
+		return false
+	end
+
+	local state = self:CompanionScoreState(roundKey)
+	if state.finalAccepted == true or self:LocalPlayerHasFinalResult(self.currentRoom, player) then
+		state.finalAccepted = true
+		online_flow_trace("mark_local_player_failed_early_confirmed"
+			.. " localPlayer=" .. tostring(playerKey)
+			.. " source=" .. tostring(source or "unknown")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " reason=final_score_already_accepted")
+		safe_callback(callback, true, nil, nil, {
+			alreadyAccepted = true,
+			localPlayer = playerKey,
+			roundKey = roundKey,
+		})
+		return true
+	end
+
+	online_flow_trace("mark_local_player_failed_early_submit"
+		.. " localPlayer=" .. tostring(playerKey)
+		.. " source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " roundKey=" .. tostring(roundKey))
+	self:SendCompanionScore(true, true, function(ok, decoded, response, meta)
+		online_flow_trace("mark_local_player_failed_early_response"
+			.. " localPlayer=" .. tostring(playerKey)
+			.. " source=" .. tostring(source or "unknown")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " ok=" .. tostring(ok == true)
+			.. " status=" .. tostring(response and response.statusCode or "nil")
+			.. " error=" .. tostring(decoded and decoded.error_code
+				or response and response.errorMessage or "nil"))
+		safe_callback(callback, ok, decoded, response, meta)
+	end)
+
+	-- Submission is asynchronous. ScreenGameplay will only mark the per-player
+	-- guard after a later poll observes the accepted final result.
+	return false
 end
 
 function ITGOnline:MarkPlayFailedEarly(source, callback)

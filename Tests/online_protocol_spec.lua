@@ -399,7 +399,11 @@ lobbyOverlayFile:close()
 assert(lobbyOverlayContent:find("autoStartSingleCandidate = true", 1, true)
 	and packSyncContent:find("options.autoStartSingleCandidate == true and #candidates == 1", 1, true),
 	"browsing downloads must auto-start when the catalog has exactly one candidate")
-assert(lobbyOverlayContent:find('online_lobby_text("LeaveLobby", "Leave lobby")', 1, true),
+assert(lobbyOverlayContent:find(
+	'ITGOnlineLobbyPresentation.text("LeaveLobby", "Leave lobby")',
+	1,
+	true
+),
 	"the lobby exit confirmation must describe leaving the lobby rather than disconnecting")
 assert(lobbyOverlayContent:find("self:zoom(0.5):maxwidth(280)", 1, true),
 	"localized lobby exit labels must be constrained to their buttons")

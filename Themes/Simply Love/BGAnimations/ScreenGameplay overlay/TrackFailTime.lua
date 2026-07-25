@@ -9,12 +9,6 @@ local routineShared = IsRoutine and IsRoutine()
 local sourcePlayer = routineShared and GAMESTATE:GetMasterPlayerNumber() or player
 local pn = ToEnumShortString(sourcePlayer)
 
-local NotifyOnlineFailed = function()
-    if ITGOnline and ITGOnline.MarkPlayFailedEarly then
-        ITGOnline:MarkPlayFailedEarly("health_state_dead")
-    end
-end
-
 local IsDeadHealthState = function(value)
     local state = tostring(value or "")
     return state == "Dead"
@@ -95,12 +89,10 @@ local TotalLengthSongOrCourse = function(player)
 end
 
 local af = Def.Actor{
-	HealthStateChangedMessageCommand=function(self, param)
-		-- Only do something if the player fails
-		if param.PlayerNumber == sourcePlayer and IsDeadHealthState(param.HealthState) then
-			NotifyOnlineFailed()
-
-			local playerState = GAMESTATE:GetPlayerState(sourcePlayer)
+		HealthStateChangedMessageCommand=function(self, param)
+			-- Only do something if the player fails
+			if param.PlayerNumber == sourcePlayer and IsDeadHealthState(param.HealthState) then
+				local playerState = GAMESTATE:GetPlayerState(sourcePlayer)
 			if not playerState then return end
 
 			-- These functions already account for rate mod
@@ -131,7 +123,7 @@ local af = Def.Actor{
 			local storage = SL[pn] and SL[pn].Stages and SL[pn].Stages.Stats[SL.Global.Stages.PlayedThisGame + 1]
 			if not storage then
 				if type(online_logs_enabled) == "function" and online_logs_enabled("score") and Trace then
-					Trace("ROUTINE_UI TrackFailTime skipped missing storage player="
+					Trace("GAMEPLAY_UI TrackFailTime skipped missing storage player="
 						.. tostring(ToEnumShortString(player))
 						.. " source=" .. tostring(pn)
 						.. " routine_shared=" .. tostring(routineShared == true))

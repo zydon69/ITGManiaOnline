@@ -688,16 +688,28 @@ static bool GetITGOnlineShouldHoldGameplayForStart() {
   return shouldHold;
 }
 
-static bool MarkITGOnlineFailedEarly() {
+static bool MarkITGOnlineFailedEarly(PlayerNumber pn) {
   if (LUA == nullptr) {
+    return false;
+  }
+  if (pn < PLAYER_1 || pn >= NUM_PLAYERS) {
+    OnlineTrace(
+        "ITG Online: ignored failed-state notification for invalid player=%d.",
+        static_cast<int>(pn));
     return false;
   }
 
   Lua* L = LUA->Get();
+  const std::string player =
+      pn == PLAYER_2 ? "PLAYER_2" : "PLAYER_1";
+  const std::string expression = ssprintf(
+      "ITGOnline ~= nil and ITGOnline.MarkLocalPlayerFailedEarly ~= nil "
+      "and ITGOnline:MarkLocalPlayerFailedEarly(%s, "
+      "'engine_begin_failed') or false",
+      player.c_str());
   const bool ran = LuaHelpers::RunExpression(
       L,
-      "ITGOnline ~= nil and ITGOnline.MarkPlayFailedEarly ~= nil "
-      "and ITGOnline:MarkPlayFailedEarly('engine_begin_failed') or false",
+      expression,
       "ScreenGameplay::MarkITGOnlineFailedEarly");
 
   const bool marked = ran && lua_toboolean(L, -1);
@@ -1193,7 +1205,7 @@ ScreenGameplay::ScreenGameplay() {
   m_bLoggedStageEndState = false;
   m_bLoggedOnlineEvaluationHold = false;
   m_bLoggedOnlineNotesEndedDuringHold = false;
-  m_bMarkedOnlineFailedEarly = false;
+  ZERO(m_bMarkedOnlineFailedEarly);
   m_bLoggedOnlineLocalFailKeepAlive = false;
   m_bLoggedGameplayChartTiming = false;
   m_bNotesEndedQueued = false;
@@ -3436,10 +3448,10 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
 
         LOG->Trace("Player %d failed", (int)pn);
-        if (GetITGOnlineIsActive() && !m_bMarkedOnlineFailedEarly) {
-          const bool marked = MarkITGOnlineFailedEarly();
+        if (GetITGOnlineIsActive() && !m_bMarkedOnlineFailedEarly[pn]) {
+          const bool marked = MarkITGOnlineFailedEarly(pn);
           if (marked) {
-            m_bMarkedOnlineFailedEarly = true;
+            m_bMarkedOnlineFailedEarly[pn] = true;
           }
           OnlineTrace(
               "ITG Online: individual fail triggered early failed finalization "
@@ -5571,15 +5583,20 @@ void ScreenGameplay::HandleScreenMessage(const ScreenMessage SM) {
     }
   } else if (SM == SM_BeginFailed) {
     if (GetITGOnlineIsActive()) {
-      if (!m_bMarkedOnlineFailedEarly) {
-        const bool confirmed = MarkITGOnlineFailedEarly();
+      FOREACH_EnabledPlayer(pn) {
+        PlayerStageStats* pss = &STATSMAN->m_CurStageStats.m_player[pn];
+        if (!pss->m_bFailed || m_bMarkedOnlineFailedEarly[pn]) {
+          continue;
+        }
+        const bool confirmed = MarkITGOnlineFailedEarly(pn);
         if (confirmed) {
-          m_bMarkedOnlineFailedEarly = true;
+          m_bMarkedOnlineFailedEarly[pn] = true;
         }
         OnlineTrace(
             "ITG Online: player failed; early failed finalization "
-            "confirmed=%d.",
-            confirmed ? 1 : 0);
+            "confirmed=%d player=%d.",
+            confirmed ? 1 : 0,
+            static_cast<int>(pn));
       }
 
       if (OnlineShouldHoldBeforeEvaluation()) {

@@ -2,6 +2,12 @@ local sourceRoot = assert(arg[1], "source root is required")
 local party = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLocalParty.lua"
 ))
+local lobbyPresentation = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLobbyPresentation.lua"
+))
+local lobbyModel = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLobbyModel.lua"
+))
 
 local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
@@ -27,6 +33,33 @@ equal(versus.coordinatorSide, "P1", "two-player coordinator")
 equal(versus.twoPlayer, true, "two-player mode")
 equal(party.role_for_side(versus, "P1"), "coordinator", "P1 two-player role")
 equal(party.role_for_side(versus, "P2"), "companion", "P2 two-player role")
+equal(party.failed_player_route(versus, "P1"), "primary",
+	"P1 failure must use the primary score identity")
+equal(party.failed_player_route(versus, "P2"), "companion",
+	"P2 failure must use the companion score identity")
+equal(party.failed_player_route(soloP2, "P2"), "primary",
+	"a solo P2 session must use its coordinator identity")
+equal(party.failed_player_route(versus, "P3"), nil,
+	"an unknown local side must not be routed")
+
+equal(party.should_submit_companion_ready(versus, true, false), true,
+	"P2 must be submitted before P1 becomes ready")
+equal(party.should_submit_companion_ready(versus, true, true), false,
+	"P2 must not be submitted twice after the readiness barrier")
+equal(party.should_submit_companion_ready(soloP1, true, false), false,
+	"solo readiness must not submit a companion")
+equal(party.should_fan_out_companion_not_ready(versus, false, false), true,
+	"clearing readiness must be propagated to P2")
+equal(party.should_fan_out_companion_not_ready(versus, false, true), false,
+	"readiness fan-out must remain single-shot")
+equal(lobbyPresentation.text("MissingTranslation", "Fallback"), "Fallback",
+	"lobby presentation must preserve safe translation fallbacks")
+equal(lobbyModel.joined_player_stable_key({ playerId = 42 }), "id:42",
+	"lobby players must use a stable identity key")
+equal(lobbyModel.joined_player_index_for_key({
+	{ playerId = 1 },
+	{ playerId = 2 },
+}, "id:2", 1), 2, "lobby selection must survive stable player refreshes")
 
 local valid, reason, side = party.validate_identities(versus, {
 	P1 = "user-1",
@@ -70,6 +103,29 @@ local function read_source(relativePath)
 	return source
 end
 
+local function ini_section(source, sectionName)
+	local entries = {}
+	local currentSection = ""
+	for line in tostring(source or ""):gmatch("[^\r\n]+") do
+		local heading = line:match("^%[([^%]]+)%]$")
+		if heading then
+			currentSection = heading
+		elseif currentSection == sectionName then
+			local key, value = line:match("^([^;#][^=]*)=(.*)$")
+			if key then entries[key] = value end
+		end
+	end
+	return entries
+end
+
+local function format_placeholders(value)
+	local placeholders = {}
+	for placeholder in tostring(value or ""):gmatch("%%[%d%.]*[a-zA-Z%%]") do
+		placeholders[#placeholders + 1] = placeholder
+	end
+	return table.concat(placeholders, "|")
+end
+
 local clientSource = read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
 assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
 	"new installations must enable online network diagnostics by default")
@@ -101,6 +157,10 @@ assert(clientSource:find("function ITGOnline:RequiredLocalPlayers", 1, true),
 	"critical online requests must use the captured local party")
 assert(clientSource:find("companion_ready_barrier_result", 1, true),
 	"Player 1 ready must wait for the companion ready response")
+assert(clientSource:find("should_submit_companion_ready", 1, true),
+	"the paired readiness barrier must use the tested local-party policy")
+assert(clientSource:find("should_fan_out_companion_not_ready", 1, true),
+	"clearing paired readiness must use the tested local-party policy")
 assert(clientSource:find("companion_ready_snapshot_membership_unconfirmed", 1, true),
 	"a partial local room snapshot must not prevent the companion ready request")
 local companionReadyStart = assert(clientSource:find("function ITGOnline:SetCompanionReady", 1, true),
@@ -124,6 +184,21 @@ local companionScoreEnd = assert(clientSource:find("function ITGOnline:SetCompan
 local companionScoreSource = clientSource:sub(companionScoreStart, companionScoreEnd - 1)
 assert(not companionScoreSource:find("LocalPartyRoomComplete", 1, true),
 	"a stale local snapshot must not suppress Player 2 score delivery")
+local localFailureStart = assert(
+	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", 1, true),
+	"early failure finalization must route by local player identity")
+local localFailureEnd = assert(
+	clientSource:find("function ITGOnline:MarkPlayFailedEarly", localFailureStart, true),
+	"primary early failure boundary must remain identifiable")
+local localFailureSource = clientSource:sub(localFailureStart, localFailureEnd - 1)
+assert(localFailureSource:find("failed_player_route", 1, true),
+	"early failure finalization must use the tested local-party routing policy")
+assert(localFailureSource:find("self:SendCompanionScore(true, true", 1, true),
+	"an early Player 2 failure must use the companion score pipeline")
+assert(not localFailureSource:find("self:SendScore(", 1, true),
+	"the Player 2 failure route must not directly use the primary score pipeline")
+assert(clientSource:find('normalizedHealth == "Dead"', 1, true),
+	"early failure detection must recognize the health enum representation used by the theme")
 local companionLifecycleStart = assert(clientSource:find("function ITGOnline:RequestCompanionLifecycleAction", 1, true),
 	"client must expose the companion lifecycle request")
 local companionLifecycleEnd = assert(clientSource:find("function ITGOnline:MarkPlayEntered", companionLifecycleStart, true),
@@ -197,6 +272,12 @@ assert(loginSource:find('label = label .. " [" .. tostring(onlineName) .. "]"', 
 local lobbySource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
 )
+assert(not lobbySource:find("local function online_lobby_text", 1, true),
+	"lobby presentation helpers must stay outside the Lua chunk local limit")
+assert(lobbySource:find("ITGOnlineLobbyPresentation.text", 1, true),
+	"the lobby overlay must use the extracted presentation helper")
+assert(lobbySource:find("ITGOnlineLobbyModel.online_lobby_state_signature", 1, true),
+	"stable lobby view-model helpers must stay outside the overlay chunk")
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
 assert(not clientSource:find("function ITGOnline:MaybeAutoReadyManager", 1, true),
@@ -221,7 +302,7 @@ assert(clientSource:find("companion_ready_song_hash_recovered", 1, true),
 	"companion readiness must survive the shared options transition")
 assert(clientSource:find("action=server_authoritative_request", 1, true),
 	"the server must validate companion membership when a local room snapshot is incomplete")
-assert(lobbySource:find("online_player_status_label", 1, true),
+assert(lobbySource:find("ITGOnlineLobbyPresentation.player_status_label", 1, true),
 	"online player statuses must use localized labels")
 assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),
 	"options completion must survive a transient room-context gap")
@@ -235,6 +316,12 @@ assert(optionsSource:find("onlineOptionsSessionActive", 1, true),
 local scoreSource = read_source("Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/Score.lua")
 assert(scoreSource:find("should_broadcast_online_score_snapshot", 1, true),
 	"only the primary local score feed must use OnlineScoreSnapshot")
+
+local trackFailTimeSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackFailTime.lua"
+)
+assert(not trackFailTimeSource:find("MarkPlayFailedEarly", 1, true),
+	"the theme must not duplicate the engine's authoritative per-player failure event")
 
 local stepStatisticsSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/StepStatistics/default.lua"
@@ -254,6 +341,35 @@ for _, language in ipairs({ "en", "fr", "es", "de", "it", "ja", "pl", "pt-br", "
 	local languageSource = read_source("Themes/Simply Love/Languages/" .. language .. ".ini")
 	assert(languageSource:find("PlayerLobbyName=", 1, true),
 		"invitation room names must be localized for " .. language)
+end
+
+local englishOnlineText = ini_section(
+	read_source("Themes/Simply Love/Languages/en.ini"),
+	"ScreenOnlineLobbies"
+)
+local frenchOnlineText = ini_section(
+	read_source("Themes/Simply Love/Languages/fr.ini"),
+	"ScreenOnlineLobbies"
+)
+local intentionallyUniversalFrenchText = {
+	AccuracyShort = true,
+	HttpOnly = true,
+	LobbyNameValue = true,
+	RealtimeHttpOnly = true,
+	ScreenOptionsLabel = true,
+	ScreenTransitionLabel = true,
+	Start = true,
+	TypeColumn = true,
+}
+for key, englishValue in pairs(englishOnlineText) do
+	local frenchValue = assert(frenchOnlineText[key],
+		"French online translation is missing key " .. tostring(key))
+	equal(format_placeholders(frenchValue), format_placeholders(englishValue),
+		"French online placeholders for " .. tostring(key))
+	if not intentionallyUniversalFrenchText[key] then
+		assert(frenchValue ~= englishValue,
+			"French online translation still contains English text for " .. tostring(key))
+	end
 end
 
 local branchSource = read_source("Themes/Simply Love/Scripts/SL-Branches.lua")

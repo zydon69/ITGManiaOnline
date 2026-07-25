@@ -28,6 +28,14 @@ set(ONLINE_CLIENT_SOURCE
     "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
 file(READ "${ONLINE_CLIENT_SOURCE}" ONLINE_CLIENT_TEXT)
 
+set(SCREEN_GAMEPLAY_HEADER
+    "${ITGMANIA_SOURCE_DIR}/src/ScreenGameplay.h")
+file(READ "${SCREEN_GAMEPLAY_HEADER}" SCREEN_GAMEPLAY_HEADER_TEXT)
+
+set(TRACK_FAIL_TIME_SOURCE
+    "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackFailTime.lua")
+file(READ "${TRACK_FAIL_TIME_SOURCE}" TRACK_FAIL_TIME_TEXT)
+
 set(ONLINE_LIVE_LEADERBOARD_SOURCE
     "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenGameplay overlay/OnlineLiveLeaderboard.lua")
 file(READ "${ONLINE_LIVE_LEADERBOARD_SOURCE}" ONLINE_LIVE_LEADERBOARD_TEXT)
@@ -49,6 +57,36 @@ foreach(REQUIRED_SNIPPET
         "ScreenGameplay invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "MarkITGOnlineFailedEarly(PlayerNumber pn)"
+    "pn == PLAYER_2 ? \"PLAYER_2\" : \"PLAYER_1\""
+    "MarkLocalPlayerFailedEarly(%s"
+    "m_bMarkedOnlineFailedEarly[pn]")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay online failure identity invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+string(FIND
+    "${SCREEN_GAMEPLAY_HEADER_TEXT}"
+    "bool m_bMarkedOnlineFailedEarly[NUM_PLAYERS];"
+    PER_PLAYER_FAILED_GUARD_OFFSET)
+if(PER_PLAYER_FAILED_GUARD_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay online failure identity invariant failed: the early-failure guard must be per-player")
+endif()
+
+string(FIND "${TRACK_FAIL_TIME_TEXT}" "MarkPlayFailedEarly" THEME_FAILED_EVENT_OFFSET)
+if(NOT THEME_FAILED_EVENT_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay online failure identity invariant failed: TrackFailTime must not duplicate the engine event")
+endif()
 
 string(FIND
     "${SCREEN_GAMEPLAY_TEXT}"

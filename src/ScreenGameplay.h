@@ -390,7 +390,7 @@ class ScreenGameplay : public ScreenWithMenuElements {
   bool m_bLoggedStageEndState;
   bool m_bLoggedOnlineEvaluationHold;
   bool m_bLoggedOnlineNotesEndedDuringHold;
-  bool m_bMarkedOnlineFailedEarly;
+  bool m_bMarkedOnlineFailedEarly[NUM_PLAYERS];
   bool m_bLoggedOnlineLocalFailKeepAlive;
   bool m_bLoggedGameplayChartTiming;
   bool m_bNotesEndedQueued;

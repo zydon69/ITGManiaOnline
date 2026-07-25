@@ -70,4 +70,25 @@ function Party.role_for_side(plan, side)
 	return nil
 end
 
+function Party.failed_player_route(plan, side)
+	local role = Party.role_for_side(plan, side)
+	if role == "coordinator" then return "primary" end
+	if role == "companion" then return "companion" end
+	return nil
+end
+
+function Party.should_submit_companion_ready(plan, isReady, companionReadyAlready)
+	return type(plan) == "table"
+		and plan.twoPlayer == true
+		and companionReadyAlready ~= true
+		and isReady == true
+end
+
+function Party.should_fan_out_companion_not_ready(plan, isReady, companionReadyAlready)
+	return type(plan) == "table"
+		and plan.twoPlayer == true
+		and companionReadyAlready ~= true
+		and isReady ~= true
+end
+
 return Party
