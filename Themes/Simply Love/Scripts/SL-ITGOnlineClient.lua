@@ -177,11 +177,17 @@ ITGOnline.songLoadedAckKey = ITGOnline.songLoadedAckKey or ""
 ITGOnline.songLoadedInFlightKey = ITGOnline.songLoadedInFlightKey or ""
 ITGOnline.songLoadedPendingCallbacks = ITGOnline.songLoadedPendingCallbacks or {}
 ITGOnline.songAvailabilityInFlightKey = ITGOnline.songAvailabilityInFlightKey or ""
+ITGOnline.songAvailabilityInFlightContextKey = ITGOnline.songAvailabilityInFlightContextKey or ""
 ITGOnline.songAvailabilityInFlightCallbacks = ITGOnline.songAvailabilityInFlightCallbacks or {}
 ITGOnline.songAvailabilityReportedKey = ITGOnline.songAvailabilityReportedKey or ""
+ITGOnline.songAvailabilityReportedContextKey = ITGOnline.songAvailabilityReportedContextKey or ""
 ITGOnline.songAvailabilitySuppressedUntil = ITGOnline.songAvailabilitySuppressedUntil or {}
 ITGOnline.songAvailabilityFailureDedupSeconds = ITGOnline.songAvailabilityFailureDedupSeconds or 5
 ITGOnline.songAvailabilityGeneration = ITGOnline.songAvailabilityGeneration or 0
+ITGOnline.songSelectedAutoReadyInFlightKey = ITGOnline.songSelectedAutoReadyInFlightKey or ""
+ITGOnline.songSelectedAutoReadyInFlightCallbacks = ITGOnline.songSelectedAutoReadyInFlightCallbacks or {}
+ITGOnline.songSelectedAutoReadyCompletedKey = ITGOnline.songSelectedAutoReadyCompletedKey or ""
+ITGOnline.songSelectedAutoReadyGeneration = tonumber(ITGOnline.songSelectedAutoReadyGeneration) or 0
 ITGOnline.songSelectionInFlightKey = ITGOnline.songSelectionInFlightKey or ""
 ITGOnline.songSelectionInFlightCallbacks = ITGOnline.songSelectionInFlightCallbacks or {}
 ITGOnline.songSelectionTransitionInFlight = ITGOnline.songSelectionTransitionInFlight or false
@@ -1239,7 +1245,28 @@ end
 
 local function room_transition_key(room)
 	if not room then return "" end
-	return tostring(room.id or "") .. "|" .. canonical_snapshot_value(room, {})
+	local roomId = tostring(room.id or room.room_id or room.roomId or "")
+	local roomVersion = tonumber(room.room_version or room.roomVersion)
+	local playState = type(room.play_state) == "table" and room.play_state or {}
+	local playStateVersion = tonumber(
+		playState.version_ms or playState.versionMs or room.play_state_version
+			or room.playStateVersion
+	)
+	if roomVersion or playStateVersion then
+		local selectedSong = type(room.selected_song) == "table"
+			and room.selected_song or {}
+		return table.concat({
+			roomId,
+			"rv:" .. tostring(roomVersion or 0),
+			"pv:" .. tostring(playStateVersion or 0),
+			"phase:" .. tostring(room.phase or ""),
+			"selection:" .. tostring(
+				room.current_selection_id or room.currentSelectionId
+					or selectedSong.selection_id or selectedSong.selectionId or ""
+			),
+		}, "|")
+	end
+	return roomId .. "|" .. canonical_snapshot_value(room, {})
 end
 
 local function online_room_transition_trace(previousRoom, room, source)
@@ -4715,7 +4742,6 @@ function ITGOnline:TraceOnlineState(label, fields)
 		or type(self.currentSongPayload) == "table" and self.currentSongPayload
 		or {}
 	local playState = type(room.play_state) == "table" and room.play_state or {}
-	local summary = self.PlayStateSummary and self:PlayStateSummary(room) or nil
 	local roomId = tostring(fields.room_id or fields.roomId or self.currentRoomId or room.id or "nil")
 	local phase = tostring(fields.phase or room.phase or "nil")
 	local traceLabel = tostring(label or "unknown")
@@ -4760,6 +4786,7 @@ function ITGOnline:TraceOnlineState(label, fields)
 		end
 		self.onlineStateTraceThrottle[traceKey] = now
 	end
+	local summary = self.PlayStateSummary and self:PlayStateSummary(room) or nil
 	local parts = {
 		"online_state_trace",
 		"label=" .. traceLabel,
@@ -4942,14 +4969,52 @@ end
 
 function ITGOnline:InvalidateSongAvailabilityRequests(reason)
 	local previousGeneration = tonumber(self.songAvailabilityGeneration) or 0
+	local callbacks = self.songAvailabilityInFlightCallbacks or {}
 	self.songAvailabilityGeneration = previousGeneration + 1
 	self.songAvailabilityInFlightKey = ""
+	self.songAvailabilityInFlightContextKey = ""
 	self.songAvailabilityInFlightCallbacks = {}
 	self.songAvailabilityReportedKey = ""
+	self.songAvailabilityReportedContextKey = ""
 	self.songAvailabilitySuppressedUntil = {}
 	online_flow_trace("song_availability_invalidated reason=" .. tostring(reason or "unknown")
 		.. " previousGeneration=" .. tostring(previousGeneration)
-		.. " generation=" .. tostring(self.songAvailabilityGeneration))
+		.. " generation=" .. tostring(self.songAvailabilityGeneration)
+		.. " callbacks=" .. tostring(#callbacks))
+	if self.InvalidateSelectedSongAutoReady then
+		self:InvalidateSelectedSongAutoReady(
+			"song_availability_invalidated:" .. tostring(reason or "unknown")
+		)
+	end
+	for cb in ivalues(callbacks) do
+		safe_callback(cb, false, nil, {
+			cancelled = true,
+			errorCode = "song_availability_context_invalidated",
+			errorMessage = "The selected song context changed.",
+		})
+	end
+end
+
+function ITGOnline:InvalidateSelectedSongAutoReady(reason)
+	local callbacks = self.songSelectedAutoReadyInFlightCallbacks or {}
+	local previousKey = tostring(self.songSelectedAutoReadyInFlightKey or "")
+	self.songSelectedAutoReadyGeneration =
+		(tonumber(self.songSelectedAutoReadyGeneration) or 0) + 1
+	self.songSelectedAutoReadyInFlightKey = ""
+	self.songSelectedAutoReadyInFlightCallbacks = {}
+	self.songSelectedAutoReadyCompletedKey = ""
+	if previousKey ~= "" or #callbacks > 0 then
+		online_flow_trace("song_selected_auto_ready_invalidated reason=" .. tostring(reason or "unknown")
+			.. " previousKey=" .. tostring(previousKey)
+			.. " callbacks=" .. tostring(#callbacks))
+	end
+	for cb in ivalues(callbacks) do
+		safe_callback(cb, false, nil, {
+			cancelled = true,
+			errorCode = "song_ready_context_invalidated",
+			errorMessage = "The selected song context changed.",
+		})
+	end
 end
 
 function ITGOnline:ResetOnlineRoundRuntimeState(source)
@@ -5355,17 +5420,25 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	return room
 end
 
-function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
+function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source, callback)
 	room = room or self.currentRoom
 	if not room or not self.currentRoomId then
 		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
 			.. " reason=no_room"
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
+		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
 		return
 	end
 
 	local phase = self:NormalizeRoomPhase(room.phase)
 	if phase ~= "lobby_ready" then
+		local alreadyPastLobby = phase == "config"
+			or phase == "starting"
+			or phase == "playing"
+			or phase == "results"
+		safe_callback(callback, alreadyPastLobby, { room = room, skipped = true }, {
+			errorMessage = alreadyPastLobby and nil or "Room is not accepting lobby ready state.",
+		})
 		return
 	end
 
@@ -5375,15 +5448,21 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			.. " reason=no_selected_song"
 			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase))
+		safe_callback(callback, false, { room = room }, { errorMessage = "No selected song." })
 		return
 	end
 	if self:IsSongReloadOrDownloadActive("song_selected_auto_ready:" .. tostring(source or "unknown")) then
-		self.songSelectedAutoReadyInFlightKey = ""
 		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
 			.. " reason=download_or_reload_active"
 			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase)
 			.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
+		safe_callback(callback, false, { room = room }, {
+			deferred = true,
+			errorCode = "song_availability_deferred",
+			errorMessage = "download_in_progress",
+			retryAfter = 0.75,
+		})
 		return
 	end
 
@@ -5394,6 +5473,7 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase)
 			.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
+		safe_callback(callback, false, { room = room }, { errorMessage = "Invalid selected song context." })
 		return
 	end
 
@@ -5403,26 +5483,78 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 				.. " key=" .. tostring(key)
 				.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
 		end
-		self.songSelectedAutoReadyCompletedKey = key
 		if self.songSelectedAutoReadyInFlightKey == key then
-			self.songSelectedAutoReadyInFlightKey = ""
+			if callback then
+				append_coalesced_callback(
+					self.songSelectedAutoReadyInFlightCallbacks,
+					callback,
+					"song_selected_auto_ready",
+					function(cb)
+						safe_callback(cb, false, nil, { errorMessage = "Too many pending ready requests." })
+					end
+				)
+			end
+			online_flow_trace("song_selected_auto_ready_snapshot_confirmed_waiting_for_inflight key="
+				.. tostring(key))
+			return
 		end
+		self.songSelectedAutoReadyCompletedKey = key
+		safe_callback(callback, true, { room = room, duplicate = true }, { duplicate = true })
 		return
 	end
 
 	if self.songSelectedAutoReadyCompletedKey == key then
+		safe_callback(callback, true, { room = room, duplicate = true }, { duplicate = true })
 		return
 	end
 
 	if self.songSelectedAutoReadyInFlightKey == key then
+		if callback then
+			append_coalesced_callback(
+				self.songSelectedAutoReadyInFlightCallbacks,
+				callback,
+				"song_selected_auto_ready",
+				function(cb)
+					safe_callback(cb, false, nil, { errorMessage = "Too many pending ready requests." })
+				end
+			)
+		end
 		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
 			.. " reason=in_flight"
 			.. " key=" .. tostring(key)
-			.. " room=" .. tostring(room.id or self.currentRoomId or "nil"))
+			.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
+			.. " callbacks=" .. tostring(#self.songSelectedAutoReadyInFlightCallbacks))
 		return
 	end
 
+	self.songSelectedAutoReadyGeneration =
+		(tonumber(self.songSelectedAutoReadyGeneration) or 0) + 1
+	local autoReadyGeneration = self.songSelectedAutoReadyGeneration
 	self.songSelectedAutoReadyInFlightKey = key
+	self.songSelectedAutoReadyInFlightCallbacks = callback and { callback } or {}
+	local function finish(ok, decoded, response)
+		if self.songSelectedAutoReadyInFlightKey ~= key
+			or self.songSelectedAutoReadyGeneration ~= autoReadyGeneration
+		then
+			online_flow_trace("song_selected_auto_ready_finish_ignored reason=stale_request"
+				.. " key=" .. tostring(key)
+				.. " current=" .. tostring(self.songSelectedAutoReadyInFlightKey or "")
+				.. " requestGeneration=" .. tostring(autoReadyGeneration)
+				.. " currentGeneration=" .. tostring(self.songSelectedAutoReadyGeneration))
+			return
+		end
+		local callbacks = self.songSelectedAutoReadyInFlightCallbacks or {}
+		self.songSelectedAutoReadyInFlightKey = ""
+		self.songSelectedAutoReadyInFlightCallbacks = {}
+		online_flow_trace("song_selected_auto_ready_finish key=" .. tostring(key)
+			.. " ok=" .. tostring(ok == true)
+			.. " callbacks=" .. tostring(#callbacks)
+			.. " error=" .. tostring(decoded and decoded.error_code
+				or response and response.errorMessage or "nil"))
+		for cb in ivalues(callbacks) do
+			safe_callback(cb, ok, decoded, response)
+		end
+	end
 	online_flow_trace("song_selected_auto_ready_begin source=" .. tostring(source or "unknown")
 		.. " key=" .. tostring(key)
 		.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
@@ -5437,16 +5569,21 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			.. " phase=" .. tostring(availabilityDecoded and availabilityDecoded.room and availabilityDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
 			.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.errorMessage or "nil"))
 
-		if self.songSelectedAutoReadyInFlightKey ~= key then
-			online_flow_trace("song_selected_auto_ready_aborted reason=stale_inflight key=" .. tostring(key))
+		if self.songSelectedAutoReadyInFlightKey ~= key
+			or self.songSelectedAutoReadyGeneration ~= autoReadyGeneration
+		then
+			online_flow_trace("song_selected_auto_ready_aborted reason=stale_inflight"
+				.. " key=" .. tostring(key)
+				.. " requestGeneration=" .. tostring(autoReadyGeneration)
+				.. " currentGeneration=" .. tostring(self.songSelectedAutoReadyGeneration))
 			return
 		end
 
 		if not availabilityOk then
-			self.songSelectedAutoReadyInFlightKey = ""
 			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
 				.. " step=availability"
 				.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
+			finish(false, availabilityDecoded, availabilityResponse)
 			return
 		end
 
@@ -5457,7 +5594,6 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 
 		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 		if currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" and currentPhase ~= "unknown" then
-			self.songSelectedAutoReadyInFlightKey = ""
 			self.songSelectedAutoReadyCompletedKey = key
 			online_flow_trace("song_selected_auto_ready_completed key=" .. tostring(key)
 				.. " reason=room_already_past_lobby_ready"
@@ -5465,14 +5601,18 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			if self.EnforceRoomPhaseScreen then
 				self:EnforceRoomPhaseScreen()
 			end
+			finish(true, availabilityDecoded or { room = self.currentRoom }, availabilityResponse)
+			return
+		end
+		if self:IsCurrentUserReadyInRoom(self.currentRoom, "lobby_ready") then
+			self.songSelectedAutoReadyCompletedKey = key
+			online_flow_trace("song_selected_auto_ready_completed key=" .. tostring(key)
+				.. " reason=ready_snapshot_applied_by_availability")
+			finish(true, availabilityDecoded or { room = self.currentRoom }, availabilityResponse)
 			return
 		end
 
 		self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-			if self.songSelectedAutoReadyInFlightKey == key then
-				self.songSelectedAutoReadyInFlightKey = ""
-			end
-
 			online_flow_trace("song_selected_auto_ready_ready_result key=" .. tostring(key)
 				.. " ok=" .. tostring(readyOk == true)
 				.. " status=" .. tostring(readyResponse and readyResponse.statusCode or "nil")
@@ -5488,6 +5628,7 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 				if self.EnforceRoomPhaseScreen then
 					self:EnforceRoomPhaseScreen()
 				end
+				finish(true, readyDecoded or availabilityDecoded, readyResponse or availabilityResponse)
 				return
 			end
 
@@ -5496,12 +5637,18 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 				online_flow_trace("song_selected_auto_ready_waiting key=" .. tostring(key)
 					.. " reason=" .. tostring(errorCode)
 					.. " retryAfter=" .. tostring(readyDecoded and readyDecoded.retry_after or "nil"))
+				finish(true, {
+					room = readyDecoded and readyDecoded.room or self.currentRoom,
+					selection_ready_pending = true,
+					error_code = errorCode,
+				}, readyResponse)
 				return
 			end
 
 			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
 				.. " step=ready"
 				.. " message=" .. tostring(response_message(readyResponse, readyDecoded, "ready failed")))
+			finish(false, readyDecoded, readyResponse)
 		end)
 	end)
 end
@@ -8346,13 +8493,22 @@ function ITGOnline:InvokeActiveRealtimeCallbacks(generation, method, value)
 		return
 	end
 	local bundles = type(active.bundles) == "table" and active.bundles or {}
-	online_flow_trace("realtime_active_callbacks_invoke generation=" .. tostring(generation)
-		.. " method=" .. tostring(method)
-		.. " count=" .. tostring(#bundles))
+	local callbackCount = 0
 	for bundle in ivalues(bundles) do
 		if type(bundle) == "table" and type(bundle[method]) == "function" then
+			callbackCount = callbackCount + 1
 			safe_callback(bundle[method], value)
 		end
+	end
+	if method ~= "message" or callbackCount > 0 then
+		online_flow_trace_throttled(
+			"realtime_active_callbacks_invoke:" .. tostring(method),
+			method == "message" and 30.0 or 1.0,
+			"realtime_active_callbacks_invoke generation=" .. tostring(generation)
+				.. " method=" .. tostring(method)
+				.. " callbacks=" .. tostring(callbackCount)
+				.. " bundles=" .. tostring(#bundles)
+		)
 	end
 end
 
@@ -10747,7 +10903,17 @@ function ITGOnline:SelectSong(callback, options)
 				-- chain while this transition is in flight.  Start it only after the
 				-- round reset above, otherwise the reset cancels the fresh request and
 				-- the room can remain stuck in lobby_ready forever.
-				self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, "song_selection_stabilized")
+				if options.autoReady ~= false then
+					self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(
+						room,
+						"song_selection_stabilized"
+					)
+				else
+					online_flow_trace("song_selected_auto_ready_deferred"
+						.. " source=song_selection_stabilized"
+						.. " reason=caller_owns_ready_orchestration"
+						.. " room=" .. tostring(self.currentRoomId or "nil"))
+				end
 				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
 			else
 				self.currentSongPayload = previousSongPayload
@@ -11136,68 +11302,38 @@ function ITGOnline:SelectSongAndMarkLobbyReady(callback)
 			return
 		end
 
-		local availabilityAttempts = 0
-		local confirmAvailability
-		confirmAvailability = function()
-			availabilityAttempts = availabilityAttempts + 1
-			self:ConfirmSelectedSongAvailability("song_selected", function(availabilityOk, availabilityDecoded, availabilityResponse)
-				online_flow_trace("song_select_and_ready_availability_result attempt=" .. tostring(availabilityAttempts)
-					.. " ok=" .. tostring(availabilityOk == true)
-					.. " status=" .. tostring(availabilityResponse and availabilityResponse.statusCode or "nil")
-					.. " hasRoom=" .. tostring(availabilityDecoded and availabilityDecoded.room ~= nil)
-					.. " phase=" .. tostring(availabilityDecoded and availabilityDecoded.room and availabilityDecoded.room.phase or "nil")
-					.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.errorMessage or "nil"))
-				if not availabilityOk then
-					if availabilityAttempts < 2 and self.FetchRoom then
-						online_flow_trace("song_selection_availability_retry attempt=" .. tostring(availabilityAttempts)
-							.. " status=" .. tostring(availabilityResponse and availabilityResponse.statusCode or "nil")
-							.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.error or "nil"))
-						self:FetchRoom(self.currentRoomId, function()
-							confirmAvailability()
-						end)
-						return
-					end
-					safe_callback(callback, false, availabilityDecoded or selectDecoded, availabilityResponse or selectResponse)
+		local room = selectDecoded and selectDecoded.room or self.currentRoom
+		self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(
+			room,
+			"song_select_and_ready",
+			function(readyOk, readyDecoded, readyResponse)
+				online_flow_trace("song_select_and_ready_result ok=" .. tostring(readyOk == true)
+					.. " status=" .. tostring(readyResponse and readyResponse.statusCode or "nil")
+					.. " hasRoom=" .. tostring(readyDecoded and readyDecoded.room ~= nil)
+					.. " phase=" .. tostring(readyDecoded and readyDecoded.room and readyDecoded.room.phase
+						or self.currentRoom and self.currentRoom.phase or "nil")
+					.. " error=" .. tostring(readyDecoded and readyDecoded.error_code
+						or readyResponse and readyResponse.errorMessage or "nil"))
+				if not readyOk then
 					safe_broadcast("OnlineResponseStatus", {
 						event = "songAvailability",
 						success = false,
-						message = response_message(availabilityResponse, availabilityDecoded, "Could not confirm selected song")
+						message = response_message(
+							readyResponse,
+							readyDecoded,
+							"Could not confirm selected song"
+						)
 					})
-					return
 				end
-
-				self:SetReady("lobby_ready", true, function(readyOk, readyDecoded, readyResponse)
-					online_flow_trace("song_select_and_ready_ready_result ok=" .. tostring(readyOk == true)
-						.. " status=" .. tostring(readyResponse and readyResponse.statusCode or "nil")
-						.. " hasRoom=" .. tostring(readyDecoded and readyDecoded.room ~= nil)
-						.. " phase=" .. tostring(readyDecoded and readyDecoded.room and readyDecoded.room.phase or "nil")
-						.. " error=" .. tostring(readyDecoded and readyDecoded.error_code or readyResponse and readyResponse.errorMessage or "nil"))
-					if readyOk and readyDecoded and readyDecoded.room then
-						safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or readyDecoded.room))
-					end
-					local readyErrorCode = readyDecoded and readyDecoded.error_code
-					if not readyOk and (readyErrorCode == "room_members_song_not_confirmed" or readyErrorCode == "room_member_song_not_confirmed") then
-						local room = (readyDecoded and readyDecoded.room)
-							or (availabilityDecoded and availabilityDecoded.room)
-							or (selectDecoded and selectDecoded.room)
-							or self.currentRoom
-						online_flow_trace("song_selection_ready_pending reason=" .. tostring(readyErrorCode))
-						if room then
-							safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
-						end
-						safe_callback(callback, true, {
-							room = room,
-							selection_ready_pending = true,
-							error_code = readyErrorCode,
-						}, readyResponse or availabilityResponse or selectResponse)
-						return
-					end
-					safe_callback(callback, readyOk, readyDecoded or availabilityDecoded or selectDecoded, readyResponse or availabilityResponse or selectResponse)
-				end)
-			end)
-		end
-		confirmAvailability()
-	end)
+				safe_callback(
+					callback,
+					readyOk,
+					readyDecoded or selectDecoded,
+					readyResponse or selectResponse
+				)
+			end
+		)
+	end, { autoReady = false })
 end
 
 function ITGOnline:BeginSongPreviewSession(source)
@@ -11843,6 +11979,7 @@ function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
 	if self:IsLocalTwoPlayerSession()
 		and self.SendCompanionScore
 		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "playing"
+		and not self:IsCompanionScoreFinalizedForCurrentRound("live_score_tick")
 	then
 		self:SendCompanionScore(false, false, function(ok, decoded, response)
 			if not ok
@@ -12931,6 +13068,36 @@ function ITGOnline:CompanionScoreState(roundKey)
 	return state
 end
 
+function ITGOnline:IsCompanionScoreFinalizedForCurrentRound(source, roundKey, state)
+	if not self:IsLocalTwoPlayerSession() then return false end
+	roundKey = tostring(roundKey or self:CanonicalGameplayRoundKey(
+		"companion_score_terminal_check"
+	) or "")
+	if not self:PlayStateKeyIsValid(roundKey) then return false end
+	state = state or self:CompanionScoreState(roundKey)
+	local roomHasFinalResult = self:LocalPlayerHasFinalResult(
+		self.currentRoom,
+		PLAYER_2
+	)
+	local terminal = ITGOnlineLocalParty.companion_score_is_terminal(
+		state.finalAccepted == true,
+		roomHasFinalResult == true
+	)
+	if not terminal then return false end
+
+	state.finalAccepted = true
+	if state.finalSuppressionLogged ~= true then
+		state.finalSuppressionLogged = true
+		online_flow_trace("companion_score_suppressed reason=final_already_accepted"
+			.. " source=" .. tostring(source or "unknown")
+			.. " localPlayer=P2"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " roomHasFinalResult=" .. tostring(roomHasFinalResult == true))
+	end
+	return true
+end
+
 function ITGOnline:SendCompanionScore(force, final, callback)
 	local player = PLAYER_2
 	local finish = function(ok, decoded, response, meta)
@@ -12954,9 +13121,17 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		return
 	end
 	local state = self:CompanionScoreState(roundKey)
-	if final and (state.finalAccepted == true or self:LocalPlayerHasFinalResult(self.currentRoom, player)) then
-		state.finalAccepted = true
-		finish(true, nil, nil, { alreadyAccepted = true, roundKey = roundKey })
+	if self:IsCompanionScoreFinalizedForCurrentRound(
+		final and "final_score_send" or "live_score_send",
+		roundKey,
+		state
+	) then
+		finish(true, nil, nil, {
+			alreadyAccepted = true,
+			skipped = true,
+			final = final == true,
+			roundKey = roundKey,
+		})
 		return
 	end
 	if state.inFlight == true then
@@ -13475,10 +13650,15 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, com
 	end
 
 	if isReady and phase == "lobby_ready" and currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" then
-		online_flow_trace("ready_request_skipped room=" .. tostring(self.currentRoomId)
-			.. " phase=" .. tostring(phase)
-			.. " current_phase=" .. tostring(currentPhase)
-			.. " reason=stale_lobby_ready")
+		online_flow_trace_throttled(
+			"stale_lobby_ready:" .. tostring(self.currentRoomId)
+				.. ":" .. tostring(currentPhase),
+			10.0,
+			"ready_request_skipped room=" .. tostring(self.currentRoomId)
+				.. " phase=" .. tostring(phase)
+				.. " current_phase=" .. tostring(currentPhase)
+				.. " reason=stale_lobby_ready"
+		)
 		safe_callback(callback, true, { room = self.currentRoom, stale_ready = true }, nil)
 		return
 	end
@@ -13711,13 +13891,18 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, com
 			ok = true,
 			at = GetTimeSinceStart(),
 		}
-		online_flow_trace("ready_request_skipped reason=stale_lobby_ready_before_post"
-			.. " key=" .. tostring(requestKey)
-			.. " room=" .. tostring(requestRoomId)
-			.. " requestedPhase=" .. tostring(phase)
-			.. " requestPhase=" .. tostring(requestPhase)
-			.. " latestPhase=" .. tostring(latestPhase)
-			.. " callbacks=" .. tostring(callbacks and #callbacks or 0))
+		online_flow_trace_throttled(
+			"stale_lobby_ready_before_post:" .. tostring(requestRoomId)
+				.. ":" .. tostring(latestPhase),
+			10.0,
+			"ready_request_skipped reason=stale_lobby_ready_before_post"
+				.. " key=" .. tostring(requestKey)
+				.. " room=" .. tostring(requestRoomId)
+				.. " requestedPhase=" .. tostring(phase)
+				.. " requestPhase=" .. tostring(requestPhase)
+				.. " latestPhase=" .. tostring(latestPhase)
+				.. " callbacks=" .. tostring(callbacks and #callbacks or 0)
+		)
 		for cb in ivalues(callbacks) do
 			safe_callback(cb, true, { room = self.currentRoom, stale_ready = true }, nil)
 		end
@@ -17369,6 +17554,52 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	if selectedAt ~= nil and tostring(selectedAt) ~= "" then
 		payload.selected_at = tostring(selectedAt)
 	end
+	local availabilityContextKey = table.concat({
+		tostring(self.currentRoomId or ""),
+		tostring(payload.selected_at or ""),
+		missing and "missing" or "available",
+		tostring(payload.reason or ""),
+	}, "|")
+	if self.songAvailabilityInFlightKey ~= ""
+		and self.songAvailabilityInFlightContextKey == availabilityContextKey
+	then
+		if callback then
+			append_coalesced_callback(
+				self.songAvailabilityInFlightCallbacks,
+				callback,
+				"song_availability_context",
+				function(cb)
+					safe_callback(cb, false, nil, {
+						errorMessage = "Too many pending song availability requests.",
+					})
+				end
+			)
+		end
+		online_flow_trace("song_availability_join_inflight_context"
+			.. " contextKey=" .. tostring(availabilityContextKey)
+			.. " callbacks=" .. tostring(#self.songAvailabilityInFlightCallbacks)
+			.. " missing=" .. tostring(missing == true)
+			.. " reason=" .. tostring(payload.reason or "nil"))
+		return
+	end
+	if self.songAvailabilityInFlightKey ~= "" then
+		online_flow_trace("song_availability_deferred reason=different_context_inflight"
+			.. " currentContextKey=" .. tostring(self.songAvailabilityInFlightContextKey)
+			.. " requestedContextKey=" .. tostring(availabilityContextKey))
+		safe_callback(callback, false, nil, {
+			deferred = true,
+			errorCode = "song_availability_context_inflight",
+			errorMessage = "Another song availability context is still being confirmed.",
+			retryAfter = 0.25,
+		})
+		return
+	end
+	if self.songAvailabilityReportedContextKey == availabilityContextKey then
+		online_flow_trace("song_availability_skipped reason=already_reported_context"
+			.. " contextKey=" .. tostring(availabilityContextKey))
+		safe_callback(callback, true, nil, { duplicate = true })
+		return
+	end
 
 	if not missing then
 		if self:IsSongReloadOrDownloadActive("song_availability:" .. tostring(reason or "unknown")) then
@@ -17460,6 +17691,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	end
 	local availabilityGeneration = tonumber(self.songAvailabilityGeneration) or 0
 	self.songAvailabilityInFlightKey = availabilityKey
+	self.songAvailabilityInFlightContextKey = availabilityContextKey
 	self.songAvailabilityInFlightCallbacks = callback and { callback } or {}
 	-- Once the session was captured as two-player, P2 is always part of the
 	-- availability barrier.  A transient/stale room snapshot must not silently
@@ -17487,6 +17719,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		end
 		if finalOk then
 			self.songAvailabilityReportedKey = availabilityKey
+			self.songAvailabilityReportedContextKey = availabilityContextKey
 		elseif not (finalResponse and tonumber(finalResponse.statusCode) == 401) then
 			self.songAvailabilitySuppressedUntil[availabilityKey] = GetTimeSinceStart()
 				+ (tonumber(self.songAvailabilityFailureDedupSeconds) or 5)
@@ -17496,11 +17729,17 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 			.. " companionRequired=" .. tostring(companionRequired == true)
 			.. " companionOk=" .. tostring(companionRequestOk == true)
 			.. " finalOk=" .. tostring(finalOk == true))
+		local callbacks = {}
 		if self.songAvailabilityInFlightKey == availabilityKey then
+			callbacks = self.songAvailabilityInFlightCallbacks or {}
 			self.songAvailabilityInFlightKey = ""
+			self.songAvailabilityInFlightContextKey = ""
+			self.songAvailabilityInFlightCallbacks = {}
+		else
+			online_flow_trace("song_availability_callbacks_ignored reason=stale_barrier"
+				.. " key=" .. tostring(availabilityKey)
+				.. " currentKey=" .. tostring(self.songAvailabilityInFlightKey or ""))
 		end
-		local callbacks = self.songAvailabilityInFlightCallbacks or {}
-		self.songAvailabilityInFlightCallbacks = {}
 		for cb in ivalues(callbacks) do
 			safe_callback(cb, finalOk, finalDecoded, finalResponse)
 		end
@@ -17530,7 +17769,9 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				function(companionOk, decodedCompanion, responseCompanion)
 					self.companionSongAvailabilityInFlight[companionKey] = nil
 					companionPending = false
-					companionRequestOk = companionOk == true
+					local companionContextCurrent = availabilityGeneration
+						== (tonumber(self.songAvailabilityGeneration) or 0)
+					companionRequestOk = companionOk == true and companionContextCurrent
 					companionDecoded = decodedCompanion
 					companionResponse = responseCompanion
 					online_flow_trace("companion_song_availability_response localPlayer=P2"
@@ -17542,7 +17783,13 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 							and decodedCompanion.error_code
 							or responseCompanion and responseCompanion.errorMessage
 							or "nil"))
-					if companionOk and decodedCompanion and decodedCompanion.room then
+					if not companionContextCurrent then
+						online_flow_trace("companion_song_availability_response_ignored"
+							.. " reason=invalidated_request"
+							.. " key=" .. tostring(availabilityKey)
+							.. " requestGeneration=" .. tostring(availabilityGeneration)
+							.. " currentGeneration=" .. tostring(self.songAvailabilityGeneration))
+					elseif companionOk and decodedCompanion and decodedCompanion.room then
 						self:ApplyDecodedRoomSnapshot(
 							decodedCompanion,
 							"companion_song_availability"
@@ -17574,7 +17821,8 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 			finishAvailability()
 			return
 		end
-		local callbacks = self.songAvailabilityInFlightCallbacks or {}
+		local callbackCount = self.songAvailabilityInFlightKey == availabilityKey
+			and #(self.songAvailabilityInFlightCallbacks or {}) or 0
 		local availabilityResult = decoded and decoded.song_availability or nil
 		local ignored = ok and availabilityResult and availabilityResult.applied == false
 		local callbackOk = ok and not ignored
@@ -17594,7 +17842,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
 			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
 			.. " roomPhase=" .. tostring(decoded and decoded.room and decoded.room.phase or "nil")
-			.. " callbacks=" .. tostring(#callbacks))
+			.. " callbacks=" .. tostring(callbackCount))
 		if ok and decoded and decoded.room then
 			local room = self:ApplyDecodedRoomSnapshot(decoded, "song_availability")
 			callbackOk = room ~= nil
@@ -18635,14 +18883,22 @@ if name == "connection.ready" then
 				.. " lastSyncAge=" .. tostring(GetTimeSinceStart() - (self.lastSyncRequestedAt or 0)))
 		end
 elseif name == "server.ping" then
-	online_flow_trace("realtime_event_apply name=server.ping action=client_ping")
+	online_flow_trace_throttled(
+		"realtime_event_apply:server.ping",
+		30.0,
+		"realtime_event_apply name=server.ping action=client_ping"
+	)
 	if self.SendRealtimePing then
 		self:SendRealtimePing("server.ping")
 	end
 	return
 elseif name == "pong" then
-	online_flow_trace("realtime_event_apply name=pong action=keepalive_ack"
-		.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
+	online_flow_trace_throttled(
+		"realtime_event_apply:pong",
+		30.0,
+		"realtime_event_apply name=pong action=keepalive_ack"
+			.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil")
+	)
 	local pingId = tostring(payload.ping_id or event.ping_id or "")
 	local startedAt = pingId ~= "" and self.realtimeClockPingSamples[pingId] or nil
 	if startedAt then

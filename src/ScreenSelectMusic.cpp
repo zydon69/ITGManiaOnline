@@ -2061,6 +2061,15 @@ void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
         "room.");
     return;
   }
+  if (IsMusicSelectionFinalized()) {
+    OnlineTrace(
+        "ITG Online: ScreenSelectMusic lobby return consumed because the "
+        "music selection is finalized out_waiting=%d out_transitioning=%d "
+        "out_finished=%d.",
+        m_Out.IsWaiting() ? 1 : 0, m_Out.IsTransitioning() ? 1 : 0,
+        m_Out.IsFinished() ? 1 : 0);
+    return;
+  }
   if (IsTransitioning()) {
     WarnSelectMusic(
         "Ignoring ReturnToOnlineLobbyFromMusicSelect during an active "
@@ -2078,8 +2087,32 @@ void ScreenSelectMusic::ReturnToOnlineLobbyFromMusicSelect() {
   if (SOUND != nullptr) {
     SOUND->StopMusic();
   }
+
+  /*
+   * A Transition can be finished without ScreenWithMenuElements reporting an
+   * active transition.  Reusing it would silently fail in
+   * Transition::StartTransitioning and leave the already-faded screen black.
+   * SetNewScreen is delayed by ScreenManager, so it is safe from an input
+   * callback and provides a deterministic escape hatch for that stale state.
+   */
+  if (!m_Out.IsWaiting()) {
+    OnlineTrace(
+        "ITG Online: ScreenSelectMusic lobby return using direct screen "
+        "change because the outgoing transition is not reusable "
+        "out_transitioning=%d out_finished=%d.",
+        m_Out.IsTransitioning() ? 1 : 0, m_Out.IsFinished() ? 1 : 0);
+    SCREENMAN->SetNewScreen("ScreenOnlineLobbies");
+    return;
+  }
+
   SetNextScreenName("ScreenOnlineLobbies");
   StartTransitioningScreen(SM_GoToNextScreen);
+  if (!IsTransitioning()) {
+    WarnSelectMusic(
+        "Online lobby return transition did not start; falling back to a "
+        "direct screen change.");
+    SCREENMAN->SetNewScreen("ScreenOnlineLobbies");
+  }
 }
 
 bool ScreenSelectMusic::MenuBack(const InputEventPlus& input) {
@@ -2090,6 +2123,15 @@ bool ScreenSelectMusic::MenuBack(const InputEventPlus& input) {
                 GameButtonToString(INPUTMAPPER->GetInputScheme(), input.MenuI).c_str(),
                 InputEventTypeToString(input.type).c_str(),
                 input.DeviceI.ToString().c_str());
+    if (IsMusicSelectionFinalized()) {
+      OnlineTrace(
+          "ITG Online: ScreenSelectMusic MenuBack consumed because the music "
+          "selection is finalized out_waiting=%d out_transitioning=%d "
+          "out_finished=%d.",
+          m_Out.IsWaiting() ? 1 : 0, m_Out.IsTransitioning() ? 1 : 0,
+          m_Out.IsFinished() ? 1 : 0);
+      return true;
+    }
     ReturnToOnlineLobbyFromMusicSelect();
     return true;
   }
@@ -2895,12 +2937,17 @@ class LunaScreenSelectMusic : public Luna<ScreenSelectMusic> {
     p->ReturnToOnlineLobbyFromMusicSelect();
     COMMON_RETURN_SELF;
   }
+  static int IsMusicSelectionFinalized(T* p, lua_State* L) {
+    lua_pushboolean(L, p->IsMusicSelectionFinalized());
+    return 1;
+  }
 
   LunaScreenSelectMusic() {
     ADD_METHOD(GetGoToOptions);
     ADD_METHOD(GetMusicWheel);
     ADD_METHOD(OpenOptionsList);
     ADD_METHOD(CanOpenOptionsList);
+    ADD_METHOD(IsMusicSelectionFinalized);
     ADD_METHOD(ReturnToOnlineLobbyFromMusicSelect);
   }
 };

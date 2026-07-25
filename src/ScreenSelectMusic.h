@@ -61,6 +61,9 @@ class ScreenSelectMusic : public ScreenWithMenuElements {
 
   bool GetGoToOptions() const { return m_bGoToOptions; }
   MusicWheel* GetMusicWheel() { return &m_MusicWheel; }
+  bool IsMusicSelectionFinalized() const {
+    return m_SelectionState == SelectionState_Finalized;
+  }
 
   void OpenOptionsList(PlayerNumber pn);
   void ReturnToOnlineLobbyFromMusicSelect();

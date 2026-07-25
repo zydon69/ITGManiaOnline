@@ -49,6 +49,8 @@ PackSync.activeDownloadSelectionId = PackSync.activeDownloadSelectionId or ""
 PackSync.lastDownloadSelectionId = PackSync.lastDownloadSelectionId or ""
 PackSync.downloadFuture = PackSync.downloadFuture or nil
 PackSync.localScanCache = PackSync.localScanCache or {}
+PackSync.localSongLibraryFingerprint = PackSync.localSongLibraryFingerprint or ""
+PackSync.localSongLibraryFingerprintCount = tonumber(PackSync.localSongLibraryFingerprintCount) or -1
 PackSync.lastPostedStatusSignature = PackSync.lastPostedStatusSignature or ""
 PackSync.lastPostedStatusAt = tonumber(PackSync.lastPostedStatusAt) or 0
 PackSync.statusPostInFlightSignature = PackSync.statusPostInFlightSignature or ""
@@ -79,6 +81,7 @@ PackSync.lastNoSongClearResetAt = tonumber(PackSync.lastNoSongClearResetAt) or 0
 PackSync.lastNoSongClearResetReason = PackSync.lastNoSongClearResetReason or ""
 PackSync.lastDeferredLocalMatchTraceKey = PackSync.lastDeferredLocalMatchTraceKey or ""
 PackSync.lastDeferredApplyKey = PackSync.lastDeferredApplyKey or ""
+PackSync.lastSuccessfulApplyKey = PackSync.lastSuccessfulApplyKey or ""
 PackSync.lastTerminalApplyKey = PackSync.lastTerminalApplyKey or ""
 PackSync.lastTerminalApplyStatus = PackSync.lastTerminalApplyStatus or ""
 PackSync.maxDownloadBytes = 5 * 1024 * 1024 * 1024
@@ -1030,6 +1033,11 @@ local function local_song_library_key()
 	if not SONGMAN or not SONGMAN.GetAllSongs then return "" end
 	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
 	if not ok or type(songs) ~= "table" then return "" end
+	if PackSync.localSongLibraryFingerprint ~= ""
+		and PackSync.localSongLibraryFingerprintCount == #songs
+	then
+		return PackSync.localSongLibraryFingerprint
+	end
 	local dirs = {}
 	for song in ivalues(songs) do
 		local dir = song and song.GetSongDir and tostring(song:GetSongDir() or "") or ""
@@ -1042,7 +1050,9 @@ local function local_song_library_key()
 			return BinaryToHex(CRYPTMAN:SHA256String(joined))
 		end)
 		if ok and type(digest) == "string" and digest ~= "" then
-			return tostring(#dirs) .. ":" .. digest:lower()
+			PackSync.localSongLibraryFingerprintCount = #songs
+			PackSync.localSongLibraryFingerprint = tostring(#dirs) .. ":" .. digest:lower()
+			return PackSync.localSongLibraryFingerprint
 		end
 	end
 	-- No imprecise numeric hash fallback: a failed native digest merely forces
@@ -2061,6 +2071,7 @@ function PackSync:ResetLocalState(reason)
 	self.lastNoSongClearResetReason = normalizedReason
 	self.localScanCache = {}
 	self.lastCachedTerminalScanTraceKey = ""
+	self.lastSuccessfulApplyKey = ""
 	self.lastTerminalApplyKey = ""
 	self.lastTerminalApplyStatus = ""
 	self.browsePreviewPackKey = ""
@@ -2145,7 +2156,10 @@ function PackSync:InvalidateLocalChartIndex()
 	self.localChartIndex = nil
 	self.localChartIndexKey = nil
 	self.localScanCache = {}
+	self.localSongLibraryFingerprint = ""
+	self.localSongLibraryFingerprintCount = -1
 	self.lastCachedTerminalScanTraceKey = ""
+	self.lastSuccessfulApplyKey = ""
 	self.lastTerminalApplyKey = ""
 	self.lastTerminalApplyStatus = ""
 end
@@ -2522,6 +2536,15 @@ function PackSync:ApplySelectedChart(songInfo)
 	-- instead of re-emitting both for every snapshot.  Song reloads explicitly
 	-- invalidate this key through InvalidateLocalChartIndex().
 	local applyKey = terminal_apply_key(songInfo, self.downloadGeneration)
+	if applyKey ~= "" and self.lastSuccessfulApplyKey == applyKey then
+		trace_online_state("apply_selected_chart_cached", {
+			selected_at = selected_at(songInfo),
+			title = selected_title(songInfo),
+			chartHash = tostring(selected_chart_hash(songInfo)):sub(1, 12),
+			status = self.currentStatus or "nil",
+		})
+		return true
+	end
 	if applyKey ~= ""
 		and self.lastTerminalApplyKey == applyKey
 		and self.lastTerminalApplyStatus ~= ""
@@ -2575,6 +2598,7 @@ function PackSync:ApplySelectedChart(songInfo)
 		})
 	end
 	if result.ok then
+		self.lastSuccessfulApplyKey = applyKey
 		self.lastTerminalApplyKey = ""
 		self.lastTerminalApplyStatus = ""
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_apply_selected_chart")
@@ -2592,6 +2616,7 @@ function PackSync:ApplySelectedChart(songInfo)
 	end
 
 	local reason = result.reason or "missing_local_song"
+	self.lastSuccessfulApplyKey = ""
 	if result.deferred == true or reason == "download_in_progress" then
 		return false
 	end
@@ -2620,7 +2645,7 @@ function PackSync:ApplySelectedChart(songInfo)
 end
 
 function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
-	if not (ITGOnline and ITGOnline.SetReady) then
+	if not (ITGOnline and ITGOnline.MaybeAutoConfirmSelectedSongAndMarkLobbyReady) then
 		trace("MarkLobbyReady skipped reason=no_online_client source=" .. tostring(source or "unknown"))
 		return false
 	end
@@ -2691,59 +2716,63 @@ function PackSync:MarkLobbyReadyForSelectedSong(source, retrying)
 		status = self.currentStatus or "nil",
 		selected_at = selected_at(self.currentSongInfo),
 	})
-	ITGOnline:SetReady("lobby_ready", true, function(ok, decoded, response)
-		if self.markLobbyReadyInFlightKey == readyIntentKey then
-			self.markLobbyReadyInFlightKey = ""
-		end
-		trace("MarkLobbyReady response source=" .. tostring(source or "unknown")
-			.. " ok=" .. tostring(ok == true)
-			.. " status=" .. tostring(response and response.statusCode or "nil")
-			.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
-			.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
-			.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-		trace_online_state("mark_lobby_ready_response", {
-			source = source or "unknown",
-			roomSnapshot = decoded and decoded.room or nil,
-			ok = ok == true,
-			statusCode = response and response.statusCode or "nil",
-			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
-			selected_at = selected_at(self.currentSongInfo),
-		})
-		if ok then
-			self.lastMarkLobbyReadyCompletedKey = readyIntentKey
-			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
-			return
-		end
-		local errorCode = tostring(decoded and decoded.error_code or "")
-		if errorCode == "ready_context_changed" then
-			trace("MarkLobbyReady stopped reason=ready_context_changed"
-				.. " source=" .. tostring(source or "unknown")
-				.. " selected_at=" .. tostring(current_room_selected_at())
-				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
-			if decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
-				ITGOnline:ApplyRoomSnapshot(decoded.room, "mark_lobby_ready_context_changed")
-				if MESSAGEMAN then
-					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-				end
-				if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
-			elseif ITGOnline.EnsureCurrentRoom then
-				ITGOnline:EnsureCurrentRoom()
+	ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(
+		ITGOnline.currentRoom,
+		"pack_sync:" .. tostring(source or "unknown"),
+		function(ok, decoded, response)
+			if self.markLobbyReadyInFlightKey == readyIntentKey then
+				self.markLobbyReadyInFlightKey = ""
 			end
-			return
-		end
-		if retrying then return end
-		if ITGOnline.EnsureCurrentRoom then
-			ITGOnline:EnsureCurrentRoom(function(fetchOk)
-				trace("MarkLobbyReady retry_refresh source=" .. tostring(source or "unknown")
-					.. " ok=" .. tostring(fetchOk == true))
-				if fetchOk then
-					self.lastMarkLobbyReadyIntentKey = ""
-					self.lastMarkLobbyReadyIntentAt = 0
-					self:MarkLobbyReadyForSelectedSong(tostring(source or "unknown") .. "_retry", true)
+			trace("MarkLobbyReady response source=" .. tostring(source or "unknown")
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " error=" .. tostring(decoded and decoded.error_code or response and response.errorMessage or "nil")
+				.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil)
+				.. " phase=" .. tostring(decoded and decoded.room and decoded.room.phase or ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+			trace_online_state("mark_lobby_ready_response", {
+				source = source or "unknown",
+				roomSnapshot = decoded and decoded.room or nil,
+				ok = ok == true,
+				statusCode = response and response.statusCode or "nil",
+				error = decoded and decoded.error_code or response and response.errorMessage or "nil",
+				selected_at = selected_at(self.currentSongInfo),
+			})
+			if ok then
+				self.lastMarkLobbyReadyCompletedKey = readyIntentKey
+				if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+				return
+			end
+			local errorCode = tostring(decoded and decoded.error_code or "")
+			if errorCode == "ready_context_changed" then
+				trace("MarkLobbyReady stopped reason=ready_context_changed"
+					.. " source=" .. tostring(source or "unknown")
+					.. " selected_at=" .. tostring(current_room_selected_at())
+					.. " hasRoom=" .. tostring(decoded and decoded.room ~= nil))
+				if decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
+					ITGOnline:ApplyRoomSnapshot(decoded.room, "mark_lobby_ready_context_changed")
+					if MESSAGEMAN then
+						MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+					end
+					if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
+				elseif ITGOnline.EnsureCurrentRoom then
+					ITGOnline:EnsureCurrentRoom()
 				end
-			end)
+				return
+			end
+			if retrying then return end
+			if ITGOnline.EnsureCurrentRoom then
+				ITGOnline:EnsureCurrentRoom(function(fetchOk)
+					trace("MarkLobbyReady retry_refresh source=" .. tostring(source or "unknown")
+						.. " ok=" .. tostring(fetchOk == true))
+					if fetchOk then
+						self.lastMarkLobbyReadyIntentKey = ""
+						self.lastMarkLobbyReadyIntentAt = 0
+						self:MarkLobbyReadyForSelectedSong(tostring(source or "unknown") .. "_retry", true)
+					end
+				end)
+			end
 		end
-	end)
+	)
 	return true
 end
 
@@ -4121,8 +4150,9 @@ function PackSync:ValidatePendingPostReload()
 					pack_text("DownloadedPackMissingExpectedChart", "The downloaded pack does not contain the expected chart."),
 					"selected_chart_not_in_downloaded_pack")
 				return false
-			end
+		end
 		set_current_selection(result.song, result.steps, songInfo, "pack_sync_reload_apply_selected_chart")
+		self.lastSuccessfulApplyKey = terminal_apply_key(songInfo, self.downloadGeneration)
 		trace("Downloaded OK and local chart validated")
 		self:MarkPackInstalled(packName)
 

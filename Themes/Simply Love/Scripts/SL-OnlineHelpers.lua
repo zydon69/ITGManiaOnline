@@ -651,9 +651,9 @@ function build_lobby_payload(room)
 end
 
 function maybe_set_lobby_ready(reason, callback)
-	if not (ITGOnline and ITGOnline.SetReady) then
+	if not (ITGOnline and ITGOnline.MaybeAutoConfirmSelectedSongAndMarkLobbyReady) then
 		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
-			.. " cause=no_set_ready_api"
+			.. " cause=no_ready_orchestrator"
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 		if callback then callback(false) end
 		return
@@ -671,78 +671,14 @@ function maybe_set_lobby_ready(reason, callback)
 		return
 	end
 
-	if phase ~= "lobby" and phase ~= "lobby_ready" then
-		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
-			.. " cause=invalid_phase"
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(phase)
-			.. " members=" .. tostring(room and room.members and #room.members or 0))
-		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
-			.. " phase=" .. tostring(phase))
-		if callback then callback(true, { room = room, skipped = true }) end
-		return
-	end
-
-	local function send_lobby_ready(verifiedRoom)
-		local verifiedPhase = tostring(verifiedRoom and verifiedRoom.phase or phase)
-		if verifiedPhase ~= "lobby" and verifiedPhase ~= "lobby_ready" then
-			online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
-				.. " cause=server_phase_changed"
-				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-				.. " localPhase=" .. tostring(phase)
-				.. " serverPhase=" .. tostring(verifiedPhase))
-			if verifiedRoom and ITGOnline.ApplyRoomSnapshot then
-				ITGOnline:ApplyRoomSnapshot(verifiedRoom, "lobby_ready_server_phase_changed")
-			end
-			if ITGOnline.EnforceRoomPhaseScreen then ITGOnline:EnforceRoomPhaseScreen() end
-			if callback then callback(true, { room = verifiedRoom or room, skipped = true, reason = "server_phase_changed" }) end
-			return
-		end
-
-		online_flow_trace("lobby_ready_request reason=" .. tostring(reason or "unknown")
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(verifiedPhase)
-			.. " verified=" .. tostring(verifiedRoom ~= nil))
-		ITGOnline:SetReady("lobby_ready", true, callback)
-	end
-
-	if ITGOnline.IsCurrentUserReadyInRoom and ITGOnline:IsCurrentUserReadyInRoom(room) then
-		online_flow_trace("lobby_ready_skipped reason=" .. tostring(reason or "unknown")
-			.. " cause=already_ready"
-			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(phase))
-		ready_debug("skip lobby_ready reason=" .. tostring(reason or "unknown")
-			.. " already_ready=1")
-		if callback then callback(true, { room = room, skipped = true }) end
-		return
-	end
-
-	if ITGOnline.FetchRoom and ITGOnline.currentRoomId then
-		local verifyRoomId = ITGOnline.currentRoomId
-		online_flow_trace("lobby_ready_verify_server_phase reason=" .. tostring(reason or "unknown")
-			.. " room=" .. tostring(verifyRoomId)
-			.. " localPhase=" .. tostring(phase))
-		ITGOnline:FetchRoom(verifyRoomId, function(ok, decoded)
-			if not online_room_ids_match(ITGOnline and ITGOnline.currentRoomId, verifyRoomId) then
-				online_flow_trace("lobby_ready_verify_ignored reason=room_changed"
-					.. " expected=" .. tostring(verifyRoomId)
-					.. " current=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-				if callback then callback(false, { skipped = true, reason = "room_changed" }) end
-				return
-			end
-			if ok and decoded and decoded.room then
-				send_lobby_ready(decoded.room)
-				return
-			end
-			online_flow_trace("lobby_ready_verify_failed reason=" .. tostring(reason or "unknown")
-				.. " room=" .. tostring(verifyRoomId)
-				.. " localPhase=" .. tostring(phase))
-			send_lobby_ready(nil)
-		end)
-		return
-	end
-
-	send_lobby_ready(nil)
+	online_flow_trace("lobby_ready_orchestrated reason=" .. tostring(reason or "unknown")
+		.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(phase))
+	ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(
+		room,
+		"helper:" .. tostring(reason or "unknown"),
+		callback
+	)
 end
 
 function maybe_preview_current_online_song(force)
@@ -1665,6 +1601,13 @@ ReturnToOnlineLobbyFromMusicSelect = function()
 	local topScreen = current_top_screen()
 	if not topScreen or topScreen:GetName() ~= "ScreenSelectMusic" then return false end
 	if not current_room_is_active({ requireMember = false, requireUser = false }) then return false end
+	if topScreen.IsMusicSelectionFinalized and topScreen:IsMusicSelectionFinalized() then
+		online_flow_trace("music_select_return_blocked reason=native_music_selection_finalized"
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " selectionTransition=" .. tostring(ITGOnline
+				and ITGOnline.songSelectionTransitionKind or ""))
+		return true
+	end
 	if topScreen.IsTransitioning and topScreen:IsTransitioning() then
 		online_flow_trace("music_select_return_blocked reason=screen_transition_in_progress"
 			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -1747,6 +1690,9 @@ SelectMusicInputHandler = function(event)
 
 	if event.GameButton == "Back" or string.find(deviceButton, "backspace", 1, true) then
 		local topScreen = current_top_screen()
+		local selectionFinalized = topScreen
+			and topScreen.IsMusicSelectionFinalized
+			and topScreen:IsMusicSelectionFinalized()
 		local transitioning = topScreen and topScreen.IsTransitioning
 			and topScreen:IsTransitioning()
 		local selectionCommitInProgress = ITGOnline and (
@@ -1755,11 +1701,13 @@ SelectMusicInputHandler = function(event)
 			or (ITGOnline.IsSongSelectionTransitionLocked
 				and ITGOnline:IsSongSelectionTransitionLocked("music_select_input_back"))
 		)
-		if transitioning or selectionCommitInProgress then
+		if selectionFinalized or transitioning or selectionCommitInProgress then
 			online_flow_trace("music_select_back_consumed"
-				.. " reason=" .. tostring(transitioning
-					and "screen_transition_in_progress"
-					or "song_selection_commit_in_progress")
+				.. " reason=" .. tostring(selectionFinalized
+					and "native_music_selection_finalized"
+					or (transitioning
+						and "screen_transition_in_progress"
+						or "song_selection_commit_in_progress"))
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " pendingKey=" .. tostring(pendingOnlineSongSelectionKey or "")
 				.. " selectionKey=" .. tostring(ITGOnline
@@ -2428,91 +2376,76 @@ DisplayLobbyState = function(data, actor)
 		lines[#lines+1] = ""
 	end
 
-		if data.songInfo ~= nil then
-			local songKey = OnlineSongKey(data)
-			local shouldApplyInLobby = (data.phase == "lobby_ready" or data.phase == "config")
-				and CurrentUserInLobbyState(data)
-				if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
-					local redirectKey, redirectKeyValid = current_online_options_redirect_key()
-					if redirectKeyValid and redirectKey ~= onlineOptionsRedirectedSelectionKey then
-						reset_online_options_redirect_guard("display_lobby_new_selection")
+	if data.songInfo ~= nil then
+		local songKey = OnlineSongKey(data)
+		local shouldApplyInLobby = (data.phase == "lobby_ready" or data.phase == "config")
+			and CurrentUserInLobbyState(data)
+		if shouldApplyInLobby and songKey ~= "" and songKey ~= lastOnlineOptionsSongKey then
+			local redirectKey, redirectKeyValid = current_online_options_redirect_key()
+			if redirectKeyValid and redirectKey ~= onlineOptionsRedirectedSelectionKey then
+				reset_online_options_redirect_guard("display_lobby_new_selection")
+			end
+			online_flow_trace("song_selection_apply_decision"
+				.. " screen=" .. tostring(screenName)
+				.. " phase=" .. tostring(data.phase)
+				.. " songKey=" .. tostring(songKey)
+				.. " lastOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey)
+				.. " redirectKey=" .. tostring(redirectKey)
+				.. " redirectKeyValid=" .. tostring(redirectKeyValid == true)
+				.. " redirectedKey=" .. tostring(onlineOptionsRedirectedSelectionKey)
+				.. " shouldApplyInLobby=" .. tostring(shouldApplyInLobby == true))
+			if is_evaluation_screen(screenName) then
+				online_flow_trace("song_selection_apply_from_evaluation"
+					.. " screen=" .. tostring(screenName)
+					.. " phase=" .. tostring(data.phase)
+					.. " key=" .. tostring(songKey))
+				if ApplyOnlineSongSelection(data.songInfo) then
+					if data.phase == "lobby_ready" then
+						online_flow_trace("transition_to_options_deferred reason=evaluation_lobby_ready_waiting_for_config"
+							.. " key=" .. tostring(songKey)
+							.. " room=" .. tostring(data.roomId or data.id or "nil"))
+						local availabilityContext = room_context_token(
+							"evaluation_song_available"
+						)
+						maybe_set_lobby_ready("evaluation_local_song_available", function(ok)
+							if not room_context_still_active(
+								availabilityContext,
+								{ phase = { "lobby_ready", "config" }, payload = data }
+							) then
+								online_flow_trace(
+									"song_ready_callback_ignored reason=stale_context key="
+										.. tostring(songKey)
+								)
+								return
+							end
+							if ok and ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+								ITGOnline:EnforceRoomPhaseScreen(screenName)
+							end
+						end)
+					else
+						lastOnlineOptionsSongKey = songKey
+						if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
+							ITGOnline:EnforceRoomPhaseScreen(screenName)
+						end
 					end
-					online_flow_trace("song_selection_apply_decision"
-						.. " screen=" .. tostring(screenName)
-						.. " phase=" .. tostring(data.phase)
-						.. " songKey=" .. tostring(songKey)
-						.. " lastOptionsSongKey=" .. tostring(lastOnlineOptionsSongKey)
-						.. " redirectKey=" .. tostring(redirectKey)
-						.. " redirectKeyValid=" .. tostring(redirectKeyValid == true)
-						.. " redirectedKey=" .. tostring(onlineOptionsRedirectedSelectionKey)
-						.. " shouldApplyInLobby=" .. tostring(shouldApplyInLobby == true))
-					if is_evaluation_screen(screenName) then
-					online_flow_trace("song_selection_apply_from_evaluation"
+				else
+					online_flow_trace("song_selection_apply_deferred reason=evaluation_missing_or_downloading"
 						.. " screen=" .. tostring(screenName)
 						.. " phase=" .. tostring(data.phase)
 						.. " key=" .. tostring(songKey))
-					if ApplyOnlineSongSelection(data.songInfo) then
-						if data.phase == "lobby_ready" then
-							online_flow_trace("transition_to_options_deferred reason=evaluation_lobby_ready_waiting_for_config"
-								.. " key=" .. tostring(songKey)
-								.. " room=" .. tostring(data.roomId or data.id or "nil"))
-								local availabilityContext = room_context_token("evaluation_song_available")
-								if ITGOnline.ConfirmSelectedSongAvailability then
-									ITGOnline:ConfirmSelectedSongAvailability("evaluation_local_song_available", function(ok)
-										if not room_context_still_active(availabilityContext, { phase = { "lobby_ready", "config" }, payload = data }) then
-											online_flow_trace("song_availability_callback_ignored reason=stale_context key=" .. tostring(songKey))
-											return
-										end
-										if ok then
-											maybe_set_lobby_ready("evaluation_local_song_available")
-											if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-											ITGOnline:EnforceRoomPhaseScreen(screenName)
-										end
-									end
-								end)
-							else
-								maybe_set_lobby_ready("evaluation_local_song_available")
-								if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-									ITGOnline:EnforceRoomPhaseScreen(screenName)
-								end
-							end
-						else
-							lastOnlineOptionsSongKey = songKey
-							if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
-								ITGOnline:EnforceRoomPhaseScreen(screenName)
-							end
-						end
-					else
-						online_flow_trace("song_selection_apply_deferred reason=evaluation_missing_or_downloading"
-							.. " screen=" .. tostring(screenName)
-							.. " phase=" .. tostring(data.phase)
-							.. " key=" .. tostring(songKey))
-					end
-				elseif ApplyOnlineSongSelection(data.songInfo) then
-					if data.phase == "lobby_ready" then
-						online_flow_trace("transition_to_options_deferred reason=lobby_ready_waiting_for_config"
-							.. " key=" .. tostring(songKey)
-							.. " room=" .. tostring(data.roomId or data.id or "nil"))
-							local availabilityContext = room_context_token("local_song_available")
-							if ITGOnline.ConfirmSelectedSongAvailability then
-								ITGOnline:ConfirmSelectedSongAvailability("local_song_available", function(ok)
-									if not room_context_still_active(availabilityContext, { phase = { "lobby_ready", "config" }, payload = data }) then
-										online_flow_trace("song_availability_callback_ignored reason=stale_context key=" .. tostring(songKey))
-										return
-									end
-									if ok then
-										maybe_set_lobby_ready("local_song_available")
-									end
-							end)
-						else
-							maybe_set_lobby_ready("local_song_available")
-						end
-					else
-						lastOnlineOptionsSongKey = songKey
-						TransitionToOnlineOptions()
-					end
+				end
+			elseif ApplyOnlineSongSelection(data.songInfo) then
+				if data.phase == "lobby_ready" then
+					online_flow_trace("transition_to_options_deferred reason=lobby_ready_waiting_for_config"
+						.. " key=" .. tostring(songKey)
+						.. " room=" .. tostring(data.roomId or data.id or "nil"))
+					maybe_set_lobby_ready("local_song_available")
+				else
+					lastOnlineOptionsSongKey = songKey
+					TransitionToOnlineOptions()
 				end
 			end
+		end
 
 		if not songSelected then
 			local topScreen = current_top_screen()
@@ -2531,27 +2464,27 @@ DisplayLobbyState = function(data, actor)
 				end
 			end
 		else
-      -- Only display the song in ScreenSelectMusic so that players know
-      -- which songs they may need to navigate to.
-      if screenName == "ScreenSelectMusic" then
-        -- Split the song path into pack and song name for easier reading.
-        -- It looks like "<pack>/<song>" so we can just split on the first "/"
-        local pack, song = split_online_song_path(data.songInfo.songPath)
-		pack = pack or online_lobby_text("UnknownPack", "Unknown pack")
-		song = song or online_lobby_text("UnknownSong", "Unknown song")
+			-- Only display the song in ScreenSelectMusic so that players know
+			-- which songs they may need to navigate to.
+			if screenName == "ScreenSelectMusic" then
+				-- Split the song path into pack and song name for easier reading.
+				-- It looks like "<pack>/<song>" so we can just split on the first "/".
+				local pack, song = split_online_song_path(data.songInfo.songPath)
+				pack = pack or online_lobby_text("UnknownPack", "Unknown pack")
+				song = song or online_lobby_text("UnknownSong", "Unknown song")
 
-        -- Sometimes the pack or song can get quite long, so add ... if it's too long.
-        local maxLength = 30
-        if #pack > maxLength then
-          pack = string.sub(pack, 1, maxLength) .. "..."
-        end
-        if #song > maxLength then
-          song = string.sub(song, 1, maxLength) .. "..."
-        end
+				-- Sometimes the pack or song can get quite long, so add ... if it's too long.
+				local maxLength = 30
+				if #pack > maxLength then
+					pack = string.sub(pack, 1, maxLength) .. "..."
+				end
+				if #song > maxLength then
+					song = string.sub(song, 1, maxLength) .. "..."
+				end
 
-		lines[#lines+1] = online_lobby_text("PackValue", "Pack: %s", pack)
-		lines[#lines+1] = online_lobby_text("SongValue", "Song: %s", song)
-      end
+				lines[#lines+1] = online_lobby_text("PackValue", "Pack: %s", pack)
+				lines[#lines+1] = online_lobby_text("SongValue", "Song: %s", song)
+			end
 		end
 	end
 

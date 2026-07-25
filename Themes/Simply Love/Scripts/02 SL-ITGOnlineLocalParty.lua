@@ -91,4 +91,8 @@ function Party.should_fan_out_companion_not_ready(plan, isReady, companionReadyA
 		and isReady ~= true
 end
 
+function Party.companion_score_is_terminal(finalAccepted, roomHasFinalResult)
+	return finalAccepted == true or roomHasFinalResult == true
+end
+
 return Party

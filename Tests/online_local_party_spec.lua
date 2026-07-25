@@ -52,6 +52,12 @@ equal(party.should_fan_out_companion_not_ready(versus, false, false), true,
 	"clearing readiness must be propagated to P2")
 equal(party.should_fan_out_companion_not_ready(versus, false, true), false,
 	"readiness fan-out must remain single-shot")
+equal(party.companion_score_is_terminal(false, false), false,
+	"a live companion score must remain sendable before finalization")
+equal(party.companion_score_is_terminal(true, false), true,
+	"an accepted companion final must suppress every later score")
+equal(party.companion_score_is_terminal(false, true), true,
+	"an authoritative room final must suppress every later score")
 equal(lobbyPresentation.text("MissingTranslation", "Fallback"), "Fallback",
 	"lobby presentation must preserve safe translation fallbacks")
 equal(lobbyModel.joined_player_stable_key({ playerId = 42 }), "id:42",
@@ -137,6 +143,8 @@ assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
 	"client must expose an isolated Player 2 score pipeline")
 assert(clientSource:find("onlineStateTraceThrottle", 1, true),
 	"high-frequency state tracing must be throttled without disabling online diagnostics")
+assert(clientSource:find('"rv:" .. tostring(roomVersion or 0)', 1, true),
+	"versioned room snapshots must avoid recursive whole-payload fingerprints")
 assert(clientSource:find("options_room_snapshot_authoritative", 1, true),
 	"the options screen must not refresh the whole lobby from a room-scoped realtime update")
 assert(clientSource:find("function ITGOnline:ConnectLocalPlayerPartyWebSockets", 1, true),
@@ -190,6 +198,10 @@ assert(companionScoreSource:find("companion_final_score_dispatch", 1, true),
 	"the queued Player 2 final score must be dispatched as soon as the live request completes")
 assert(companionScoreSource:find("state.pendingFinalCallbacks", 1, true),
 	"all callers waiting for the queued Player 2 final score must be completed")
+assert(companionScoreSource:find("IsCompanionScoreFinalizedForCurrentRound", 1, true),
+	"live and final Player 2 scores must stop after final acceptance")
+assert(clientSource:find("companion_score_suppressed reason=final_already_accepted", 1, true),
+	"suppression of post-final Player 2 score traffic must remain diagnosable")
 local localFailureStart = assert(
 	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", 1, true),
 	"early failure finalization must route by local player identity")
@@ -244,6 +256,10 @@ assert(autoReadySource:find("self:ConfirmSelectedSongAvailability", 1, true),
 	"readiness must begin with the local availability barrier")
 assert(autoReadySource:find('self:SetReady("lobby_ready", true', 1, true),
 	"a successful availability barrier must progress to ready")
+assert(autoReadySource:find("songSelectedAutoReadyInFlightCallbacks", 1, true),
+	"every caller for one selected-song round must join the same ready transaction")
+assert(autoReadySource:find("ready_snapshot_applied_by_availability", 1, true),
+	"an authoritative ready snapshot must prevent a duplicate ready request")
 assert(not autoReadySource:find("CurrentUserConfirmedSelectedSong", 1, true),
 	"a stale room snapshot must not prevent a ready request after availability succeeds")
 assert(not autoReadySource:find("local_party_room_incomplete", 1, true),
@@ -254,6 +270,22 @@ local selectionAutoReady = assert(clientSource:find('"song_selection_stabilized"
 	"song selection must restart auto-readiness after the round reset")
 assert(selectionReset < selectionAutoReady,
 	"song selection must reset round state before starting availability")
+assert(clientSource:find("reason=caller_owns_ready_orchestration", 1, true),
+	"the manager selection wrapper must be the sole ready orchestrator")
+assert(clientSource:find("end, { autoReady = false })", 1, true),
+	"the manager wrapper must suppress the lower-level duplicate auto-ready flow")
+assert(clientSource:find("song_availability_callbacks_ignored reason=stale_barrier", 1, true),
+	"an obsolete availability response must not consume a newer selection's callbacks")
+assert(clientSource:find("song_availability_context_invalidated", 1, true),
+	"availability invalidation must release queued callers")
+assert(clientSource:find("songSelectedAutoReadyGeneration", 1, true),
+	"stale availability callbacks must not complete a newer ready transaction")
+assert(clientSource:find("song_availability_join_inflight_context", 1, true),
+	"duplicate availability callers must coalesce before recomputing local chart hashes")
+assert(clientSource:find("song_availability_skipped reason=already_reported_context", 1, true),
+	"an acknowledged selection must skip repeated local chart hash work")
+assert(clientSource:find("companion_song_availability_response_ignored", 1, true),
+	"an obsolete Player 2 availability response must not restore a stale room snapshot")
 assert(clientSource:find("function ITGOnline:AcceptInvitationForLocalPlayer", 1, true),
 	"an invitation addressed to either local player must be answerable")
 assert(clientSource:find("companion_invitation_forwarded", 1, true),
@@ -285,11 +317,44 @@ assert(lobbySource:find("ITGOnlineLobbyPresentation.text", 1, true),
 assert(lobbySource:find("ITGOnlineLobbyModel.online_lobby_state_signature", 1, true),
 	"stable lobby view-model helpers must stay outside the overlay chunk")
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
+local onlinePackSyncSource = read_source("Themes/Simply Love/Scripts/SL-OnlinePackSync.lua")
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
+local themeMetricsSource = read_source("Themes/Simply Love/metrics.ini")
+local onlineLobbyMetrics = ini_section(themeMetricsSource, "ScreenOnlineLobbies")
+assert(tostring(onlineLobbyMetrics.PrepareScreens or ""):find("ScreenSelectMusic", 1, true),
+	"online lobby initialization must preload the expensive music screen")
+assert(tostring(onlineLobbyMetrics.PersistScreens or ""):find("ScreenSelectMusic", 1, true),
+	"the online music screen must be reused between rounds")
+assert(tostring(onlineLobbyMetrics.PersistScreens or ""):find("ScreenPlayerOptions", 1, true),
+	"the online options screen must be reused after its first load")
+assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),
+	"online gameplay must not discard prepared selection and options screens")
 assert(not clientSource:find("function ITGOnline:MaybeAutoReadyManager", 1, true),
 	"the manager must not run a second readiness orchestrator")
 assert(not onlineHelpersSource:find("OnlineManagerAutoReadyRetryRequested", 1, true),
 	"the obsolete manager ready retry handler must be removed")
+local helperReadyStart = assert(onlineHelpersSource:find("function maybe_set_lobby_ready", 1, true),
+	"online screens must expose a single ready delegation helper")
+local helperReadyEnd = assert(onlineHelpersSource:find("function maybe_preview_current_online_song", helperReadyStart, true),
+	"ready delegation helper boundary must remain identifiable")
+local helperReadySource = onlineHelpersSource:sub(helperReadyStart, helperReadyEnd - 1)
+assert(helperReadySource:find("MaybeAutoConfirmSelectedSongAndMarkLobbyReady", 1, true),
+	"screen-level ready requests must delegate to the client orchestrator")
+assert(not helperReadySource:find("ITGOnline:SetReady", 1, true),
+	"screen-level ready requests must not bypass the client orchestrator")
+local packReadyStart = assert(onlinePackSyncSource:find("function PackSync:MarkLobbyReadyForSelectedSong", 1, true),
+	"pack synchronization must expose selected-song readiness")
+local packReadyEnd = assert(onlinePackSyncSource:find("-- External catalogue lookup", packReadyStart, true),
+	"pack readiness boundary must remain identifiable")
+local packReadySource = onlinePackSyncSource:sub(packReadyStart, packReadyEnd - 1)
+assert(packReadySource:find("MaybeAutoConfirmSelectedSongAndMarkLobbyReady", 1, true),
+	"pack synchronization must join the client ready transaction")
+assert(not packReadySource:find("ITGOnline:SetReady", 1, true),
+	"pack synchronization must not issue an independent lobby-ready request")
+assert(onlinePackSyncSource:find("apply_selected_chart_cached", 1, true),
+	"repeated room snapshots must not rescan and rehash an already applied local chart")
+assert(onlinePackSyncSource:find("localSongLibraryFingerprintCount == #songs", 1, true),
+	"the unchanged local song library must reuse its directory fingerprint")
 assert(lobbySource:find("local_companion_read_only", 1, true),
 	"Player 2 lobby controls must remain read-only")
 assert(lobbySource:find("user.isLocalCompanion", 1, true),
@@ -348,14 +413,26 @@ assert(versusStepStatisticsSource:find("online_step_statistics_suppressed", 1, t
 
 assert(onlineHelpersSource:find("music_select_back_consumed", 1, true),
 	"Back must be consumed while the selected-song screen is already transitioning")
+assert(onlineHelpersSource:find("native_music_selection_finalized", 1, true),
+	"Back must be consumed from the native finalized-selection state")
 assert(onlineHelpersSource:find("song_selection_commit_in_progress", 1, true),
 	"Back must not race an in-flight online song-selection commit")
 assert(onlineHelpersSource:find("screen:SetInputCallbacksHandleBeforeScreen(true)", 1, true),
 	"the online music-selection guard must run before the native Back handler")
+local selectMusicHeaderSource = read_source("src/ScreenSelectMusic.h")
+local selectMusicNativeSource = read_source("src/ScreenSelectMusic.cpp")
+assert(selectMusicHeaderSource:find("IsMusicSelectionFinalized", 1, true),
+	"the native finalized-selection state must be exposed to the online guard")
+assert(selectMusicNativeSource:find("if (!m_Out.IsWaiting())", 1, true),
+	"a non-reusable outgoing transition must use the direct lobby fallback")
+assert(selectMusicNativeSource:find('SCREENMAN->SetNewScreen("ScreenOnlineLobbies")', 1, true),
+	"the black-screen guard must have a deterministic lobby fallback")
 assert(onlineHelpersSource:find("song_preview_deferred reason=screen_generation_not_committed", 1, true),
 	"the initial song preview must wait for the music-selection screen generation")
 assert(clientSource:find("realtime_transport_frame:", 1, true),
 	"transport keepalive logs must be aggregated without disabling online diagnostics")
+assert(clientSource:find("realtime_event_apply:server.ping", 1, true),
+	"successful server ping application logs must be throttled")
 assert(clientSource:find("staleFinalCallbacks", 1, true),
 	"stale companion score responses must release queued final callbacks")
 assert(clientSource:find("if previous", 1, true),
@@ -375,6 +452,14 @@ assert(gameLoopSource:find("kCriticalFrameHitchSeconds", 1, true),
 assert(gameLoopSource:find("if (!PerfTraceRateLimit(nowUsec))", 1, true),
 	"always-on hitch diagnostics must remain rate-limited")
 
+local rageDisplaySource = read_source("src/RageDisplay.cpp")
+assert(not rageDisplaySource:find(
+	"std::max<uint64_t>(wakeUsec - nowUsec, 10000)", 1, true
+), "background frame pacing must not overshoot high-refresh deadlines")
+assert(rageDisplaySource:find(
+	"Background throttling must lower the target rate", 1, true
+), "background frame pacing must preserve deadline ownership")
+
 local messageManagerSource = read_source("src/MessageManager.cpp")
 assert(not messageManagerSource:find("LOG->Flush()", 1, true),
 	"verbose online message traces must not force synchronous disk flushes")
@@ -386,6 +471,16 @@ assert(perfDiagnosticsSource:find("kRefreshIntervalSeconds = 30", 1, true),
 	"online diagnostic preferences must not poll the filesystem every frame")
 assert(perfDiagnosticsSource:find("OnlineNetworkDiagnosticsEnabled", 1, true),
 	"native online diagnostics must share one cached preference")
+local metalPresenterSource = read_source(
+	"src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
+)
+assert(metalPresenterSource:find(
+	"layer.displaySyncEnabled = impl->displaySyncEnabled ? YES : NO", 1, true
+), "Metal layer display sync must follow the configured Vsync mode")
+assert(not metalPresenterSource:find("afterMinimumDuration:", 1, true),
+	"Metal presentation must not add a second frame-duration limiter")
+assert(metalPresenterSource:find("pacing_owner=engine", 1, true),
+	"Metal cadence ownership must remain explicit in runtime diagnostics")
 
 local rankingSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Shared/OnlineFinalRanking.lua"

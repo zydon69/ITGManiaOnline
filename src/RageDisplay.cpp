@@ -843,8 +843,14 @@ static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
 
   if (!appHasFocus) {
     if (wakeUsec > nowUsec) {
-      const uint64_t requestedUsec =
-          std::max<uint64_t>(wakeUsec - nowUsec, 10000);
+      /*
+       * The frame-pacing deadline remains authoritative while unfocused.
+       * Extending a short wait to 10 ms overshoots every 120 Hz deadline
+       * (8.33 ms per frame) and caps the renderer near 70-80 FPS once render
+       * time is included.  Background throttling must lower the target rate;
+       * this wait must never sleep beyond the already selected wake time.
+       */
+      const uint64_t requestedUsec = wakeUsec - nowUsec;
       const uint64_t sleepStartUsec = nowUsec;
       FramePacingWaitUntilUsec(nowUsec + requestedUsec);
       nowUsec = RageTimer::GetTimeSinceStartMicroseconds();

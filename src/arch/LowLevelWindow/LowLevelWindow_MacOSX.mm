@@ -2092,13 +2092,15 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
-            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
+            m_CurrentParams.vsync);
       } else {
         dispatch_sync(dispatch_get_main_queue(), ^{
           m_MetalPresenter->Initialize(
               (void*)delegate->m_Window, m_CurrentParams.width,
               m_CurrentParams.height,
-              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
+              m_CurrentParams.vsync);
         });
       }
       const float initMs = initTimer.GetDeltaTime() * 1000.0f;
@@ -2857,13 +2859,15 @@ void LowLevelWindow_MacOSX::Update() {
         m_MetalPresenter->Initialize(
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
-            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+            EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
+            m_CurrentParams.vsync);
       } else {
         dispatch_sync(dispatch_get_main_queue(), ^{
           m_MetalPresenter->Initialize(
               (void*)delegate->m_Window, m_CurrentParams.width,
               m_CurrentParams.height,
-              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true);
+              EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
+              m_CurrentParams.vsync);
         });
       }
       if (m_MetalPresenter->IsInteropReady()) {

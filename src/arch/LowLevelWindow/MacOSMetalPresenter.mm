@@ -481,6 +481,7 @@ struct MacOSMetalPresenterImpl {
   bool interopReady = false;
   bool layerOwnsContentView = false;
   bool loggedFirstDirectPresent = false;
+  bool displaySyncEnabled = true;
   std::atomic_bool layerVisible { true };
 };
 
@@ -666,7 +667,7 @@ void ConfigureMetalLayer(
   // displays and made otherwise identical Metal output look grey.
   layer.colorspace = nil;
   layer.framebufferOnly = YES;
-  layer.displaySyncEnabled = YES;
+  layer.displaySyncEnabled = impl->displaySyncEnabled ? YES : NO;
   layer.allowsNextDrawableTimeout = YES;
   layer.maximumDrawableCount = 3;
   layer.frame = bounds;
@@ -1917,7 +1918,7 @@ MacOSMetalPresenter::~MacOSMetalPresenter() {
 
 bool MacOSMetalPresenter::Initialize(
     void* nsWindow, int width, int height, double targetHz,
-    bool createInteropSurfaces) {
+    bool createInteropSurfaces, bool displaySyncEnabled) {
   RageTimer initTimer;
   Shutdown();
   ResetMetalRuntimeStats();
@@ -1925,6 +1926,7 @@ bool MacOSMetalPresenter::Initialize(
       0, std::memory_order_release);
 
   MacOSMetalPresenterImpl* impl = new MacOSMetalPresenterImpl();
+  impl->displaySyncEnabled = displaySyncEnabled;
   impl->surfaceBusy = std::make_shared<MacOSMetalSurfaceBusyFlags>();
   impl->device = MTLCreateSystemDefaultDevice();
   if (impl->device == nil) {
@@ -2237,12 +2239,13 @@ bool MacOSMetalPresenter::Initialize(
       "MacOS Metal presenter initialized: device='%s' target_hz=%.3f "
       "requested_size=%dx%d layer_size=%dx%d attached=0 "
       "iosurface_ring=%d iosurface_count=%d drawable_prefetch=%d "
-      "total_ms=%.3f",
+      "display_sync=%d pacing_owner=engine total_ms=%.3f",
       [[impl->device name] UTF8String], targetHz, width, height,
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
       impl->interopReady ? 1 : 0,
       createInteropSurfaces ? kMetalInteropSurfaceCount : 0,
       impl->useDrawablePrefetch ? 1 : 0,
+      impl->displaySyncEnabled ? 1 : 0,
       initTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
@@ -2927,14 +2930,13 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
   [encoder endEncoding];
 
-  const double minimumDuration =
-      targetHz > 1.0 ? (1.0 / targetHz) : (1.0 / 60.0);
-  if (@available(macOS 10.15, *)) {
-    [commandBuffer presentDrawable:drawable
-               afterMinimumDuration:minimumDuration];
-  } else {
-    [commandBuffer presentDrawable:drawable];
-  }
+  /*
+   * RageDisplay owns cadence through FrameLimitBeforeVsync.  Asking Metal to
+   * enforce a second frame duration creates an independent cadence owner and
+   * makes the effective presentation rate depend on drawable queue timing.
+   */
+  const double minimumDuration = 0.0;
+  [commandBuffer presentDrawable:drawable];
 
   const uint64_t frameIndex = ++impl->offscreenPresentSubmittedFrames;
   g_iMetalOffscreenPresentSubmittedFrames.store(
@@ -3840,14 +3842,9 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
   [encoder endEncoding];
 
-  const double minimumDuration =
-      targetHz > 1.0 ? (1.0 / targetHz) : (1.0 / 60.0);
-  if (@available(macOS 10.15, *)) {
-    [commandBuffer presentDrawable:drawable
-               afterMinimumDuration:minimumDuration];
-  } else {
-    [commandBuffer presentDrawable:drawable];
-  }
+  // OpenGL's display path already owns cadence through the shared frame pacer.
+  const double minimumDuration = 0.0;
+  [commandBuffer presentDrawable:drawable];
   const uint64_t frameIndex =
       g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
   const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();

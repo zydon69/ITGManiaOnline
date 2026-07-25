@@ -117,7 +117,7 @@ class MacOSMetalPresenter {
 
   bool Initialize(
       void* nsWindow, int width, int height, double targetHz,
-      bool createInteropSurfaces = true);
+      bool createInteropSurfaces = true, bool displaySyncEnabled = true);
   void Shutdown();
 
   bool IsAvailable() const;

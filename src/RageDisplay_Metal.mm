@@ -2457,7 +2457,8 @@ std::string RageDisplay_Metal::TryVideoMode(
         MetalDisplayPacingTargetHz(m_Presenter, m_Params, pacingRefreshRate);
     if (!m_Presenter->Initialize(
             nativeWindow, std::max(1, m_Params.width),
-            std::max(1, m_Params.height), targetHz, false)) {
+            std::max(1, m_Params.height), targetHz, false,
+            m_Params.vsync)) {
       if (failureOut != nullptr) {
         *failureOut = m_Presenter->FailureReason().empty()
                           ? "Native Metal presenter initialization failed."
