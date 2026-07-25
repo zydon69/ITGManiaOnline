@@ -5553,10 +5553,37 @@ function ITGOnline:ApplyDecodedRoomSnapshot(decoded, source)
 		return nil, decoded.error_code
 	end
 	decoded.room = room
-	if self:IsLocalTwoPlayerSession() and self.SynchronizeCompanionRoom then
+	if self:ShouldSynchronizeCompanionRoomAfterSnapshot(room, source) then
 		self:SynchronizeCompanionRoom(room, source)
 	end
 	return room
+end
+
+-- A room snapshot is emitted for every state update (ready flags, scores,
+-- presence, etc.).  It must not be treated as a request to re-join P2: a
+-- delayed or partial snapshot would otherwise turn a harmless refresh into a
+-- destructive group leave.  Companion membership is reconciled only after an
+-- operation that intentionally establishes or restores the local party room.
+function ITGOnline:ShouldSynchronizeCompanionRoomAfterSnapshot(room, source)
+	if not self:IsLocalTwoPlayerSession() or self:LocalPartyRoomComplete(room) then
+		return false
+	end
+
+	local reconciliationSources = {
+		create_room = true,
+		join_room = true,
+		fetch_current_room = true,
+		accept_invitation = true,
+		companion_invitation_accepted = true,
+	}
+	local sourceKey = tostring(source or "")
+	local shouldSynchronize = reconciliationSources[sourceKey] == true
+	if not shouldSynchronize then
+		online_flow_trace("local_party_room_sync_deferred reason=non_reconciliation_snapshot"
+			.. " source=" .. sourceKey
+			.. " room=" .. tostring(room and (room.id or room.room_id or room.roomId) or "nil"))
+	end
+	return shouldSynchronize
 end
 
 function ITGOnline:ApplyRoomSnapshot(room, source)
@@ -16508,6 +16535,40 @@ end
 -- Room membership and invitations
 -- -----------------------------------------------------------------------
 
+-- A failed repair is diagnostic information, not proof that the primary
+-- player chose to leave.  In particular, requests may be cancelled during a
+-- screen transition or observe a stale room snapshot.  Keep the authoritative
+-- P1 room intact, surface the failure to observers, and let a later explicit
+-- reconciliation recover P2.
+function ITGOnline:ReportLocalPartyRoomSyncFailure(reason, roomId, source, payload)
+	payload = type(payload) == "table" and payload or {}
+	local roomKey = self:RoomKey(roomId)
+	local failureKey = table.concat({
+		tostring(reason or "unknown"),
+		roomKey,
+		tostring(source or "unknown"),
+		tostring(payload.status or ""),
+		tostring(payload.error_code or ""),
+	}, "|")
+	if self.localPartyRoomSyncFailureKey == failureKey then return end
+	self.localPartyRoomSyncFailureKey = failureKey
+
+	online_flow_trace("local_party_room_sync_deferred"
+		.. " reason=" .. tostring(reason or "unknown")
+		.. " room=" .. tostring(roomKey ~= "" and roomKey or "nil")
+		.. " source=" .. tostring(source or "unknown")
+		.. " localPlayer=" .. tostring(payload.local_player or "P2")
+		.. " status=" .. tostring(payload.status or "nil")
+		.. " error=" .. tostring(payload.error_code or "nil")
+		.. " action=keep_primary_room")
+	safe_broadcast("ITGOnlineLocalPartyRoomSyncFailed", {
+		reason = tostring(reason or "unknown"),
+		roomId = roomId,
+		source = tostring(source or "unknown"),
+		payload = payload,
+	})
+end
+
 function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
 	if not self:IsLocalTwoPlayerSession() then
 		safe_callback(callback, true, room)
@@ -16527,6 +16588,7 @@ function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
 	if self:LocalPartyRoomComplete(room) then
 		self.localPartyRoomSyncInFlightKey = ""
 		self.localPartyRoomSynchronizedId = roomKey
+		self.localPartyRoomSyncFailureKey = ""
 		online_flow_trace("local_party_room_sync_complete room=" .. roomKey
 			.. " source=" .. tostring(source or "unknown")
 			.. " members=" .. tostring(room.members and #room.members or 0))
@@ -16540,8 +16602,8 @@ function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
 		return
 	end
 	if not self:HasActiveAccessTokenForPlayer(companion) then
-		self:HandleLocalPartyInvariantFailure("companion_not_authenticated_for_room_sync", companion, {
-			room_id = roomId,
+		self:ReportLocalPartyRoomSyncFailure("companion_not_authenticated", roomId, source, {
+			local_player = local_player_key(companion),
 		})
 		safe_callback(callback, false, nil, { errorMessage = "Companion player is not authenticated." })
 		return
@@ -16553,8 +16615,8 @@ function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
 			.. " room=" .. roomKey
 			.. " phase=" .. tostring(phase)
 			.. " source=" .. tostring(source or "unknown"))
-		self:HandleLocalPartyInvariantFailure("companion_missing_after_room_started", companion, {
-			room_id = roomId,
+		self:ReportLocalPartyRoomSyncFailure("companion_missing_after_room_started", roomId, source, {
+			local_player = local_player_key(companion),
 			room_phase = phase,
 		})
 		safe_callback(callback, false, nil, { errorMessage = "The room started without the companion player." })
@@ -16598,8 +16660,8 @@ function ITGOnline:SynchronizeCompanionRoom(room, source, callback)
 			and self.currentRoomId
 			and online_room_ids_match(self.currentRoomId, roomId)
 		then
-			self:HandleLocalPartyInvariantFailure("companion_room_sync_failed", PLAYER_2, {
-				room_id = roomId,
+			self:ReportLocalPartyRoomSyncFailure("request_failed", roomId, source, {
+				local_player = local_player_key(PLAYER_2),
 				error_code = decoded and decoded.error_code or nil,
 				status = response and response.statusCode or nil,
 			})
@@ -17626,6 +17688,7 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self.expectedOnlineGameplaySteps = nil
 	self.expectedOnlineGameplayStepsByPlayer = {}
 	self.localPartyRoomSyncInFlightKey = ""
+	self.localPartyRoomSyncFailureKey = ""
 	self.localPartyPendingCompanionRoomId = nil
 	self.localPartyPendingCompanionJoinRequestId = nil
 	self.localPartyInvariantFailureKey = ""

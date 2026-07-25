@@ -91,6 +91,21 @@ assert(clientSource:find("function ITGOnline:RequiredLocalPlayers", 1, true),
 	"critical online requests must use the captured local party")
 assert(clientSource:find("companion_ready_barrier_result", 1, true),
 	"Player 1 ready must wait for the companion ready response")
+assert(clientSource:find("function ITGOnline:ShouldSynchronizeCompanionRoomAfterSnapshot", 1, true),
+	"companion reconciliation must be restricted to intentional room-entry snapshots")
+assert(clientSource:find("reason=non_reconciliation_snapshot", 1, true),
+	"ordinary room refreshes must not rejoin the companion")
+assert(clientSource:find("function ITGOnline:ReportLocalPartyRoomSyncFailure", 1, true),
+	"failed companion reconciliation must remain observable")
+assert(clientSource:find("action=keep_primary_room", 1, true),
+	"a transient companion reconciliation failure must not leave the primary room")
+local syncStart = assert(clientSource:find("function ITGOnline:SynchronizeCompanionRoom", 1, true),
+	"client must expose companion room reconciliation")
+local syncEnd = assert(clientSource:find("function ITGOnline:CreateRoom", syncStart, true),
+	"companion reconciliation boundary must remain identifiable")
+local syncSource = clientSource:sub(syncStart, syncEnd - 1)
+assert(not syncSource:find("HandleLocalPartyInvariantFailure", 1, true),
+	"a failed companion reconciliation must never force a group leave")
 assert(clientSource:find("song_availability_barrier_result", 1, true),
 	"song availability must wait for both local players")
 assert(clientSource:find("function ITGOnline:AcceptInvitationForLocalPlayer", 1, true),
