@@ -28,8 +28,6 @@ local deferredConfigReadyAfterOptionsExit = false
 local pendingOnlineSongSelectionKey = ""
 local pendingOnlineSongSelectionAt = 0
 local pendingOnlineSongSelectionToken = 0
-local pendingManagerAutoReadyRetryKey = ""
-local pendingManagerAutoReadyRetryPhase = ""
 local lastWaitingDebugKey = ""
 local lastFlowLobbyKey = ""
 local replayDeferredLobbyStateQueued = false
@@ -2745,8 +2743,6 @@ end
 		stop_named_timers(actor, { "ConfigReadyRetryTimer" })
 		pendingConfigReady = nil
 		deferredConfigReadyAfterOptionsExit = false
-		pendingManagerAutoReadyRetryKey = ""
-	pendingManagerAutoReadyRetryPhase = ""
 	pendingOnlineStartRoomId = nil
 	lastOnlineGameplayRoomId = nil
 		lastOnlineOptionsSongKey = ""
@@ -3951,45 +3947,6 @@ CreateOnlineHandler = function()
 					end,
 				SongSelectedMessageCommand=function(self)
 					SelectOnlineSongAsManager(self)
-				end,
-				OnlineManagerAutoReadyRetryRequestedMessageCommand=function(self, params)
-					if not (params and params.key) then return end
-					local key = tostring(params.key or "")
-					local readyPhase = tostring(params.readyPhase or params.ready_phase or "lobby_ready")
-					if key == "" then return end
-
-					local retryAfter = tonumber(params.retryAfter or params.retry_after) or 0.25
-					retryAfter = math.min(math.max(retryAfter + 0.05, 0.05), 5)
-					pendingManagerAutoReadyRetryKey = key
-					pendingManagerAutoReadyRetryPhase = readyPhase
-						online_flow_trace("manager_auto_ready_retry_scheduled key=" .. tostring(key)
-							.. " phase=" .. tostring(readyPhase)
-							.. " retry_after=" .. tostring(retryAfter))
-						schedule_named_timer(self, "ManagerAutoReadyRetryTimer", retryAfter, "Fire")
-					end,
-				RetryOnlineManagerAutoReadyCommand=function(self)
-					local key = pendingManagerAutoReadyRetryKey
-					local readyPhase = pendingManagerAutoReadyRetryPhase ~= "" and pendingManagerAutoReadyRetryPhase or "lobby_ready"
-					if key == "" then return end
-					if not (ITGOnline and ITGOnline.currentRoom and ITGOnline.ManagerAutoReadyKey and ITGOnline.MaybeAutoReadyManager) then
-						pendingManagerAutoReadyRetryKey = ""
-						pendingManagerAutoReadyRetryPhase = ""
-						return
-					end
-
-					local currentKey = ITGOnline:ManagerAutoReadyKey(ITGOnline.currentRoom, readyPhase)
-					if currentKey ~= key then
-						online_flow_trace("manager_auto_ready_retry_ignored reason=stale_key expected=" .. tostring(key)
-							.. " current=" .. tostring(currentKey))
-						pendingManagerAutoReadyRetryKey = ""
-						pendingManagerAutoReadyRetryPhase = ""
-						return
-					end
-
-					pendingManagerAutoReadyRetryKey = ""
-					pendingManagerAutoReadyRetryPhase = ""
-					online_flow_trace("manager_auto_ready_retry key=" .. tostring(key))
-					ITGOnline:MaybeAutoReadyManager(ITGOnline.currentRoom)
 				end,
 		      CurrentSongChangedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil then

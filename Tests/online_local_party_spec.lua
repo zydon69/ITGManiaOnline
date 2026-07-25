@@ -71,8 +71,10 @@ local function read_source(relativePath)
 end
 
 local clientSource = read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
-assert(clientSource:find("ITGOnline.forceOnlineFlowLogging = true", 1, true),
-	"online network diagnostics must be enabled in every build")
+assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
+	"new installations must enable online network diagnostics by default")
+assert(not clientSource:find("forceOnlineFlowLogging", 1, true),
+	"online diagnostics must remain a preference after their initial default is applied")
 assert(clientSource:find('["OnlineTrace"] = "true"', 1, true),
 	"new debug configurations must enable the online trace")
 assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
@@ -95,6 +97,36 @@ assert(clientSource:find("function ITGOnline:RequiredLocalPlayers", 1, true),
 	"critical online requests must use the captured local party")
 assert(clientSource:find("companion_ready_barrier_result", 1, true),
 	"Player 1 ready must wait for the companion ready response")
+assert(clientSource:find("companion_ready_snapshot_membership_unconfirmed", 1, true),
+	"a partial local room snapshot must not prevent the companion ready request")
+local companionReadyStart = assert(clientSource:find("function ITGOnline:SetCompanionReady", 1, true),
+	"client must expose the companion ready request")
+local companionReadyEnd = assert(clientSource:find("function ITGOnline:SetReady", companionReadyStart, true),
+	"companion ready boundary must remain identifiable")
+local companionReadySource = clientSource:sub(companionReadyStart, companionReadyEnd - 1)
+assert(not companionReadySource:find("error_code = \"local_party_room_incomplete\"", 1, true),
+	"a stale local snapshot must not reject the companion before the server validates membership")
+local readyStart = assert(clientSource:find("function ITGOnline:SetReady", 1, true),
+	"client must expose the primary ready request")
+local readyEnd = assert(clientSource:find("function ITGOnline:CurrentOnlineOptionSummary", readyStart, true),
+	"primary ready request boundary must remain identifiable")
+local readySource = clientSource:sub(readyStart, readyEnd - 1)
+assert(not readySource:find("CurrentUserConfirmedSelectedSong", 1, true),
+	"a stale local snapshot must not reject the primary ready request")
+local companionScoreStart = assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
+	"client must expose the companion score request")
+local companionScoreEnd = assert(clientSource:find("function ITGOnline:SetCompanionReady", companionScoreStart, true),
+	"companion score request boundary must remain identifiable")
+local companionScoreSource = clientSource:sub(companionScoreStart, companionScoreEnd - 1)
+assert(not companionScoreSource:find("LocalPartyRoomComplete", 1, true),
+	"a stale local snapshot must not suppress Player 2 score delivery")
+local companionLifecycleStart = assert(clientSource:find("function ITGOnline:RequestCompanionLifecycleAction", 1, true),
+	"client must expose the companion lifecycle request")
+local companionLifecycleEnd = assert(clientSource:find("function ITGOnline:MarkPlayEntered", companionLifecycleStart, true),
+	"companion lifecycle request boundary must remain identifiable")
+local companionLifecycleSource = clientSource:sub(companionLifecycleStart, companionLifecycleEnd - 1)
+assert(not companionLifecycleSource:find("LocalPartyRoomComplete", 1, true),
+	"a stale local snapshot must not suppress Player 2 lifecycle delivery")
 assert(clientSource:find("function ITGOnline:ShouldSynchronizeCompanionRoomAfterSnapshot", 1, true),
 	"companion reconciliation must be restricted to intentional room-entry snapshots")
 assert(clientSource:find("reason=non_reconciliation_snapshot", 1, true),
@@ -114,12 +146,23 @@ assert(clientSource:find("song_availability_barrier_result", 1, true),
 	"song availability must wait for both local players")
 assert(clientSource:find("song_selected_auto_ready_deferred", 1, true),
 	"song selection snapshots must defer auto-readiness until the new round is stable")
-assert(clientSource:find("function ITGOnline:RequiredLocalPlayersConfirmedSelectedSong", 1, true),
-	"the lobby-ready barrier must validate both local players")
-assert(clientSource:find("function ITGOnline:RefreshLocalPartyRoomForSongSelectedAutoReady", 1, true),
-	"a partial local-party room snapshot must be refreshed before readiness is abandoned")
-assert(clientSource:find("reason=local_party_room_incomplete", 1, true),
-	"local-party readiness must recover from a transient incomplete room snapshot")
+assert(not clientSource:find("function ITGOnline:RequiredLocalPlayersConfirmedSelectedSong", 1, true),
+	"the client must not treat a possibly stale room snapshot as the availability authority")
+assert(not clientSource:find("function ITGOnline:RefreshLocalPartyRoomForSongSelectedAutoReady", 1, true),
+	"the readiness flow must not be blocked by a one-shot local room refresh")
+local autoReadyStart = assert(clientSource:find("function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady", 1, true),
+	"client must expose the automatic availability and ready flow")
+local autoReadyEnd = assert(clientSource:find("function ITGOnline:ApplyDecodedRoomSnapshot", autoReadyStart, true),
+	"automatic availability and ready flow boundary must remain identifiable")
+local autoReadySource = clientSource:sub(autoReadyStart, autoReadyEnd - 1)
+assert(autoReadySource:find("self:ConfirmSelectedSongAvailability", 1, true),
+	"readiness must begin with the local availability barrier")
+assert(autoReadySource:find('self:SetReady("lobby_ready", true', 1, true),
+	"a successful availability barrier must progress to ready")
+assert(not autoReadySource:find("CurrentUserConfirmedSelectedSong", 1, true),
+	"a stale room snapshot must not prevent a ready request after availability succeeds")
+assert(not autoReadySource:find("local_party_room_incomplete", 1, true),
+	"the ready flow must not retain the obsolete local-party recovery branch")
 local selectionReset = assert(clientSource:find('self:ResetOnlineRoundRuntimeState("song_selection")', 1, true),
 	"song selection must reset the previous round")
 local selectionAutoReady = assert(clientSource:find('"song_selection_stabilized"', selectionReset, true),
@@ -152,6 +195,10 @@ local lobbySource = read_source(
 )
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
+assert(not clientSource:find("function ITGOnline:MaybeAutoReadyManager", 1, true),
+	"the manager must not run a second readiness orchestrator")
+assert(not onlineHelpersSource:find("OnlineManagerAutoReadyRetryRequested", 1, true),
+	"the obsolete manager ready retry handler must be removed")
 assert(lobbySource:find("local_companion_read_only", 1, true),
 	"Player 2 lobby controls must remain read-only")
 assert(lobbySource:find("user.isLocalCompanion", 1, true),
@@ -168,8 +215,8 @@ assert(onlineHelpersSource:find("player.isLocalCompanion == true", 1, true),
 	"joined-room players must identify the local companion")
 assert(clientSource:find("companion_ready_song_hash_recovered", 1, true),
 	"companion readiness must survive the shared options transition")
-assert(clientSource:find("retryAfter = 0.75, error_code = \"local_party_room_incomplete\"", 1, true),
-	"transient local-party readiness failures must be retried")
+assert(clientSource:find("action=server_authoritative_request", 1, true),
+	"the server must validate companion membership when a local room snapshot is incomplete")
 assert(lobbySource:find("online_player_status_label", 1, true),
 	"online player statuses must use localized labels")
 assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),

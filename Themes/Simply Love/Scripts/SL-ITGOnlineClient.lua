@@ -196,8 +196,6 @@ ITGOnline.pendingSongPreviewClears = ITGOnline.pendingSongPreviewClears or {}
 ITGOnline.startScheduleAckKey = ITGOnline.startScheduleAckKey or ""
 ITGOnline.startScheduleAckInFlightKey = ITGOnline.startScheduleAckInFlightKey or ""
 ITGOnline.onlineGameplayEnteredInFlightKey = ITGOnline.onlineGameplayEnteredInFlightKey or ""
-ITGOnline.managerAutoReadyInFlightKey = ITGOnline.managerAutoReadyInFlightKey or ""
-ITGOnline.managerAutoReadyCompletedKey = ITGOnline.managerAutoReadyCompletedKey or ""
 ITGOnline.readyRequestInFlight = ITGOnline.readyRequestInFlight or {}
 ITGOnline.readyRequestLastResult = ITGOnline.readyRequestLastResult or {}
 ITGOnline.readyRequestReplayWindowSeconds = ITGOnline.readyRequestReplayWindowSeconds or 1.0
@@ -286,11 +284,11 @@ ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 ITGOnline.onlineFlowTraceThrottleOrder = ITGOnline.onlineFlowTraceThrottleOrder or {}
 ITGOnline.maxOnlineFlowTraceThrottleKeys = tonumber(ITGOnline.maxOnlineFlowTraceThrottleKeys) or 512
--- Online synchronization is still being exercised across several machines.
--- Keep its redacted network and ready-flow traces enabled in every build so a
--- client-side state divergence is diagnosable without changing local files.
-ITGOnline.forceOnlineFlowLogging = true
-ITGOnline.debugOnlineTrace = ITGOnline.forceOnlineFlowLogging == true
+-- Network-flow diagnostics start enabled for a fresh installation.  They remain
+-- a user preference afterwards, so long-running cabinets can opt out without
+-- editing the game code.
+ITGOnline.onlineFlowLoggingDefaultEnabled = true
+ITGOnline.debugOnlineTrace = ITGOnline.onlineFlowLoggingDefaultEnabled
 	or (type(IsOnlineNetworkLoggingEnabled) == "function"
 		and IsOnlineNetworkLoggingEnabled() == true)
 ITGOnline.debugAuthTrace = type(IsOnlineAuthLoggingEnabled) == "function"
@@ -1034,7 +1032,6 @@ local function ready_flow_trace_message(message)
 	return text:match("^FLOW") ~= nil
 		or text:match("^ITG Online ReadyFlow") ~= nil
 		or text:match("^%[ITGOnline%] ready_") ~= nil
-		or text:match("^manager_auto_ready") ~= nil
 end
 
 local function safe_log_text(value, maxLength)
@@ -1082,7 +1079,6 @@ function ITGOnline:RefreshDebugFlags(force)
 				["OnlineTrace"] = "true",
 				["AuthTrace"] = "false",
 				["ScoreTrace"] = "false",
-				["ReadyFlow"] = "true",
 			}
 		})
 	end
@@ -1095,11 +1091,10 @@ function ITGOnline:RefreshDebugFlags(force)
 		return prefEnabled or value == "true" or value == "1" or value == "yes"
 	end
 
-	self.debugOnlineTrace = self.forceOnlineFlowLogging == true
-		or enabled(IsOnlineNetworkLoggingEnabled, "OnlineTrace")
+	self.debugOnlineTrace = enabled(IsOnlineNetworkLoggingEnabled, "OnlineTrace")
 	self.debugAuthTrace = enabled(IsOnlineAuthLoggingEnabled, "AuthTrace")
 	self.debugScoreTrace = enabled(IsOnlineScoreLoggingEnabled, "ScoreTrace")
-	self.debugReadyFlow = self.debugOnlineTrace or tostring(debugSection.ReadyFlow or ""):lower() == "true"
+	self.debugReadyFlow = self.debugOnlineTrace
 end
 
 local function online_flow_trace(message)
@@ -4006,8 +4001,10 @@ function ITGOnline:IsAuthenticatedUserRoomManager(room)
 end
 
 function ITGOnline:IsCurrentUserRoomManager(room)
-	return self:LocalPartyRoomComplete(room)
-		and self:IsAuthenticatedUserRoomManager(room)
+	-- Membership snapshots are advisory and can temporarily omit P2 while the
+	-- server still recognizes the whole local party.  The manager identity is
+	-- validated again by every privileged endpoint.
+	return self:IsAuthenticatedUserRoomManager(room)
 end
 
 function ITGOnline:RoomMatchesId(room, roomId)
@@ -4168,52 +4165,6 @@ function ITGOnline:CurrentUserConfirmedSelectedSong(room)
 		.. " user=" .. tostring(currentUserId)
 		.. " members=" .. tostring(room.members and #room.members or 0))
 	return false, "member_not_found"
-end
-
--- A local two-player session is one atomic participant in the online flow.
--- Do not let P1 advance the ready barrier from a partial room snapshot while
--- P2 is still being reconciled by the server.
-function ITGOnline:RequiredLocalPlayersConfirmedSelectedSong(room)
-	room = room or self.currentRoom
-	if not self:IsLocalTwoPlayerSession() then
-		return self:CurrentUserConfirmedSelectedSong(room)
-	end
-
-	if not room or not room.selected_song then
-		return false, "song_not_selected"
-	end
-
-	for _, player in ipairs(self:RequiredLocalPlayers()) do
-		local user = self:UserForLocalPlayer(player)
-		local userId = tostring(user and user.id or "")
-		if userId == "" then
-			return false, "local_player_not_authenticated:"
-				.. tostring(self:LocalPlayerKey(player))
-		end
-
-		local matchingMember = nil
-		for member in ivalues(room.members or {}) do
-			local memberUser = type(member.user) == "table" and member.user or {}
-			local memberUserId = member.user_id or member.userId or memberUser.id or member.id
-			if online_protocol_ids_match(memberUserId, userId) then
-				matchingMember = member
-				break
-			end
-		end
-		if not matchingMember then
-			return false, "local_party_member_missing:"
-				.. tostring(self:LocalPlayerKey(player))
-		end
-
-		local available = matchingMember.song_available == true or matchingMember.songAvailable == true
-		local missing = matchingMember.missing_song == true or matchingMember.missingSong == true
-		if not available or missing then
-			return false, "local_party_member_not_confirmed:"
-				.. tostring(self:LocalPlayerKey(player))
-		end
-	end
-
-	return true, "all_local_players_confirmed"
 end
 
 function ITGOnline:OnlineOptionsReadyKey()
@@ -4600,82 +4551,6 @@ function ITGOnline:ExpireOnlineOptionsReady(source, callback)
 	end)
 end
 
-function ITGOnline:ManagerAutoReadyKey(room, readyPhase)
-	return tostring(readyPhase or "") .. "|" .. tostring(self:RoomSongRoundKey(room))
-end
-
-function ITGOnline:MaybeAutoReadyManager(room)
-	room = room or self.currentRoom
-	if not room or not room.id or not self.currentRoomId then return end
-	local currentRoom = self.currentRoom
-	if currentRoom and online_room_ids_match(currentRoom.id or currentRoom.room_id or currentRoom.roomId, room.id or room.room_id or room.roomId) then
-		room = currentRoom
-	end
-	if not self:IsCurrentUserRoomManager(room) then return end
-
-	local normalizedPhase = self:NormalizeRoomPhase(room.phase)
-	local readyPhase = nil
-	if normalizedPhase == "lobby_ready" then
-		readyPhase = "lobby_ready"
-	else
-		return
-	end
-
-	local key = self:ManagerAutoReadyKey(room, readyPhase)
-	if self.managerAutoReadyCompletedKey == key then return end
-	if self:IsCurrentUserReadyInRoom(room, readyPhase) then
-		self.managerAutoReadyCompletedKey = key
-		online_trace("manager_auto_ready skipped: already ready [" .. key .. "]")
-		return
-	end
-	if self.managerAutoReadyInFlightKey == key then return end
-
-	if self.managerAutoReadyDeferredKey == key then
-		online_flow_trace("manager_auto_ready_unblocked reason=own_ready_allowed key=" .. tostring(key))
-		self.managerAutoReadyDeferredKey = ""
-	end
-
-	self.managerAutoReadyInFlightKey = key
-	online_trace("manager_auto_ready sending phase=" .. tostring(readyPhase) .. " key=" .. key)
-	self:SetReady(readyPhase, true, function(ok, decoded)
-		if self.managerAutoReadyInFlightKey == key then
-			self.managerAutoReadyInFlightKey = ""
-		end
-
-		if not ok then
-			local errorCode = decoded and decoded.error_code
-			if errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed" then
-				local retryAfter = tonumber(decoded.retry_after) or tonumber(self.readyRequestBlockedRetrySeconds) or 0.5
-				self.managerAutoReadyDeferredKey = key
-				online_flow_trace("manager_auto_ready_deferred reason=server_song_not_confirmed"
-					.. " key=" .. tostring(key)
-					.. " retry_after=" .. tostring(retryAfter)
-					.. " serverDeferred=" .. tostring(decoded and decoded.deferred == true))
-				if MESSAGEMAN then
-					MESSAGEMAN:Broadcast("OnlineManagerAutoReadyRetryRequested", {
-						key = key,
-						readyPhase = readyPhase,
-						retryAfter = retryAfter,
-					})
-				end
-			end
-			if errorCode == "room_phase_not_accepting_lobby_ready" then
-				-- Stale phase race: avoid immediate replay storm on the same key.
-				self.managerAutoReadyCompletedKey = key
-			end
-			online_trace("manager_auto_ready failed key=" .. key)
-			return
-		end
-
-		self.managerAutoReadyCompletedKey = key
-		online_trace("manager_auto_ready success key=" .. key)
-		if decoded and decoded.room then
-			local room = self:ApplyDecodedRoomSnapshot(decoded, "manager_auto_ready")
-			if room then safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room)) end
-		end
-	end)
-end
-
 function ITGOnline:IsOnlineGameplayScreen(screenName)
 	return screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared"
 end
@@ -5031,7 +4906,6 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.songLoadedAckKey = ""
 	self.songLoadedInFlightKey = ""
 	self.songLoadedPendingCallbacks = {}
-	self.songSelectedAutoReadyRoomRefreshAttemptedKey = ""
 	self:InvalidateSongAvailabilityRequests("round_runtime_state_reset:" .. tostring(source or "unknown"))
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
@@ -5418,46 +5292,6 @@ function ITGOnline:NormalizeRoomSnapshot(room, previousRoom, source)
 	return room
 end
 
-function ITGOnline:RefreshLocalPartyRoomForSongSelectedAutoReady(key, source)
-	if not self:IsLocalTwoPlayerSession() or not self.currentRoomId or not self.FetchRoom then
-		return false
-	end
-	if self.songSelectedAutoReadyRoomRefreshAttemptedKey == key then
-		online_flow_trace("song_selected_auto_ready_room_refresh_skipped"
-			.. " key=" .. tostring(key)
-			.. " reason=already_attempted")
-		return false
-	end
-
-	self.songSelectedAutoReadyRoomRefreshAttemptedKey = key
-	local roomId = self.currentRoomId
-	online_flow_trace("song_selected_auto_ready_room_refresh_begin"
-		.. " key=" .. tostring(key)
-		.. " room=" .. tostring(roomId)
-		.. " source=" .. tostring(source or "unknown"))
-	self:FetchRoom(roomId, function(ok, decoded, response)
-		local refreshedRoom = decoded and decoded.room or self.currentRoom
-		local currentRoundKey = refreshedRoom and self:RoomSongRoundKey(refreshedRoom) or ""
-		local complete = refreshedRoom and self:LocalPartyRoomComplete(refreshedRoom) or false
-		online_flow_trace("song_selected_auto_ready_room_refresh_result"
-			.. " key=" .. tostring(key)
-			.. " room=" .. tostring(roomId)
-			.. " ok=" .. tostring(ok == true)
-			.. " status=" .. tostring(response and response.statusCode or "nil")
-			.. " complete=" .. tostring(complete == true)
-			.. " roundKey=" .. tostring(currentRoundKey)
-			.. " error=" .. tostring(decoded and decoded.error_code
-				or response and response.errorMessage or "nil"))
-		if ok and complete and currentRoundKey == key then
-			self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(
-				refreshedRoom,
-				"local_party_room_refreshed:" .. tostring(source or "unknown")
-			)
-		end
-	end)
-	return true
-end
-
 function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 	room = room or self.currentRoom
 	if not room or not self.currentRoomId then
@@ -5498,21 +5332,6 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			.. " phase=" .. tostring(phase)
 			.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
 		return
-	end
-
-	local songConfirmed, confirmationReason = self:RequiredLocalPlayersConfirmedSelectedSong(room)
-	if not songConfirmed and self.songSelectedAutoReadyAwaitingConfirmationKey == key then
-		online_flow_trace("song_selected_auto_ready_skipped source=" .. tostring(source or "unknown")
-			.. " reason=awaiting_song_confirmation"
-			.. " key=" .. tostring(key)
-			.. " confirmation=" .. tostring(confirmationReason))
-		return
-	end
-	if songConfirmed and self.songSelectedAutoReadyAwaitingConfirmationKey == key then
-		self.songSelectedAutoReadyAwaitingConfirmationKey = ""
-		online_flow_trace("song_selected_auto_ready_confirmation_observed"
-			.. " key=" .. tostring(key)
-			.. " source=" .. tostring(source or "unknown"))
 	end
 
 	if self:IsCurrentUserReadyInRoom(room, "lobby_ready") then
@@ -5568,33 +5387,10 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			return
 		end
 
-		-- Both requests of the local party can complete in either order.  The
-		-- current room is updated by each response, whereas availabilityDecoded
-		-- may be the earlier, partial member snapshot.
-		local availabilityRoom = self.currentRoom
-		if not availabilityRoom
-			or not self:RoomMatchesId(availabilityRoom, self.currentRoomId)
-			or self:RoomSongRoundKey(availabilityRoom) ~= key then
-			availabilityRoom = (availabilityDecoded and availabilityDecoded.room) or room
-		end
-		local confirmedAfterAvailability, confirmationReasonAfterAvailability =
-			self:RequiredLocalPlayersConfirmedSelectedSong(availabilityRoom)
-		if not confirmedAfterAvailability then
-			self.songSelectedAutoReadyInFlightKey = ""
-			self.songSelectedAutoReadyAwaitingConfirmationKey = key
-			online_flow_trace("song_selected_auto_ready_waiting"
-				.. " key=" .. tostring(key)
-				.. " reason=local_song_not_confirmed"
-				.. " confirmation=" .. tostring(confirmationReasonAfterAvailability))
-			-- The local availability barrier has already acknowledged both requests.
-			-- If its response snapshot is still partial, fetch the authoritative room
-			-- once instead of waiting indefinitely for an unrelated realtime event.
-			if self:IsLocalTwoPlayerSession() then
-				self:RefreshLocalPartyRoomForSongSelectedAutoReady(key, source)
-			end
-			return
-		end
-		self.songSelectedAutoReadyAwaitingConfirmationKey = ""
+		-- The availability barrier waits for every local player request.  A room
+		-- snapshot can be older than one of those acknowledgements, so it is not a
+		-- valid second authority.  The ready endpoint validates membership and the
+		-- selected-song availability transactionally.
 
 		local currentPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 		if currentPhase ~= "lobby" and currentPhase ~= "lobby_ready" and currentPhase ~= "unknown" then
@@ -5633,14 +5429,6 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source)
 			end
 
 			local errorCode = readyDecoded and readyDecoded.error_code
-			if errorCode == "local_party_room_incomplete" then
-				online_flow_trace("song_selected_auto_ready_recovering"
-					.. " key=" .. tostring(key)
-					.. " reason=local_party_room_incomplete")
-				self:RefreshLocalPartyRoomForSongSelectedAutoReady(key, source)
-				return
-			end
-
 			if errorCode == "room_members_song_not_confirmed" or errorCode == "room_member_song_not_confirmed" then
 				online_flow_trace("song_selected_auto_ready_waiting key=" .. tostring(key)
 					.. " reason=" .. tostring(errorCode)
@@ -6062,9 +5850,6 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	end
 
 	local selectionTransitionInFlight = self.songSelectionTransitionInFlight == true
-	if self.MaybeAutoReadyManager and not selectionTransitionInFlight then
-		self:MaybeAutoReadyManager(self.currentRoom)
-	end
 	if self.MaybeAutoConfirmSelectedSongAndMarkLobbyReady then
 		-- A manager can receive the realtime room snapshot before the response to
 		-- its own song-selection request.  That response must reset the previous
@@ -9509,8 +9294,6 @@ function ITGOnline:Disconnect(options)
 	self.songSelectionInFlightKey = ""
 	self.startScheduleAckKey = ""
 	self.startScheduleAckInFlightKey = ""
-	self.managerAutoReadyInFlightKey = ""
-	self.managerAutoReadyCompletedKey = ""
 	self.readyRequestInFlight = {}
 	self.readyRequestLastResult = {}
 	self.readyRequestBlockedErrors = {}
@@ -13038,10 +12821,10 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		finish(true, nil, nil, { skipped = true })
 		return
 	end
-	if not self.currentRoomId or not self.currentRoom or not self:LocalPartyRoomComplete(self.currentRoom) then
+	if not self.currentRoomId or not self.currentRoom then
 		finish(false, nil, {
-			error_code = "local_party_room_incomplete",
-			errorMessage = "Both local players must belong to the room before sending scores.",
+			error_code = "missing_room_context",
+			errorMessage = "An active room is required before sending scores.",
 		})
 		return
 	end
@@ -13283,15 +13066,42 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 		safe_callback(callback, true, { room = self.currentRoom })
 		return
 	end
-	if not self.currentRoomId or not self:LocalPartyRoomComplete(self.currentRoom) then
+	if not self.currentRoomId then
 		safe_callback(callback, false, {
-			error_code = "local_party_room_incomplete",
-			deferred = true,
-		}, { retryAfter = 0.75, error_code = "local_party_room_incomplete" })
+			error_code = "no_current_room",
+		}, { error_code = "no_current_room" })
 		return
 	end
 
 	local player = PLAYER_2
+	if not self:HasActiveAccessTokenForPlayer(player) or not self:UserForLocalPlayer(player) then
+		online_flow_trace("companion_ready_failed reason=companion_not_authenticated"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase))
+		safe_callback(callback, false, {
+			error_code = "companion_not_authenticated",
+		}, { error_code = "companion_not_authenticated" })
+		return
+	end
+
+	-- Room broadcasts and refreshes can race a member update.  That local
+	-- snapshot is only advisory: rejecting P2 here prevents the server from
+	-- ever receiving the paired ready request, leaving every client stuck in
+	-- lobby_ready.  Send P2's request first and let the authenticated server
+	-- authoritatively reject a genuinely absent room member.
+	if not self:LocalPartyRoomComplete(self.currentRoom) then
+		local memberIds = {}
+		for member in ivalues(self.currentRoom and self.currentRoom.members or {}) do
+			local memberUser = type(member.user) == "table" and member.user or {}
+			memberIds[#memberIds + 1] = tostring(member.user_id or member.userId or memberUser.id or member.id or "?")
+		end
+		online_flow_trace("companion_ready_snapshot_membership_unconfirmed"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " phase=" .. tostring(phase)
+			.. " members=" .. table.concat(memberIds, ",")
+			.. " action=server_authoritative_request")
+	end
+
 	local payload = {
 		client_action_id = self:NewClientActionId("companion-ready"),
 		selection_id = self:CurrentSelectionId(),
@@ -13447,25 +13257,6 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, com
 			.. " reason=stale_lobby_ready")
 		safe_callback(callback, true, { room = self.currentRoom, stale_ready = true }, nil)
 		return
-	end
-
-	if isReady and phase == "lobby_ready" then
-		local confirmed, reason = self:CurrentUserConfirmedSelectedSong(self.currentRoom)
-		if not confirmed then
-			online_flow_trace("ready_request_deferred room=" .. tostring(self.currentRoomId)
-				.. " phase=" .. tostring(phase)
-				.. " currentPhase=" .. tostring(currentPhase)
-				.. " reason=current_member_song_not_confirmed"
-				.. " detail=" .. tostring(reason))
-			safe_callback(callback, false, {
-				room = self.currentRoom,
-				error_code = "room_member_song_not_confirmed",
-				retry_after = tonumber(self.readyRequestBlockedRetrySeconds) or 2.5,
-				deferred = true,
-				local_guard = true,
-			}, nil)
-			return
-		end
 	end
 
 	if isReady and phase == "config_ready"
@@ -14624,10 +14415,10 @@ function ITGOnline:RequestCompanionLifecycleAction(action, path, payload, callba
 		safe_callback(callback, true, nil, nil, { skipped = true })
 		return
 	end
-	if not self.currentRoomId or not self:LocalPartyRoomComplete(self.currentRoom) then
+	if not self.currentRoomId or not self.currentRoom then
 		safe_callback(callback, false, nil, {
-			error_code = "local_party_room_incomplete",
-			errorMessage = "Both local players must be present before gameplay can continue.",
+			error_code = "missing_room_context",
+			errorMessage = "An active room is required before gameplay can continue.",
 		})
 		return
 	end
