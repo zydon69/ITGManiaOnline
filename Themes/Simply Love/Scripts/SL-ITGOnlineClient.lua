@@ -4689,7 +4689,7 @@ function ITGOnline:HasActiveLiveScoreRoom()
 end
 
 function ITGOnline:TraceOnlineState(label, fields)
-	if not online_flow_trace then return end
+	if not (online_flow_trace and self.debugOnlineTrace == true) then return end
 	fields = type(fields) == "table" and fields or {}
 	local room = fields.roomSnapshot or self.currentRoom or {}
 	local selectedSong = type(room.selected_song) == "table" and room.selected_song
@@ -4697,13 +4697,57 @@ function ITGOnline:TraceOnlineState(label, fields)
 		or {}
 	local playState = type(room.play_state) == "table" and room.play_state or {}
 	local summary = self.PlayStateSummary and self:PlayStateSummary(room) or nil
+	local roomId = tostring(fields.room_id or fields.roomId or self.currentRoomId or room.id or "nil")
+	local phase = tostring(fields.phase or room.phase or "nil")
+	local traceLabel = tostring(label or "unknown")
+	local highFrequencyIntervals = {
+		heartbeat_begin = 5.0,
+		http_request_begin = 1.0,
+		http_response = 1.0,
+		realtime_message_received = 2.0,
+		realtime_handle_end = 2.0,
+		room_snapshot_incoming = 0.75,
+		room_snapshot_applied = 0.75,
+		enforce_screen_decision = 1.0,
+	}
+	local interval = highFrequencyIntervals[traceLabel]
+	local status = tonumber(fields.status)
+	local errorCode = tostring(fields.errorCode or fields.error or "")
+	local failed = fields.ok == false or (status and status >= 400)
+		or (errorCode ~= "" and errorCode ~= "nil")
+	if interval and not failed then
+		local traceKey = table.concat({
+			traceLabel,
+			roomId,
+			phase,
+			tostring(self.currentScreenName or "nil"),
+			tostring(fields.source or "unknown"),
+			tostring(fields.method or ""),
+			tostring(fields.path or ""),
+			tostring(fields.eventName or ""),
+			tostring(fields.selected_at or fields.selectedAt or selectedSong.selected_at or selectedSong.selectedAt or ""),
+		}, "|")
+		self.onlineStateTraceThrottle = self.onlineStateTraceThrottle or {}
+		self.onlineStateTraceThrottleOrder = self.onlineStateTraceThrottleOrder or {}
+		local now = GetTimeSinceStart()
+		local lastAt = tonumber(self.onlineStateTraceThrottle[traceKey]) or -9999
+		if now - lastAt < interval then return end
+		if self.onlineStateTraceThrottle[traceKey] == nil then
+			self.onlineStateTraceThrottleOrder[#self.onlineStateTraceThrottleOrder + 1] = traceKey
+			if #self.onlineStateTraceThrottleOrder > 512 then
+				local oldest = table.remove(self.onlineStateTraceThrottleOrder, 1)
+				self.onlineStateTraceThrottle[oldest] = nil
+			end
+		end
+		self.onlineStateTraceThrottle[traceKey] = now
+	end
 	local parts = {
 		"online_state_trace",
-		"label=" .. tostring(label or "unknown"),
-		"room=" .. tostring(fields.room_id or fields.roomId or self.currentRoomId or room.id or "nil"),
+		"label=" .. traceLabel,
+		"room=" .. roomId,
 		"user=" .. tostring(self.user and self.user.id or "nil"),
 		"screen=" .. tostring(self.currentScreenName or "nil"),
-		"phase=" .. tostring(fields.phase or room.phase or "nil"),
+		"phase=" .. phase,
 		"selectedAt=" .. tostring(fields.selected_at or fields.selectedAt or selectedSong.selected_at or selectedSong.selectedAt or "nil"),
 		"roundKey=" .. tostring(fields.roundKey or (self.PlayStateKey and self:PlayStateKey() or "nil")),
 		"roomRoundKey=" .. tostring(self.currentRoomRoundKey or ""),
@@ -18443,6 +18487,20 @@ elseif name == "client.error" then
 			if appliedPresence then
 				online_flow_trace("lobby_updated_event broadcast_cached")
 				safe_broadcast("LobbySearched", self.cachedLobbySearchPayload)
+			end
+			-- A room-scoped realtime snapshot already drives the options screen.
+			-- Fetching the complete lobby here starts an unnecessary large request
+			-- in the exact frame in which ScreenPlayerOptions is constructed.
+			if self:IsOnlineOptionsScreen(tostring(self.currentScreenName or ""))
+				and self.currentRoomId
+				and lobbyRoomId
+				and online_room_ids_match(lobbyRoomId, self.currentRoomId)
+				and not hasUserPayload
+			then
+				online_flow_trace("lobby_updated_event refresh_deferred reason=options_room_snapshot_authoritative"
+					.. " updateReason=" .. lobbyUpdateReason
+					.. " roomId=" .. tostring(lobbyRoomId))
+				return
 			end
 			online_flow_trace("lobby_updated_event queue_lobby_refresh")
 			self:QueueLobbyRefresh({ reason = lobbyUpdateReason })

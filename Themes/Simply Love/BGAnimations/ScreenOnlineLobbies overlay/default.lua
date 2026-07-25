@@ -86,6 +86,9 @@ local function private_prompt_key(params, kind)
 	return kind .. ":" .. tostring(type(payload) == "table" and payload.id or "")
 end
 
+-- A room created for an invitation receives an English server-side default
+-- name (for example, "Zydon's room").  Keep custom room names untouched, but
+-- render that generated name through the active theme language.
 local function display_private_prompt(actor, params, kind)
 	private_join_request = params
 	private_join_prompt_kind = kind
@@ -4528,8 +4531,15 @@ local af = Def.ActorFrame{
 			local roomType = room.visibility == "private"
 				and online_lobby_text("PrivateLobby", "Private lobby")
 				or online_lobby_text("Lobby", "Lobby")
+			local inviterName = tostring(inviter.name or inviter.display_name or inviter.displayName or "")
+			local roomName = tostring(room.name or "")
+			local generatedEnglishName = inviterName ~= "" and (inviterName .. "'s room") or ""
+			if roomName == "" or (generatedEnglishName ~= "" and roomName == generatedEnglishName) then
+				roomName = online_lobby_text("PlayerLobbyName", "%s's lobby",
+					inviterName ~= "" and inviterName or online_lobby_text("UnknownPlayer", "Player"))
+			end
 			detail:settext(online_lobby_text("LobbyNameValue", "%s: %s", roomType,
-				tostring(room.name or online_lobby_text("Lobby", "Lobby"))))
+				roomName))
 		end
 		local lines = {}
 		for i, option in ipairs(active_private_prompt_options()) do

@@ -79,6 +79,10 @@ assert(clientSource:find('["OnlineTrace"] = "true"', 1, true),
 	"new debug configurations must enable the online trace")
 assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
 	"client must expose an isolated Player 2 score pipeline")
+assert(clientSource:find("onlineStateTraceThrottle", 1, true),
+	"high-frequency state tracing must be throttled without disabling online diagnostics")
+assert(clientSource:find("options_room_snapshot_authoritative", 1, true),
+	"the options screen must not refresh the whole lobby from a room-scoped realtime update")
 assert(clientSource:find("function ITGOnline:ConnectLocalPlayerPartyWebSockets", 1, true),
 	"client must open both authenticated realtime connections")
 assert(clientSource:find("function ITGOnline:CanLocalPlayerControlOnlineRoom", 1, true),
@@ -227,6 +231,30 @@ assert(not onlineHelpersSource:find("ITGOnline.inLobby", 1, true),
 	"screen transitions must read the lobby state from their actor, not the API client")
 assert(optionsSource:find("onlineOptionsSessionActive", 1, true),
 	"online options must preserve their room context during screen transitions")
+
+local scoreSource = read_source("Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/Score.lua")
+assert(scoreSource:find("should_broadcast_online_score_snapshot", 1, true),
+	"only the primary local score feed must use OnlineScoreSnapshot")
+
+local stepStatisticsSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/StepStatistics/default.lua"
+)
+assert(stepStatisticsSource:find("if OnlineGameplay then return end", 1, true),
+	"online gameplay must suppress local Step Statistics counters")
+
+local rankingSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Shared/OnlineFinalRanking.lua"
+)
+assert(rankingSource:find(":draworder(40):visible(false)", 1, true),
+	"the final online ranking must draw above evaluation grades")
+
+assert(lobbySource:find("generatedEnglishName", 1, true),
+	"generated invitation room names must be localized before display")
+for _, language in ipairs({ "en", "fr", "es", "de", "it", "ja", "pl", "pt-br", "ru" }) do
+	local languageSource = read_source("Themes/Simply Love/Languages/" .. language .. ".ini")
+	assert(languageSource:find("PlayerLobbyName=", 1, true),
+		"invitation room names must be localized for " .. language)
+end
 
 local branchSource = read_source("Themes/Simply Love/Scripts/SL-Branches.lua")
 assert(branchSource:find('styleName == "couple"', 1, true),

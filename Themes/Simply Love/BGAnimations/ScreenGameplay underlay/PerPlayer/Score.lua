@@ -20,6 +20,17 @@ local failedDetected = false
 local lastLowerLayoutTraceKey
 local stageIndex = math.max(1, math.floor(tonumber(SL.Global.Stages.PlayedThisGame) or 0) + 1)
 
+-- P2 has a dedicated local-party score transport.  OnlineScoreSnapshot is the
+-- legacy P1 feed consumed by the primary score pipeline, so emitting P2 into
+-- it only creates ignored broadcasts during every judgment redraw.
+local function should_broadcast_online_score_snapshot(source)
+	if not (ITGOnline and ITGOnline.currentRoomId and GAMESTATE and GAMESTATE.GetEnabledPlayers) then
+		return false
+	end
+	local enabled = GAMESTATE:GetEnabledPlayers()
+	return enabled and enabled[1] == source
+end
+
 local LowerScoreLayout = {
 	y = -2,
 	gap = 8,
@@ -540,7 +551,7 @@ return Def.ActorFrame{
 			lastRoutineDisplayedPercent = displayedPercent
 		end
 
-		if ITGOnline and ITGOnline.currentRoomId then
+		if should_broadcast_online_score_snapshot(sourcePlayer) then
 			-- TrackOnlineScorePush emits a throttled, score-category trace for this
 			-- stream. Logging every redraw here flooded log.txt during gameplay.
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
@@ -582,7 +593,7 @@ return Def.ActorFrame{
 		update_lower_scores(self, scoreMode, snapshot.ExScorePercent, snapshot.ScorePercent)
 		trace_routine_score_drop(snapshot, "ExCountsChanged", frozen)
 
-		if ITGOnline and ITGOnline.currentRoomId then
+		if should_broadcast_online_score_snapshot(sourcePlayer) then
 			MESSAGEMAN:Broadcast("OnlineScoreSnapshot", {
 				Player = sourcePlayer,
 				ScorePercent = snapshot.ScorePercent,

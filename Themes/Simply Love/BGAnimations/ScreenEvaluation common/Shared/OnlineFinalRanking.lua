@@ -221,7 +221,9 @@ local panel_y = banner_top + (panel_height / 2)
 local t = Def.ActorFrame{
 	Name="OnlineFinalRanking",
 	InitCommand=function(self)
-		self:xy(panel_x, panel_y):visible(false)
+		-- Upper evaluation data, including the P2 grade, uses draworder 20 and
+		-- song identity uses 30.  Keep the online result board above both.
+		self:xy(panel_x, panel_y):draworder(40):visible(false)
 	end,
 	OnCommand=function(self)
 		if ITGOnline and ITGOnline.ReplayCurrentPlayState then

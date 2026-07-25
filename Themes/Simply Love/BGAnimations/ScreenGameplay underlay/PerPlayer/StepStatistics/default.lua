@@ -4,6 +4,7 @@ local ar = GetScreenAspectRatio()
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
 local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
+local OnlineGameplay = ITGOnline and ITGOnline.currentRoomId ~= nil
 
 -- -----------------------------------------------------------------------
 -- if the conditions aren't right, don't bother
@@ -11,6 +12,11 @@ local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGamepl
 local stylename = GAMESTATE:GetCurrentStyle():GetName()
 
 if SL[pn].ActiveModifiers.DataVisualizations ~= "Step Statistics" then return end
+
+-- The online leaderboard is the single source of live score information.
+-- Step Statistics duplicates its judgment counters in the same central area,
+-- which makes a player's local option leak into the shared online layout.
+if OnlineGameplay then return end
 
 if (not IsUltraWide and stylename == "versus")
 	or (not ThemePrefs.Get("EnableTournamentMode") and

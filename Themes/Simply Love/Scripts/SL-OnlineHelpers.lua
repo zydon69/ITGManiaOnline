@@ -3201,11 +3201,13 @@ CreateOnlineHandler = function()
 						end,
 					OnlineScoreSnapshotMessageCommand=function(self, params)
 						if onlineHandlerShuttingDown then
-							online_flow_trace("score_snapshot_ignored reason=handler_shutting_down")
+							online_flow_trace_throttled("score_snapshot_ignored_handler_shutting_down", 5.0,
+								"score_snapshot_ignored reason=handler_shutting_down")
 							return
 						end
 						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom and current_room_is_active()) then
-							online_flow_trace("score_snapshot_ignored reason=missing_context"
+							online_flow_trace_throttled("score_snapshot_ignored_missing_context", 5.0,
+								"score_snapshot_ignored reason=missing_context"
 								.. " hasClient=" .. tostring(ITGOnline ~= nil)
 								.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
 								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -3216,7 +3218,8 @@ CreateOnlineHandler = function()
 						local enabled = GAMESTATE:GetEnabledPlayers()
 						local primary = enabled and enabled[1] or nil
 						if not (params and primary and params.Player == primary) then
-							online_flow_trace("score_snapshot_ignored reason=non_primary_or_missing_params"
+							online_flow_trace_throttled("score_snapshot_ignored_non_primary", 5.0,
+								"score_snapshot_ignored reason=non_primary_or_missing_params"
 								.. " hasParams=" .. tostring(params ~= nil)
 								.. " player=" .. tostring(params and params.Player or "nil")
 								.. " primary=" .. tostring(primary or "nil"))
