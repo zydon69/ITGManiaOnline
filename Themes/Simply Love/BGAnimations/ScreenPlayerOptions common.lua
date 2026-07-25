@@ -182,7 +182,7 @@ local af = Def.ActorFrame{
 			.. " afterP1=" .. tostring(SL.Global.ScreenAfter.PlayerOptions or "nil")
 			.. " afterP2=" .. tostring(SL.Global.ScreenAfter.PlayerOptions2 or "nil")
 			.. " afterP3=" .. tostring(SL.Global.ScreenAfter.PlayerOptions3 or "nil"))
-		if ITGOnline and ITGOnline.currentRoomId then
+		if ITGOnline and (ITGOnline.currentRoomId or ITGOnline.onlineOptionsSessionActive == true) then
 			SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
 			SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
 			SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"
@@ -205,7 +205,13 @@ local af = Def.ActorFrame{
 	OffCommand=function(self)
 		online_options_timer_update_scheduled = false
 		last_online_options_preview_key = ""
+		local onlineOptionsContext = ITGOnline and ITGOnline.onlineOptionsSessionActive == true
 		if not (ITGOnline and ITGOnline.currentRoomId) then
+			if onlineOptionsContext then
+				online_options_trace("screen_off_config_ready_deferred reason=room_context_missing")
+				MESSAGEMAN:Broadcast("OnlineConfigReady")
+				ITGOnline.onlineOptionsSessionActive = false
+			end
 			online_options_trace("screen_off_skipped reason=no_room")
 			return
 		end
@@ -219,14 +225,14 @@ local af = Def.ActorFrame{
 
 		local screen = SCREENMAN:GetTopScreen()
 		local screenName = online_options_screen_name or (screen and screen:GetName()) or ""
-		if online_next_screen_for_options(screenName) ~= "ScreenOnlineLobbies" then
+		if online_next_screen_for_options(screenName) ~= "ScreenOnlineLobbies" and not onlineOptionsContext then
 			online_options_trace("screen_off_skipped reason=next_screen_not_lobby"
 				.. " screen=" .. tostring(screenName)
 				.. " next=" .. tostring(online_next_screen_for_options(screenName) or "nil"))
 			return
 		end
 		local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom and ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "")
-		if phase ~= "config" then
+		if phase ~= "config" and not onlineOptionsContext then
 			online_options_trace("screen_off_skipped reason=phase_not_config"
 				.. " screen=" .. tostring(screenName)
 				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
@@ -235,6 +241,7 @@ local af = Def.ActorFrame{
 		end
 		if ITGOnline.IsCurrentUserReadyInRoom
 			and ITGOnline:IsCurrentUserReadyInRoom(ITGOnline.currentRoom, "config_ready") then
+			ITGOnline.onlineOptionsSessionActive = false
 			online_options_trace("screen_off_skipped reason=already_config_ready"
 				.. " screen=" .. tostring(screenName)
 				.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
@@ -246,6 +253,7 @@ local af = Def.ActorFrame{
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 			.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 		MESSAGEMAN:Broadcast("OnlineConfigReady")
+		ITGOnline.onlineOptionsSessionActive = false
 	end,
 
 	UpdateOptionsReadyTimerCommand=function(self)

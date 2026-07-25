@@ -117,6 +117,8 @@ assert(loginSource:find('label = label .. " [" .. tostring(onlineName) .. "]"', 
 local lobbySource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
 )
+local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
+local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
 assert(lobbySource:find("local_companion_read_only", 1, true),
 	"Player 2 lobby controls must remain read-only")
 assert(lobbySource:find("user.isLocalCompanion", 1, true),
@@ -125,6 +127,12 @@ assert(lobbySource:find('"WithPlayer"', 1, true),
 	"remote local parties must display their companion name")
 assert(lobbySource:find("online_player_status_label", 1, true),
 	"online player statuses must use localized labels")
+assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),
+	"options completion must survive a transient room-context gap")
+assert(onlineHelpersSource:find("retry_deferred_config_ready", 1, true),
+	"deferred options completion must be retried after room restoration")
+assert(optionsSource:find("onlineOptionsSessionActive", 1, true),
+	"online options must preserve their room context during screen transitions")
 
 local branchSource = read_source("Themes/Simply Love/Scripts/SL-Branches.lua")
 assert(branchSource:find('styleName == "couple"', 1, true),

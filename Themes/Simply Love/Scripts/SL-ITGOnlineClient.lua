@@ -2500,6 +2500,7 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	self.user = nil
 	self.currentRoomId = nil
 	self.currentRoom = nil
+	self.onlineOptionsSessionActive = false
 	self.pendingJoinRoomId = nil
 	self.pendingJoinRequestId = nil
 	self.currentSongPayload = nil

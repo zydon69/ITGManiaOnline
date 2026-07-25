@@ -21,6 +21,10 @@ local onlineOptionsRedirectedAt = 0
 local lastOnlineGameplayRoomId = nil
 local pendingOnlineStartRoomId = nil
 local pendingConfigReady = nil
+-- ScreenPlayerOptions can emit its completion message while the room snapshot
+-- is being restored.  Keep that intent until the lobby context is available
+-- again instead of dropping the only validation event.
+local deferredConfigReadyAfterOptionsExit = false
 local pendingOnlineSongSelectionKey = ""
 local pendingOnlineSongSelectionAt = 0
 local pendingOnlineSongSelectionToken = 0
@@ -523,6 +527,22 @@ function current_room_is_active(options)
 	end
 
 	return true, room, nil
+end
+
+local function retry_deferred_config_ready(source)
+	if not deferredConfigReadyAfterOptionsExit then return false end
+	if pendingConfigReady then
+		deferredConfigReadyAfterOptionsExit = false
+		return false
+	end
+	local active = current_room_is_active({ phase = { "config", "lobby_ready", "lobby" } })
+	if not active then return false end
+	deferredConfigReadyAfterOptionsExit = false
+	online_flow_trace("options_confirmed deferred_context_recovered source=" .. tostring(source or "unknown")
+		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+	MESSAGEMAN:Broadcast("OnlineConfigReady")
+	return true
 end
 
 function room_context_token(kind)
@@ -1355,6 +1375,7 @@ end
 		end
 		return
 	end
+		if ITGOnline then ITGOnline.onlineOptionsSessionActive = true end
 		safe_broadcast("OnlineOptionsRedirectWait", {
 			show=false,
 			reason="transition_to_options",
@@ -1363,6 +1384,7 @@ end
 		})
 			local transitioned = transition_screen(topScreen, "ScreenPlayerOptions", "SM_GoToNextScreen", "online_options")
 			if not transitioned then
+				if ITGOnline then ITGOnline.onlineOptionsSessionActive = false end
 				online_flow_trace("transition_to_options_failed key=" .. tostring(redirectSelectionKey)
 					.. " from=" .. tostring(screenName))
 				return false
@@ -2711,11 +2733,13 @@ end
 		stop_room_timers(actor, "clear_room_async_state")
 		stop_named_timers(actor, { "ConfigReadyRetryTimer" })
 		pendingConfigReady = nil
+		deferredConfigReadyAfterOptionsExit = false
 		pendingManagerAutoReadyRetryKey = ""
 	pendingManagerAutoReadyRetryPhase = ""
 	pendingOnlineStartRoomId = nil
 	lastOnlineGameplayRoomId = nil
 		lastOnlineOptionsSongKey = ""
+		if ITGOnline then ITGOnline.onlineOptionsSessionActive = false end
 	reset_online_options_redirect_guard("clear_room_async_state")
 	replayDeferredLobbyStateQueued = false
 	replayDeferredLobbyStateRunning = false
@@ -3360,6 +3384,7 @@ CreateOnlineHandler = function()
 								schedule_named_timer(self, "ConfigReadyRetryTimer", 0.05, "Fire")
 							end
 						end
+						retry_deferred_config_ready("screen_changed_to_lobby")
 						if not room_runtime_should_run() then
 							stop_room_timers(self, "screen_online_lobbies_no_fast_runtime")
 						end
@@ -3571,47 +3596,48 @@ CreateOnlineHandler = function()
 	        end
 	      end,
 			      OnlineConfigReadyMessageCommand=function(self)
-							local roomActive, _, inactiveReason = current_room_is_active({ phase = { "config", "lobby_ready", "lobby" } })
-							if not (ITGOnline and ITGOnline.MarkConfigReady and roomActive) then
-								online_flow_trace("options_confirmed ignored reason=missing_context"
-									.. " connected=" .. tostring(self.connected == true)
-									.. " hasSocket=" .. tostring(self.socket ~= nil)
-									.. " hasHttpReadyApi=" .. tostring(ITGOnline and ITGOnline.MarkConfigReady ~= nil)
-									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-									.. " inactiveReason=" .. tostring(inactiveReason or "nil"))
-								return
-							end
+					local roomActive, _, inactiveReason = current_room_is_active({ phase = { "config", "lobby_ready", "lobby" } })
+					if not (ITGOnline and ITGOnline.MarkConfigReady and roomActive) then
+						deferredConfigReadyAfterOptionsExit = true
+						online_flow_trace("options_confirmed ignored reason=missing_context"
+							.. " connected=" .. tostring(self.connected == true)
+							.. " hasSocket=" .. tostring(self.socket ~= nil)
+							.. " hasHttpReadyApi=" .. tostring(ITGOnline and ITGOnline.MarkConfigReady ~= nil)
+							.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+							.. " inactiveReason=" .. tostring(inactiveReason or "nil"))
+						return
+					end
 
-						self.inLobby = true
-						local configReadyKey = current_config_ready_key()
-						if configReadyKey == "" then
-							online_flow_trace("options_confirmed ignored reason=invalid_selection_key"
-								.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-								.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
-							return
-						end
-						pendingConfigReady = configReadyKey
-						self.configReadyRetryKey = configReadyKey
-						self.configReadyRoomToken = room_context_token("config_ready")
-						self.configReadyRoomToken.selectionKey = configReadyKey
-						self.configReadyRetryCount = 0
-						self.configReadyRetryStartedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
-						if ITGOnline.SetOptimisticConfigReady then
-							ITGOnline:SetOptimisticConfigReady("options_confirmed")
-						end
-							online_flow_trace("options_confirmed queue config_ready key=" .. tostring(configReadyKey)
-								.. " websocketConnected=" .. tostring(self.connected and self.socket ~= nil))
-						if online_flow_trace then
-							online_flow_trace("options_confirmed dispatch_deferred config_ready key=" .. tostring(configReadyKey)
-								.. " delay=0.20")
-						end
-						-- Let ScreenPlayerOptions finish SaveSelections first. The Stepchart
-						-- option updates GAMESTATE:SetCurrentSteps() during that save pass; if
-						-- we send config_ready synchronously here, the payload can still contain
-						-- the previous song's chart. The explicit remembered-step cache in
-						-- ITGOnline covers the immediate case; this delay is a second guard for
-						-- engine-side GAMESTATE propagation.
-						schedule_named_timer(self, "ConfigReadyRetryTimer", 0.20, "Fire")
+					self.inLobby = true
+					local configReadyKey = current_config_ready_key()
+					if configReadyKey == "" then
+						deferredConfigReadyAfterOptionsExit = true
+						online_flow_trace("options_confirmed ignored reason=invalid_selection_key"
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+						return
+					end
+					deferredConfigReadyAfterOptionsExit = false
+					pendingConfigReady = configReadyKey
+					self.configReadyRetryKey = configReadyKey
+					self.configReadyRoomToken = room_context_token("config_ready")
+					self.configReadyRoomToken.selectionKey = configReadyKey
+					self.configReadyRetryCount = 0
+					self.configReadyRetryStartedAt = GetTimeSinceStart and GetTimeSinceStart() or 0
+					if ITGOnline.SetOptimisticConfigReady then
+						ITGOnline:SetOptimisticConfigReady("options_confirmed")
+					end
+					online_flow_trace("options_confirmed queue config_ready key=" .. tostring(configReadyKey)
+						.. " websocketConnected=" .. tostring(self.connected and self.socket ~= nil))
+					online_flow_trace("options_confirmed dispatch_deferred config_ready key=" .. tostring(configReadyKey)
+						.. " delay=0.20")
+					-- Let ScreenPlayerOptions finish SaveSelections first. The Stepchart
+					-- option updates GAMESTATE:SetCurrentSteps() during that save pass; if
+					-- we send config_ready synchronously here, the payload can still contain
+					-- the previous song's chart. The explicit remembered-step cache in
+					-- ITGOnline covers the immediate case; this delay is a second guard for
+					-- engine-side GAMESTATE propagation.
+					schedule_named_timer(self, "ConfigReadyRetryTimer", 0.20, "Fire")
 		      end,
 			      OnlineConfigReadyConfirmedMessageCommand=function(self, params)
 							if not pendingConfigReady then
@@ -3852,6 +3878,7 @@ CreateOnlineHandler = function()
 									.. " screen=" .. tostring(screenName))
 							end
 							DisplayLobbyState(params, self)
+							retry_deferred_config_ready("online_lobby_state")
 							if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
 								ITGOnline:ForceGameplayEvaluationIfResultsReady("online_lobby_state_message_after_display")
 							end
