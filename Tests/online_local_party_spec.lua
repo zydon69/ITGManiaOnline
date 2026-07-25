@@ -108,6 +108,14 @@ assert(not syncSource:find("HandleLocalPartyInvariantFailure", 1, true),
 	"a failed companion reconciliation must never force a group leave")
 assert(clientSource:find("song_availability_barrier_result", 1, true),
 	"song availability must wait for both local players")
+assert(clientSource:find("song_selected_auto_ready_deferred", 1, true),
+	"song selection snapshots must defer auto-readiness until the new round is stable")
+local selectionReset = assert(clientSource:find('self:ResetOnlineRoundRuntimeState("song_selection")', 1, true),
+	"song selection must reset the previous round")
+local selectionAutoReady = assert(clientSource:find('"song_selection_stabilized"', selectionReset, true),
+	"song selection must restart auto-readiness after the round reset")
+assert(selectionReset < selectionAutoReady,
+	"song selection must reset round state before starting availability")
 assert(clientSource:find("function ITGOnline:AcceptInvitationForLocalPlayer", 1, true),
 	"an invitation addressed to either local player must be answerable")
 assert(clientSource:find("companion_invitation_forwarded", 1, true),

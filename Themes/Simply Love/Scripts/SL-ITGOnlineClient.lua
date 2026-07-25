@@ -5945,11 +5945,24 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		self:ClearActiveGameplayRound("room_snapshot_no_song")
 	end
 
-	if self.MaybeAutoReadyManager then
+	local selectionTransitionInFlight = self.songSelectionTransitionInFlight == true
+	if self.MaybeAutoReadyManager and not selectionTransitionInFlight then
 		self:MaybeAutoReadyManager(self.currentRoom)
 	end
 	if self.MaybeAutoConfirmSelectedSongAndMarkLobbyReady then
-		self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(self.currentRoom, source)
+		-- A manager can receive the realtime room snapshot before the response to
+		-- its own song-selection request.  That response must reset the previous
+		-- round before it starts the availability/ready chain; starting it here
+		-- would make that reset invalidate the request that was just sent.
+		-- Defer it until SelectSong has committed the new round atomically.
+		if selectionTransitionInFlight then
+			online_flow_trace("song_selected_auto_ready_deferred"
+				.. " source=" .. tostring(source or "unknown")
+				.. " reason=song_selection_transition_inflight"
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
+		else
+			self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(self.currentRoom, source)
+		end
 	end
 
 	online_flow_trace("room_snapshot_apply_complete source=" .. tostring(source or "unknown")
@@ -10694,7 +10707,6 @@ function ITGOnline:SelectSong(callback, options)
 		local callbacks = self.songSelectionInFlightCallbacks or {}
 		self.songSelectionInFlightKey = ""
 		self.songSelectionInFlightCallbacks = {}
-		self:ClearSongSelectionTransition("select_response")
 		online_flow_trace("song_selection_response ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " error=" .. tostring(decoded and decoded.error_code or response and response.error or "nil")
@@ -10713,6 +10725,11 @@ function ITGOnline:SelectSong(callback, options)
 			if room then
 				self.currentSongPayload = room.selected_song or payload
 				self:ResetOnlineRoundRuntimeState("song_selection")
+				-- ApplyRoomSnapshot deliberately defers the automatic availability
+				-- chain while this transition is in flight.  Start it only after the
+				-- round reset above, otherwise the reset cancels the fresh request and
+				-- the room can remain stuck in lobby_ready forever.
+				self:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, "song_selection_stabilized")
 				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(room))
 			else
 				self.currentSongPayload = previousSongPayload
@@ -10725,6 +10742,7 @@ function ITGOnline:SelectSong(callback, options)
 				self:EnforceRoomPhaseScreen()
 			end
 		end
+		self:ClearSongSelectionTransition("select_response")
 		for cb in ivalues(callbacks) do
 			safe_callback(cb, ok, decoded, response)
 		end
