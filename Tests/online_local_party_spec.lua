@@ -110,6 +110,12 @@ assert(clientSource:find("song_availability_barrier_result", 1, true),
 	"song availability must wait for both local players")
 assert(clientSource:find("song_selected_auto_ready_deferred", 1, true),
 	"song selection snapshots must defer auto-readiness until the new round is stable")
+assert(clientSource:find("function ITGOnline:RequiredLocalPlayersConfirmedSelectedSong", 1, true),
+	"the lobby-ready barrier must validate both local players")
+assert(clientSource:find("function ITGOnline:RefreshLocalPartyRoomForSongSelectedAutoReady", 1, true),
+	"a partial local-party room snapshot must be refreshed before readiness is abandoned")
+assert(clientSource:find("reason=local_party_room_incomplete", 1, true),
+	"local-party readiness must recover from a transient incomplete room snapshot")
 local selectionReset = assert(clientSource:find('self:ResetOnlineRoundRuntimeState("song_selection")', 1, true),
 	"song selection must reset the previous round")
 local selectionAutoReady = assert(clientSource:find('"song_selection_stabilized"', selectionReset, true),
