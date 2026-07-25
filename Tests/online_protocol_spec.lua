@@ -110,6 +110,9 @@ assert(sensitiveLog:find("<local-path>", 1, true), "local paths must be redacted
 
 local members = {}
 for index = 1, 300 do members[index] = { user_id = tostring(index), user = { id = tostring(index), name = "player" } } end
+members[1].local_party = {
+	companion = { id = "2", display_name = "second player" },
+}
 local room = assert(protocol.normalize_room({
 	id = "009",
 	phase = "PLAYING",
@@ -120,6 +123,7 @@ equal(room.id, "9", "room ID")
 equal(room.phase, "playing", "room phase")
 equal(#room.members, 300, "complete member list")
 equal(#room.ready_states, 0, "empty ready states")
+equal(room.members[1].local_party.companion.id, "2", "room member local party companion ID")
 
 local invalidCollection, invalidCollectionReason = protocol.normalize_room({
 	id = "9",

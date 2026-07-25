@@ -125,12 +125,26 @@ assert(lobbySource:find("user.isLocalCompanion", 1, true),
 	"the local companion must not expose invitation actions")
 assert(lobbySource:find('"WithPlayer"', 1, true),
 	"remote local parties must display their companion name")
+assert(clientSource:find("party_companion_descriptor", 1, true),
+	"online presence party relations must be normalized centrally")
+assert(clientSource:find("party_companion_descriptor(member)", 1, true),
+	"joined-room players must prefer the companion relation supplied by the room snapshot")
+assert(clientSource:find("partyCompanionName = partyCompanion and partyCompanion.name", 1, true),
+	"room and online projections must retain the companion display name")
+assert(onlineHelpersSource:find("player.isLocalCompanion == true", 1, true),
+	"joined-room players must identify the local companion")
+assert(clientSource:find("companion_ready_song_hash_recovered", 1, true),
+	"companion readiness must survive the shared options transition")
+assert(clientSource:find("retryAfter = 0.75, error_code = \"local_party_room_incomplete\"", 1, true),
+	"transient local-party readiness failures must be retried")
 assert(lobbySource:find("online_player_status_label", 1, true),
 	"online player statuses must use localized labels")
 assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),
 	"options completion must survive a transient room-context gap")
 assert(onlineHelpersSource:find("retry_deferred_config_ready", 1, true),
 	"deferred options completion must be retried after room restoration")
+assert(not onlineHelpersSource:find("ITGOnline.inLobby", 1, true),
+	"screen transitions must read the lobby state from their actor, not the API client")
 assert(optionsSource:find("onlineOptionsSessionActive", 1, true),
 	"online options must preserve their room context during screen transitions")
 

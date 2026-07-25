@@ -183,6 +183,13 @@ local af = Def.ActorFrame{
 			.. " afterP2=" .. tostring(SL.Global.ScreenAfter.PlayerOptions2 or "nil")
 			.. " afterP3=" .. tostring(SL.Global.ScreenAfter.PlayerOptions3 or "nil"))
 		if ITGOnline and (ITGOnline.currentRoomId or ITGOnline.onlineOptionsSessionActive == true) then
+			-- Non-manager clients enter this screen through the room-phase
+			-- enforcer, not TransitionToOnlineOptions.  Mark the session here too
+			-- so a transient room snapshot gap cannot discard their config-ready
+			-- event on OffCommand.
+			if ITGOnline.currentRoomId then
+				ITGOnline.onlineOptionsSessionActive = true
+			end
 			SL.Global.ScreenAfter.PlayerOptions = "ScreenOnlineLobbies"
 			SL.Global.ScreenAfter.PlayerOptions2 = "ScreenOnlineLobbies"
 			SL.Global.ScreenAfter.PlayerOptions3 = "ScreenOnlineLobbies"

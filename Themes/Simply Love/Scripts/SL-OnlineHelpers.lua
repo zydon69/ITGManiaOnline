@@ -2326,6 +2326,17 @@ DisplayLobbyState = function(data, actor)
 			end
 			local playerName = tostring(player.profileName or player.displayName or player.name
 				or online_lobby_text("UnknownPlayer", "Player"))
+			local partyLabel = ""
+			if player.isLocalCompanion == true then
+				partyLabel = " " .. online_lobby_text("WithYou", "(with you)")
+			elseif tostring(player.partyCompanionName or "") ~= "" then
+				partyLabel = " " .. online_lobby_text(
+					"WithPlayer",
+					"(with %s)",
+					tostring(player.partyCompanionName)
+				)
+			end
+			playerName = playerName .. partyLabel
 			local playerAndScreen = tostring(i)..'. '..playerName..playingText..readyText..stateText
 			if screenName ~= player.screenName then
 				playerAndScreen = playerAndScreen .. " - "
@@ -3395,6 +3406,12 @@ CreateOnlineHandler = function()
 						end
 					end
 					if ITGOnline and ITGOnline.IsOnlineOptionsScreen and ITGOnline:IsOnlineOptionsScreen(screenName) then
+						-- The room snapshot can be briefly unavailable while a non-manager
+						-- client enters options.  Preserve the intent from the screen
+						-- transition itself so OffCommand can defer and replay readiness.
+						if self.inLobby == true or ITGOnline.currentRoomId then
+							ITGOnline.onlineOptionsSessionActive = true
+						end
 						replace_online_input_callback(screen, "online_options", OnlineOptionsInputHandler)
 					end
 					if ITGOnline and ITGOnline.currentRoomId then

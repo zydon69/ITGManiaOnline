@@ -541,6 +541,23 @@ local function user_display_name(user, fallback)
 	return tostring(fallback or "Player")
 end
 
+-- Presence responses expose the local-party relationship in snake_case, while
+-- cached/client snapshots may use camelCase.  Normalize it once so every UI
+-- projection (global player list and joined-room list) renders the same pair.
+local function party_companion_descriptor(user)
+	if type(user) ~= "table" then return nil end
+	local party = user.local_party or user.localParty
+	if type(party) ~= "table" then return nil end
+	local companion = party.companion or party.companionUser
+	if type(companion) ~= "table" then return nil end
+	local id = companion.id or companion.user_id or companion.userId
+	if id == nil or tostring(id) == "" then return nil end
+	return {
+		id = id,
+		name = user_display_name(companion, ""),
+	}
+end
+
 local function online_score_entry_summary(entry, index)
 	if type(entry) ~= "table" then
 		return tostring(index or "?") .. ":invalid"
@@ -13109,7 +13126,7 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 		safe_callback(callback, false, {
 			error_code = "local_party_room_incomplete",
 			deferred = true,
-		}, nil)
+		}, { retryAfter = 0.75, error_code = "local_party_room_incomplete" })
 		return
 	end
 
@@ -13138,6 +13155,15 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 			selectedSong.song_hash or selectedSong.songHash or ""
 		):lower()
 		local optionSongHash = tostring(payload.options.song_hash or ""):lower()
+		if isReady and selectedSongHash ~= "" and optionSongHash == "" then
+			-- The engine can clear GAMESTATE's song while the shared options screen
+			-- is closing.  The room selection remains authoritative in that window.
+			payload.options.song_hash = selectedSongHash
+			optionSongHash = selectedSongHash
+			online_flow_trace("companion_ready_song_hash_recovered localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " songHash=" .. tostring(selectedSongHash):sub(1, 12))
+		end
 		if isReady and (selectedSongHash == "" or optionSongHash ~= selectedSongHash) then
 			online_flow_trace("companion_ready_failed reason=song_context localPlayer=P2"
 				.. " selectedSongHash=" .. tostring(selectedSongHash):sub(1, 12)
@@ -13145,7 +13171,7 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 			safe_callback(callback, false, {
 				error_code = "config_ready_song_context_mismatch",
 				deferred = true,
-			}, nil)
+			}, { retryAfter = 0.75, error_code = "config_ready_song_context_mismatch" })
 			return
 		end
 	end
@@ -13776,6 +13802,16 @@ function ITGOnline:CurrentOnlineOptionSummary(player)
 		-- immutable room selection, so a different P2 difficulty remains valid.
 		songHash = selectedSongHash
 		songHashSource = "remembered_player_selection_match"
+	end
+	-- During the shared local two-player options exit the engine can clear the
+	-- current song before P2's independent ready request is built.  The room's
+	-- immutable selection key is authoritative in that window, even when P2's
+	-- stepchart was not changed and therefore has no per-player remembered row.
+	if songHash == ""
+		and selectedSongHash ~= ""
+		and currentSelectionKey ~= "" then
+		songHash = selectedSongHash
+		songHashSource = "current_room_selection_fallback"
 	end
 	local chartKey = steps and steps.GetChartKey and tostring(steps:GetChartKey() or "") or ""
 	local chartType = steps and normalize_chart_type(enum_short(steps:GetStepsType()) or "") or ""
@@ -19007,8 +19043,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 					selfPresenceDevices[#selfPresenceDevices + 1] = tostring(viewerSession.device_name or viewerSession.deviceName)
 				end
 			else
-				local localParty = type(user.local_party) == "table" and user.local_party or {}
-				local partyCompanion = type(localParty.companion) == "table" and localParty.companion or nil
+				local partyCompanion = party_companion_descriptor(user)
 				local isLocalCompanion = localCompanionUserId ~= ""
 					and online_protocol_ids_match(user.id, localCompanionUserId)
 				local sameAccountNonViewer = self.user and online_protocol_ids_match(user.id, self.user.id)
@@ -19038,9 +19073,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 					isSelf = false,
 					isLocalCompanion = isLocalCompanion,
 					partyCompanionId = partyCompanion and partyCompanion.id or nil,
-					partyCompanionName = partyCompanion
-						and user_display_name(partyCompanion, "")
-						or nil,
+					partyCompanionName = partyCompanion and partyCompanion.name or nil,
 				}
 				displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
 			end
@@ -19141,6 +19174,54 @@ function ITGOnline:LobbyStatePayload(room)
 		if userId ~= "" then liveScoreByUserId[userId] = score end
 	end
 
+	-- Room snapshots now carry the verified companion identity directly.  Use
+	-- that authoritative relation first; the global-directory cache remains a
+	-- compatibility fallback for servers that have not yet sent it.
+	local partyByUserId = {}
+	for member in ivalues(room.members or {}) do
+		local user = member.user or member
+		local memberId = user and (user.id or member.user_id)
+		local companion = party_companion_descriptor(member)
+			or party_companion_descriptor(user)
+		if memberId ~= nil and companion then
+			partyByUserId[tostring(memberId)] = companion
+		end
+	end
+	local cachedOnlinePlayers = self.cachedLobbySearchPayload
+		and self.cachedLobbySearchPayload.onlinePlayers or {}
+	for cachedPlayer in ivalues(cachedOnlinePlayers) do
+		local cachedId = cachedPlayer and (cachedPlayer.id or cachedPlayer.userId)
+		if cachedId ~= nil and partyByUserId[tostring(cachedId)] == nil then
+			local companionId = cachedPlayer.partyCompanionId
+			local companionName = cachedPlayer.partyCompanionName
+			if companionId ~= nil and tostring(companionId) ~= "" then
+				partyByUserId[tostring(cachedId)] = {
+					id = companionId,
+					name = tostring(companionName or ""),
+				}
+			end
+		end
+	end
+	-- The local pair is not necessarily present in onlinePlayers because the
+	-- viewer's own presence is filtered.  Add both directions explicitly.
+	if self:IsLocalTwoPlayerSession() then
+		local localPrimary = self:UserForLocalPlayer(PLAYER_1)
+		local localCompanion = self:UserForLocalPlayer(PLAYER_2)
+		local primaryId = online_user_identifier(localPrimary)
+		local companionId = online_user_identifier(localCompanion)
+		if primaryId ~= "" and companionId ~= "" then
+			partyByUserId[primaryId] = {
+				id = companionId,
+				name = user_display_name(localCompanion, ""),
+			}
+			partyByUserId[companionId] = {
+				id = primaryId,
+				name = user_display_name(localPrimary, ""),
+				isLocalCompanion = true,
+			}
+		end
+	end
+
 	local screenName = "ScreenOnlineLobbies"
 	if room.phase == "config" then
 		screenName = "ScreenPlayerOptions"
@@ -19153,6 +19234,7 @@ function ITGOnline:LobbyStatePayload(room)
 	for member in ivalues(room.members or {}) do
 		local user = member.user or member
 		local userId = tostring(user.id or member.user_id or "")
+		local partyCompanion = partyByUserId[userId]
 		local session = playByUserId[userId] or {}
 		local state = tostring(session.state or member.play_state or "pending")
 		local memberScreenName = screenName
@@ -19197,6 +19279,9 @@ function ITGOnline:LobbyStatePayload(room)
 			local playerPayload = {
 				playerId = userId,
 				profileName = user_display_name(user, "Player " .. userId),
+				partyCompanionId = partyCompanion and partyCompanion.id or nil,
+				partyCompanionName = partyCompanion and partyCompanion.name or nil,
+				isLocalCompanion = partyCompanion and partyCompanion.isLocalCompanion == true or false,
 				screenName = memberScreenName,
 				-- A green check means options are validated, never merely that a
 				-- local chart was found during the lobby-ready barrier.
