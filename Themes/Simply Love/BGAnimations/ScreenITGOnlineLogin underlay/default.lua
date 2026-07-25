@@ -1,5 +1,8 @@
 local function required_players()
-	if ITGOnline and ITGOnline.JoinedLocalPlayers then
+	if ITGOnline and ITGOnline.RequiredLocalPlayers then
+		local players = ITGOnline:RequiredLocalPlayers()
+		if type(players) == "table" and #players > 0 then return players end
+	elseif ITGOnline and ITGOnline.JoinedLocalPlayers then
 		local players = ITGOnline:JoinedLocalPlayers()
 		if type(players) == "table" and #players > 0 then return players end
 	end
@@ -670,6 +673,9 @@ local t = Def.ActorFrame{
 	OnCommand=function(self)
 		screenActive = true
 		partyConnecting = false
+		if ITGOnline and ITGOnline.CaptureLocalPartyPlan then
+			ITGOnline:CaptureLocalPartyPlan()
+		end
 		for _, state in pairs(states) do
 			invalidate_attempt(state, "screen_on")
 			clear_device_session(state)

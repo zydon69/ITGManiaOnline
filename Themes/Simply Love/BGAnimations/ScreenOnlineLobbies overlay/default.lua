@@ -10,6 +10,17 @@ local function online_lobby_text(key, fallback, ...)
 	return value
 end
 
+local function online_player_status_label(status)
+	local normalized = tostring(status or ""):lower()
+	local key = ({
+		available = "StatusAvailable",
+		in_room = "StatusInRoom",
+		playing = "StatusPlaying",
+	})[normalized]
+	if key then return online_lobby_text(key, status) end
+	return tostring(status or "")
+end
+
 -- Screen state
 -- -----------------------------------------------------------------------
 
@@ -23,6 +34,7 @@ local options = {
 	online_lobby_text("Back", "Back"),
 }
 local t = nil
+local lobby_flow_trace
 local connected = false
 local has_error = false
 local input_added = false
@@ -201,7 +213,6 @@ SL.Global.Online.ScreenOnlineLobbiesInputDedup = SL.Global.Online.ScreenOnlineLo
 }
 SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt = SL.Global.Online.ScreenOnlineLobbiesLeaveFinishedAt or -999
 local overlay_instance_id = tostring({})
-local lobby_flow_trace
 
 local function is_active_lobby_overlay()
 	return SL
@@ -4340,7 +4351,7 @@ local af = Def.ActorFrame{
 				})
 				or ""
 			local room = roomLabel ~= "" and (" " .. roomLabel) or ""
-			local status = user.status and (" [" .. tostring(user.status) .. "]") or ""
+			local status = user.status and (" [" .. online_player_status_label(user.status) .. "]") or ""
 			local unknownPlayer = online_lobby_text("UnknownPlayer", "Player")
 			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, unknownPlayer)
 				or tostring(user.display_name or user.displayName or user.name or unknownPlayer)

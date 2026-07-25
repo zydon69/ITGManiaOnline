@@ -74,6 +74,10 @@ ITGOnline.logSessionId = ITGOnline.logSessionId or string.format("%08x-%08x",
 ITGOnline.user = ITGOnline.user or nil
 ITGOnline.socket = ITGOnline.socket or nil
 ITGOnline.localPartyRealtime = ITGOnline.localPartyRealtime or {}
+-- Freeze local party membership for the online session.  During screen and
+-- gameplay transitions the engine can briefly report only P1, which used to
+-- make P2 fan-out requests disappear silently.
+ITGOnline.localPartySessionPlan = nil
 ITGOnline.currentRoomId = ITGOnline.currentRoomId or nil
 ITGOnline.currentRoom = ITGOnline.currentRoom or nil
 ITGOnline.currentRoomBlockedReason = ITGOnline.currentRoomBlockedReason or ""
@@ -2112,7 +2116,49 @@ function ITGOnline:JoinedLocalPlayers()
 	return joined_local_players()
 end
 
+function ITGOnline:CaptureLocalPartyPlan()
+	local sides = {}
+	for _, player in ipairs(joined_local_players()) do
+		sides[#sides + 1] = local_player_key(player)
+	end
+	if #sides == 0 then sides[1] = "P1" end
+	local plan
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.session_plan then
+		plan = ITGOnlineLocalParty.session_plan(sides)
+	else
+		plan = {
+			requiredSides = sides,
+			requiredCount = #sides,
+			coordinatorSide = sides[1],
+			twoPlayer = #sides == 2,
+		}
+	end
+	self.localPartySessionPlan = plan
+	online_flow_trace("local_party_plan_captured sides=" .. table.concat(sides, ",")
+		.. " coordinator=" .. tostring(plan.coordinatorSide or "nil")
+		.. " twoPlayer=" .. tostring(plan.twoPlayer == true))
+	return plan
+end
+
+function ITGOnline:ClearLocalPartyPlan()
+	if self.localPartySessionPlan then
+		online_flow_trace("local_party_plan_cleared")
+	end
+	self.localPartySessionPlan = nil
+end
+
+function ITGOnline:RequiredLocalPlayers()
+	local plan = self:LocalPartyPlan()
+	local players = {}
+	for _, side in ipairs(plan.requiredSides or {}) do
+		players[#players + 1] = tostring(side) == "P2" and PLAYER_2 or PLAYER_1
+	end
+	if #players == 0 then players[1] = PLAYER_1 end
+	return players
+end
+
 function ITGOnline:LocalPartyPlan()
+	if self.localPartySessionPlan then return self.localPartySessionPlan end
 	local sides = {}
 	for _, player in ipairs(joined_local_players()) do
 		sides[#sides + 1] = local_player_key(player)
@@ -2245,7 +2291,7 @@ end
 function ITGOnline:ValidateLocalPlayerIdentities()
 	local plan = self:LocalPartyPlan()
 	local identities = {}
-	for _, player in ipairs(joined_local_players()) do
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
 		if not self:HasActiveAccessTokenForPlayer(player) then
 			return false, "local_player_not_authenticated", local_player_key(player)
 		end
@@ -2623,7 +2669,7 @@ function ITGOnline:ApplyAccessToken(accessToken, callback, expectedBinding)
 			return
 		end
 		local incomingUserId = online_user_identifier(user)
-		for _, player in ipairs(joined_local_players()) do
+		for _, player in ipairs(self:RequiredLocalPlayers()) do
 			if not self:IsPrimaryLocalPlayer(player) then
 				local otherUserId = online_user_identifier(self:UserForLocalPlayer(player))
 				if incomingUserId ~= "" and incomingUserId == otherUserId then
@@ -3908,7 +3954,7 @@ end
 
 function ITGOnline:LocalPartyRoomComplete(room)
 	if not self:IsLocalTwoPlayerSession() then return true end
-	for _, player in ipairs(joined_local_players()) do
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
 		if not self:RoomContainsLocalPlayer(room, player) then return false end
 	end
 	return true
@@ -8908,7 +8954,7 @@ end
 
 function ITGOnline:ConnectLocalPlayerPartyWebSockets(callbacks)
 	callbacks = type(callbacks) == "table" and callbacks or {}
-	local players = joined_local_players()
+	local players = self:RequiredLocalPlayers()
 	if #players < 2 then
 		self:ConnectWebSocket(callbacks)
 		return
@@ -9143,7 +9189,7 @@ function ITGOnline:Disconnect(options)
 		realtimeConnected = self.realtimeConnected == true,
 		syncInFlight = self.syncInFlight == true,
 	})
-	for _, player in ipairs(joined_local_players()) do
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
 		if not self:IsPrimaryLocalPlayer(player) and self:HasActiveAccessTokenForPlayer(player) then
 			if roomIdToLeave and options.leaveRoom ~= false then
 				self:QueueBestEffortLocalPlayerRequest(
@@ -9329,6 +9375,7 @@ function ITGOnline:Disconnect(options)
 	self.syncGeneration = (self.syncGeneration or 0) + 1
 	self:ResetRealtimeState()
 	self:ClearTransientSecrets()
+	self:ClearLocalPartyPlan()
 	online_flow_trace("disconnect_end syncGeneration=" .. tostring(self.syncGeneration)
 		.. " realtimeGeneration=" .. tostring(self.realtimeGeneration or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
@@ -13152,7 +13199,7 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 	)
 end
 
-function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
+function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase, companionReadyAlready)
 	if not self.currentRoomId then
 		online_flow_trace("ready_request_failed reason=no_current_room phase=" .. tostring(phase)
 			.. " isReady=" .. tostring(isReady == true))
@@ -13173,6 +13220,7 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 		.. " roundKey=" .. tostring(readyRoundKey)
 		.. " selectionKey=" .. tostring(readySelectionKey)
 		.. " refreshedUnknownPhase=" .. tostring(refreshedUnknownPhase == true)
+		.. " companionReadyAlready=" .. tostring(companionReadyAlready == true)
 		.. " optimisticConfigKey=" .. tostring(self.optimisticConfigReadyKey or "")
 		.. " configInFlight=" .. tostring(self.configReadyRequestInFlight == true))
 	if isReady and currentPhase == "unknown" then
@@ -13306,7 +13354,23 @@ function ITGOnline:SetReady(phase, isReady, callback, refreshedUnknownPhase)
 			.. " maxScore=" .. tostring(payload.options.max_score or "nil"))
 	end
 
-	if self:IsLocalTwoPlayerSession() then
+	if self:IsLocalTwoPlayerSession() and isReady and not companionReadyAlready then
+		-- P1 must not become ready before the paired P2 request succeeds.  The
+		-- previous fire-and-forget fan-out let the server start with only P1.
+		self:SetCompanionReady(phase, isReady, function(companionOk, companionDecoded, companionResponse)
+			online_flow_trace("companion_ready_barrier_result phase=" .. tostring(phase)
+				.. " ok=" .. tostring(companionOk == true)
+				.. " status=" .. tostring(companionResponse and companionResponse.statusCode or "nil")
+				.. " error=" .. tostring(companionDecoded and companionDecoded.error_code
+					or companionResponse and companionResponse.errorMessage or "nil"))
+			if not companionOk then
+				safe_callback(callback, false, companionDecoded, companionResponse)
+				return
+			end
+			self:SetReady(phase, isReady, callback, refreshedUnknownPhase, true)
+		end)
+		return
+	elseif self:IsLocalTwoPlayerSession() then
 		self:SetCompanionReady(phase, isReady, function(companionOk, companionDecoded, companionResponse)
 			online_flow_trace("companion_ready_fanout_result phase=" .. tostring(phase)
 				.. " ok=" .. tostring(companionOk == true)
@@ -17049,6 +17113,50 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	local availabilityGeneration = tonumber(self.songAvailabilityGeneration) or 0
 	self.songAvailabilityInFlightKey = availabilityKey
 	self.songAvailabilityInFlightCallbacks = callback and { callback } or {}
+	-- Once the session was captured as two-player, P2 is always part of the
+	-- availability barrier.  A transient/stale room snapshot must not silently
+	-- downgrade the request to P1-only.
+	local companionRequired = self:IsLocalTwoPlayerSession()
+	local companionPending = companionRequired
+	local companionRequestOk = not companionRequired
+	local companionDecoded = nil
+	local companionResponse = nil
+	local primaryDone = false
+	local primaryCallbackOk = false
+	local primaryDecoded = nil
+	local primaryResponse = nil
+	local function finishAvailability()
+		if not primaryDone or companionPending then return end
+		local finalOk = primaryCallbackOk and companionRequestOk
+		local finalDecoded = primaryDecoded
+		local finalResponse = primaryResponse
+		if not companionRequestOk and finalOk == false then
+			finalDecoded = finalDecoded or {}
+			finalDecoded.error_code = finalDecoded.error_code
+				or companionDecoded and companionDecoded.error_code
+				or "local_party_companion_song_availability_failed"
+			finalResponse = companionResponse or finalResponse
+		end
+		if finalOk then
+			self.songAvailabilityReportedKey = availabilityKey
+		elseif not (finalResponse and tonumber(finalResponse.statusCode) == 401) then
+			self.songAvailabilitySuppressedUntil[availabilityKey] = GetTimeSinceStart()
+				+ (tonumber(self.songAvailabilityFailureDedupSeconds) or 5)
+		end
+		online_flow_trace("song_availability_barrier_result key=" .. tostring(availabilityKey)
+			.. " primaryOk=" .. tostring(primaryCallbackOk == true)
+			.. " companionRequired=" .. tostring(companionRequired == true)
+			.. " companionOk=" .. tostring(companionRequestOk == true)
+			.. " finalOk=" .. tostring(finalOk == true))
+		if self.songAvailabilityInFlightKey == availabilityKey then
+			self.songAvailabilityInFlightKey = ""
+		end
+		local callbacks = self.songAvailabilityInFlightCallbacks or {}
+		self.songAvailabilityInFlightCallbacks = {}
+		for cb in ivalues(callbacks) do
+			safe_callback(cb, finalOk, finalDecoded, finalResponse)
+		end
+	end
 	online_flow_trace("song_availability_request key=" .. tostring(availabilityKey)
 		.. " room=" .. tostring(self.currentRoomId)
 		.. " missing=" .. tostring(missing == true)
@@ -17057,7 +17165,7 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		.. " songHash=" .. tostring(payload.song_hash or "nil")
 		.. " chartHash=" .. tostring(payload.chart_hash or "nil"))
 
-	if self:IsLocalTwoPlayerSession() and self:LocalPartyRoomComplete(self.currentRoom) then
+	if companionRequired then
 		local companionKey = "P2|" .. availabilityKey
 		self.companionSongAvailabilityInFlight = self.companionSongAvailabilityInFlight or {}
 		if not self.companionSongAvailabilityInFlight[companionKey] then
@@ -17071,25 +17179,36 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				"POST",
 				"/rooms/" .. tostring(self.currentRoomId) .. "/song-availability",
 				payload,
-				function(companionOk, companionDecoded, companionResponse)
+				function(companionOk, decodedCompanion, responseCompanion)
 					self.companionSongAvailabilityInFlight[companionKey] = nil
+					companionPending = false
+					companionRequestOk = companionOk == true
+					companionDecoded = decodedCompanion
+					companionResponse = responseCompanion
 					online_flow_trace("companion_song_availability_response localPlayer=P2"
 						.. " room=" .. tostring(self.currentRoomId or "nil")
 						.. " ok=" .. tostring(companionOk == true)
-						.. " status=" .. tostring(companionResponse
-							and companionResponse.statusCode or "nil")
-						.. " error=" .. tostring(companionDecoded
-							and companionDecoded.error_code
-							or companionResponse and companionResponse.errorMessage
+						.. " status=" .. tostring(responseCompanion
+							and responseCompanion.statusCode or "nil")
+						.. " error=" .. tostring(decodedCompanion
+							and decodedCompanion.error_code
+							or responseCompanion and responseCompanion.errorMessage
 							or "nil"))
-					if companionOk and companionDecoded and companionDecoded.room then
+					if companionOk and decodedCompanion and decodedCompanion.room then
 						self:ApplyDecodedRoomSnapshot(
-							companionDecoded,
+							decodedCompanion,
 							"companion_song_availability"
 						)
 					end
+					finishAvailability()
 				end
 			)
+		else
+			-- A request for this key is already being serviced; the primary request
+			-- remains the source of truth for this coalesced call.
+			companionPending = false
+			companionRequestOk = true
+			online_flow_trace("companion_song_availability_coalesced key=" .. companionKey)
 		end
 	end
 
@@ -17100,16 +17219,17 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				.. " requestGeneration=" .. tostring(availabilityGeneration)
 				.. " currentGeneration=" .. tostring(self.songAvailabilityGeneration)
 				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			primaryDone = true
+			primaryCallbackOk = false
+			primaryDecoded = decoded
+			primaryResponse = response
+			finishAvailability()
 			return
 		end
 		local callbacks = self.songAvailabilityInFlightCallbacks or {}
 		local availabilityResult = decoded and decoded.song_availability or nil
 		local ignored = ok and availabilityResult and availabilityResult.applied == false
 		local callbackOk = ok and not ignored
-		if self.songAvailabilityInFlightKey == availabilityKey then
-			self.songAvailabilityInFlightKey = ""
-			self.songAvailabilityInFlightCallbacks = {}
-		end
 		if ignored then
 			decoded.error_code = decoded.error_code or "song_availability_ignored"
 			decoded.message = decoded.message or "Song availability update was ignored for a stale selection."
@@ -17117,12 +17237,6 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 			response.errorMessage = response.errorMessage or decoded.message
 			online_flow_trace("song_availability_ignored key=" .. tostring(availabilityKey)
 				.. " reason=" .. tostring(availabilityResult and availabilityResult.ignored_reason or "unknown"))
-		end
-		if callbackOk then
-			self.songAvailabilityReportedKey = availabilityKey
-		elseif not ignored and not (response and tonumber(response.statusCode) == 401) then
-			self.songAvailabilitySuppressedUntil[availabilityKey] = GetTimeSinceStart()
-				+ (tonumber(self.songAvailabilityFailureDedupSeconds) or 5)
 		end
 		online_flow_trace("song_availability_response key=" .. tostring(availabilityKey)
 			.. " ok=" .. tostring(ok == true)
@@ -17153,9 +17267,13 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				end
 			end
 		end
-		for cb in ivalues(callbacks) do
-			safe_callback(cb, callbackOk, decoded, response)
-		end
+		primaryDone = true
+		primaryCallbackOk = callbackOk == true
+		primaryDecoded = decoded
+		primaryResponse = response
+		-- Keep the callback list owned by the barrier.  The local copy above is
+		-- only used for diagnostics and remains valid until the companion reply.
+		finishAvailability()
 	end)
 end
 
