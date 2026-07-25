@@ -32,6 +32,7 @@
 static RageTimer g_GameplayTimer;
 static RageTimer g_LastInputTimer;
 static constexpr float kPerfTraceFrameHitchSeconds = 0.025f;
+static constexpr float kCriticalFrameHitchSeconds = 0.050f;
 static constexpr float kPerfTraceSlowUpdateMs = 12.0f;
 static constexpr float kPerfTraceSlowDrawMs = 12.0f;
 
@@ -85,6 +86,9 @@ struct LoopPerfSnapshot {
 static LoopPerfSnapshot g_LastLoopPerf;
 static bool g_HasLastLoopPerf = false;
 static uint64_t g_LastLoopPerfTraceUsec = 0;
+static uint64_t g_LastFpsSampleUsec = 0;
+static uint64_t g_LastLowFpsTraceUsec = 0;
+static int g_ConsecutiveLowFpsSamples = 0;
 
 static float TimerMs(RageTimer& timer) {
   return timer.GetDeltaTime() * 1000.0f;
@@ -145,18 +149,19 @@ static const char* ClassifyLoopPerfSnapshot(
 }
 
 static void LogLoopPerfSnapshot(
-    const char* reason, const LoopPerfSnapshot& snapshot, bool force = false) {
-  if (!PerfDiagnosticsEnabled()) {
+    const char* reason,
+    const LoopPerfSnapshot& snapshot,
+    bool allowWhenDisabled = false) {
+  if (!PerfDiagnosticsEnabled() && !allowWhenDisabled) {
     return;
   }
 
   const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-  if (!force && !PerfTraceRateLimit(nowUsec)) {
+  // Diagnostic logging must never amplify a sustained hitch.  Critical
+  // samples bypass the preference gate, but still share the bounded trace
+  // rate with verbose samples.
+  if (!PerfTraceRateLimit(nowUsec)) {
     return;
-  }
-
-  if (force) {
-    g_LastLoopPerfTraceUsec = nowUsec;
   }
 
   LOG->Trace(
@@ -172,6 +177,56 @@ static void LogLoopPerfSnapshot(
       snapshot.memcardMs, snapshot.inputMs, snapshot.lightsMs,
       ClassifyLoopPerfSnapshot(reason, snapshot),
       snapshot.startScreen.c_str(), snapshot.endScreen.c_str());
+}
+
+static void TraceFpsDrop() {
+  if (DISPLAY == nullptr) {
+    g_ConsecutiveLowFpsSamples = 0;
+    return;
+  }
+
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  constexpr uint64_t kSampleIntervalUsec = 1000000;
+  constexpr uint64_t kTraceIntervalUsec = 5000000;
+  if (g_LastFpsSampleUsec != 0 &&
+      nowUsec - g_LastFpsSampleUsec < kSampleIntervalUsec) {
+    return;
+  }
+  g_LastFpsSampleUsec = nowUsec;
+
+  const int fps = DISPLAY->GetFPS();
+  const ActualVideoModeParams mode = DISPLAY->GetActualVideoModeParams();
+  const int refreshRate = mode.rate;
+  const int lowFpsThreshold = static_cast<int>(refreshRate * 0.8f);
+  if (fps <= 0 || refreshRate <= 0 || fps >= lowFpsThreshold) {
+    g_ConsecutiveLowFpsSamples = 0;
+    return;
+  }
+
+  ++g_ConsecutiveLowFpsSamples;
+  if (g_LastLowFpsTraceUsec != 0 &&
+      nowUsec - g_LastLowFpsTraceUsec < kTraceIntervalUsec) {
+    return;
+  }
+  g_LastLowFpsTraceUsec = nowUsec;
+
+  const char* classification =
+      g_HasLastLoopPerf
+          ? ClassifyLoopPerfSnapshot("fps_drop", g_LastLoopPerf)
+          : "unavailable";
+  LOG->Trace(
+      "PERF_TRACE: fps_drop fps=%d refresh_hz=%d threshold_fps=%d "
+      "samples=%d renderer=%s vsync=%d screen=%s update_ms=%.3f draw_ms=%.3f "
+      "network_ms=%.3f screen_ms=%.3f texture_ms=%.3f classification=%s",
+      fps, refreshRate, lowFpsThreshold, g_ConsecutiveLowFpsSamples,
+      DISPLAY->GetApiDescription().c_str(), mode.vsync ? 1 : 0,
+      GetTopScreenNameForPerf().c_str(),
+      g_HasLastLoopPerf ? g_LastLoopPerf.totalUpdateMs : 0.0f,
+      g_HasLastLoopPerf ? g_LastLoopPerf.drawMs : 0.0f,
+      g_HasLastLoopPerf ? g_LastLoopPerf.networkMs : 0.0f,
+      g_HasLastLoopPerf ? g_LastLoopPerf.screenMs : 0.0f,
+      g_HasLastLoopPerf ? g_LastLoopPerf.textureMs : 0.0f,
+      classification);
 }
 }  // namespace
 
@@ -421,8 +476,11 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
   }
   const float rawDeltaTime = fDeltaTime;
 
-  if (g_HasLastLoopPerf && rawDeltaTime >= kPerfTraceFrameHitchSeconds) {
+  if (g_HasLastLoopPerf && rawDeltaTime >= kCriticalFrameHitchSeconds) {
     LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf, true);
+  } else if (g_HasLastLoopPerf &&
+             rawDeltaTime >= kPerfTraceFrameHitchSeconds) {
+    LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf);
   }
 
   if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips) {
@@ -517,6 +575,7 @@ void GameLoop::RunGameLoop() {
     if (drawMs >= kPerfTraceSlowDrawMs) {
       LogLoopPerfSnapshot("slow_draw", g_LastLoopPerf);
     }
+    TraceFpsDrop();
   }
 
   // If we ended mid-game, finish up.

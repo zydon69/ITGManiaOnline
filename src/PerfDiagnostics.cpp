@@ -1,13 +1,18 @@
 #include "PerfDiagnostics.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdarg>
 #include <cstdlib>
 #include <string>
 
+#include "IniFile.h"
 #include "Preference.h"
+#include "PrefsManager.h"
 #include "RageLog.h"
+#include "RageTimer.h"
 #include "RageUtil.h"
+#include "global.h"
 
 static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", false);
 static Preference<bool> g_bLogAudioUnderrunDiagnostics(
@@ -50,6 +55,8 @@ static std::atomic<bool> g_bLogThemeLuaDiagnosticsCached{false};
 static std::atomic<bool> g_bLogGlobalOffsetDiagnosticsCached{false};
 static std::atomic<bool> g_bLogWindowsEventDiagnosticsCached{false};
 static std::atomic<bool> g_bRuntimeValidationCached{false};
+static std::atomic<bool> g_bOnlineNetworkDiagnosticsCached{false};
+static std::atomic<bool> g_bOnlineGameplayLayoutDiagnosticsCached{false};
 
 static bool EnvFlagEnabled(const char* name) {
   if (name == nullptr) {
@@ -116,6 +123,48 @@ void RefreshPerfDiagnosticsPreferenceCache() {
       g_bLogWindowsEventDiagnostics.Get(), std::memory_order_release);
   g_bRuntimeValidationCached.store(
       g_bRuntimeValidation.Get(), std::memory_order_release);
+}
+
+void RefreshOnlineDiagnosticsPreferenceCache() {
+  static uint64_t lastReadUsec = 0;
+  constexpr uint64_t kRefreshIntervalSeconds = 30;
+  constexpr uint64_t kRefreshIntervalUsec =
+      kRefreshIntervalSeconds * 1000ULL * 1000ULL;
+
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  if (lastReadUsec != 0 &&
+      nowUsec - lastReadUsec < kRefreshIntervalUsec) {
+    return;
+  }
+  lastReadUsec = nowUsec;
+
+  bool networkEnabled = false;
+  bool layoutEnabled = false;
+  if (PREFSMAN != nullptr) {
+    IniFile ini;
+    if (ini.ReadFile("Save/ThemePrefs.ini")) {
+      ini.GetValue(
+          PREFSMAN->m_sTheme, "ITGOnlineNetworkLogs", networkEnabled);
+      ini.GetValue(
+          PREFSMAN->m_sTheme,
+          "ITGOnlineGameplayLayoutLogs",
+          layoutEnabled);
+    }
+  }
+
+  g_bOnlineNetworkDiagnosticsCached.store(
+      networkEnabled, std::memory_order_release);
+  g_bOnlineGameplayLayoutDiagnosticsCached.store(
+      layoutEnabled, std::memory_order_release);
+}
+
+bool OnlineNetworkDiagnosticsEnabled() {
+  return g_bOnlineNetworkDiagnosticsCached.load(std::memory_order_acquire);
+}
+
+bool OnlineGameplayLayoutDiagnosticsEnabled() {
+  return g_bOnlineGameplayLayoutDiagnosticsCached.load(
+      std::memory_order_acquire);
 }
 
 /*

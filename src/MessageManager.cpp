@@ -2,16 +2,14 @@
 
 #include <algorithm>
 #include <cctype>
-#include <ctime>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "EnumHelper.h"
-#include "IniFile.h"
 #include "LuaManager.h"
-#include "PrefsManager.h"
+#include "PerfDiagnostics.h"
 #include "RageLog.h"
 #include "RageThreads.h"
 #include "global.h"
@@ -108,36 +106,7 @@ static bool MessageNameStartsWith(
 }
 
 static bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  static time_t lastRead = 0;
-  static bool cached = false;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return cached;
-  }
-
-  lastRead = now;
-  cached = false;
-
-  if (PREFSMAN == nullptr) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(
-          PREFSMAN->m_sTheme,
-          "ITGOnlineNetworkLogs",
-          enabled)) {
-    return false;
-  }
-
-  cached = enabled;
-  return cached;
+  return OnlineNetworkDiagnosticsEnabled();
 }
 
 static bool ShouldTraceOnlineMessage(const std::string& messageName) {
@@ -360,7 +329,6 @@ void MessageManager::Broadcast(Message& msg) const {
         LOG->Trace(
             "ITG Online MessageTrace: broadcast_no_subscribers name=%s",
             msg.GetName().c_str());
-        LOG->Flush();
       }
       return;
     }
@@ -399,7 +367,6 @@ void MessageManager::Broadcast(Message& msg) const {
         subscribers.size(),
         deliveredSubscribers,
         unsubscribedDuringDispatch);
-    LOG->Flush();
   }
 }
 

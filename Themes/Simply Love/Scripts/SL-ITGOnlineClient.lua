@@ -270,6 +270,9 @@ ITGOnline.heartbeatQueuedActivity = ITGOnline.heartbeatQueuedActivity or false
 ITGOnline.heartbeatQueuedActivityRetryCount = ITGOnline.heartbeatQueuedActivityRetryCount or 0
 ITGOnline.heartbeatQueuedFingerprint = ITGOnline.heartbeatQueuedFingerprint or ""
 ITGOnline.heartbeatQueuedAt = ITGOnline.heartbeatQueuedAt or 0
+ITGOnline.heartbeatDeferredUntilSync = ITGOnline.heartbeatDeferredUntilSync or false
+ITGOnline.heartbeatDeferredUntilSyncForce = ITGOnline.heartbeatDeferredUntilSyncForce or false
+ITGOnline.heartbeatDeferredUntilSyncActivity = ITGOnline.heartbeatDeferredUntilSyncActivity or false
 ITGOnline.lastHeartbeatSentAt = ITGOnline.lastHeartbeatSentAt or 0
 ITGOnline.lastHeartbeatFingerprint = ITGOnline.lastHeartbeatFingerprint or ""
 ITGOnline.heartbeatMinIntervalSeconds = ITGOnline.heartbeatMinIntervalSeconds or 30
@@ -1128,8 +1131,10 @@ local function online_flow_trace_throttled(key, intervalSeconds, message)
 	ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 
 	local throttleKey = tostring(key or "")
-	local previous = ITGOnline.onlineFlowTraceThrottle[throttleKey] or {}
-	if now - (tonumber(previous.at) or 0) < (tonumber(intervalSeconds) or 1.0) then
+	local previous = ITGOnline.onlineFlowTraceThrottle[throttleKey]
+	if previous
+		and now - (tonumber(previous.at) or 0) < (tonumber(intervalSeconds) or 1.0)
+	then
 		return
 	end
 
@@ -1647,14 +1652,19 @@ local function selected_steps(player)
 			local chartHash = ITGOnline.ChartHashForSteps and ITGOnline:ChartHashForSteps(rememberedSteps) or ""
 			local difficulty = rememberedSteps.GetDifficulty and enum_short(rememberedSteps:GetDifficulty()) or ""
 			local meter = rememberedSteps.GetMeter and tonumber(rememberedSteps:GetMeter()) or nil
-			online_flow_trace("option_stepchart_using_remembered"
+			online_flow_trace_throttled(
+				"option_stepchart_using_remembered:"
+					.. tostring(local_player_key(player)) .. ":" .. tostring(chartHash),
+				10.0,
+				"option_stepchart_using_remembered"
 				.. " source=" .. tostring(playerState and playerState.source
 					or ITGOnline.pendingOnlineOptionStepsSource or "unknown")
 				.. " age=" .. string.format("%.3f", age)
-				.. " player=" .. tostring(ITGOnline.pendingOnlineOptionStepsPlayer or "nil")
+				.. " player=" .. tostring(local_player_key(player))
 				.. " chartHash=" .. tostring(chartHash or ""):sub(1, 12)
 				.. " difficulty=" .. tostring(difficulty or "")
-				.. " meter=" .. tostring(meter or "nil"))
+				.. " meter=" .. tostring(meter or "nil")
+			)
 		end
 		if GAMESTATE.SetCurrentSteps then
 			pcall(function() GAMESTATE:SetCurrentSteps(player, rememberedSteps) end)
@@ -2558,6 +2568,9 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	self.heartbeatQueuedActivityRetryCount = 0
 	self.heartbeatQueuedFingerprint = ""
 	self.heartbeatQueuedAt = 0
+	self.heartbeatDeferredUntilSync = false
+	self.heartbeatDeferredUntilSyncForce = false
+	self.heartbeatDeferredUntilSyncActivity = false
 	self.lastHeartbeatSentAt = 0
 	self.lastHeartbeatFingerprint = ""
 	self.lastUserActivitySentAt = 0
@@ -8488,31 +8501,51 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							self:ForceRealtimeReconnect("invalid_json_frame")
 							return
 						end
-						online_flow_trace("realtime_message_received id=" .. tostring(payload and payload.id or "nil")
-							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
-							.. " bytes=" .. tostring(msg.data and string.len(msg.data) or 0))
-						self:TraceOnlineState("realtime_message_received", {
-							source = "websocket",
-							eventId = payload and payload.id or "nil",
-							eventName = payload and (payload.event or payload.name) or "nil",
-							bytes = msg.data and string.len(msg.data) or 0,
-							generation = generation,
-						})
-						online_flow_trace("realtime_handle_begin id=" .. tostring(payload and payload.id or "nil")
-							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+						local eventName = tostring(payload and (payload.event or payload.name) or "nil")
+						local isControlFrame = eventName == "server.ping" or eventName == "pong"
+						local receivedTrace = "realtime_message_received id="
+							.. tostring(payload and payload.id or "nil")
+							.. " name=" .. eventName
+							.. " bytes=" .. tostring(msg.data and string.len(msg.data) or 0)
+						if isControlFrame then
+							online_flow_trace_throttled(
+								"realtime_transport_frame:" .. eventName,
+								30.0,
+								receivedTrace
+							)
+						else
+							online_flow_trace(receivedTrace)
+							self:TraceOnlineState("realtime_message_received", {
+								source = "websocket",
+								eventId = payload and payload.id or "nil",
+								eventName = eventName,
+								bytes = msg.data and string.len(msg.data) or 0,
+								generation = generation,
+							})
+							online_flow_trace("realtime_handle_begin id="
+								.. tostring(payload and payload.id or "nil")
+								.. " name=" .. eventName)
+						end
 						local handled, err, normalizedPayload = self:DispatchRealtimeEvent(
 							payload,
 							"websocket"
 						)
-						online_flow_trace("realtime_handle_end id=" .. tostring(payload and payload.id or "nil")
-							.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil")
-							.. " ok=" .. tostring(handled == true))
-						self:TraceOnlineState("realtime_handle_end", {
-							source = "websocket",
-							eventId = payload and payload.id or "nil",
-							eventName = payload and (payload.event or payload.name) or "nil",
-							ok = handled == true,
-						})
+						if not isControlFrame then
+							online_flow_trace("realtime_handle_end id="
+								.. tostring(payload and payload.id or "nil")
+								.. " name=" .. eventName
+								.. " ok=" .. tostring(handled == true))
+							self:TraceOnlineState("realtime_handle_end", {
+								source = "websocket",
+								eventId = payload and payload.id or "nil",
+								eventName = eventName,
+								ok = handled == true,
+							})
+						elseif not handled then
+							online_flow_trace("realtime_control_frame_failed"
+								.. " name=" .. eventName
+								.. " error=" .. tostring(err or "unknown"))
+						end
 						-- Older servers did not expose requires_ack. Preserve compatibility
 						-- during a staggered rollout, while avoiding ACK traffic for events
 						-- that explicitly declare themselves volatile.
@@ -8532,11 +8565,17 @@ function ITGOnline:ConnectWebSocket(callbacks)
 							online_trace("Realtime event handling failed before ack: " .. tostring(err))
 						end
 						if handled then
-							online_flow_trace("realtime_callback_message_begin id=" .. tostring(payload and payload.id or "nil")
-								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+							if not isControlFrame then
+								online_flow_trace("realtime_callback_message_begin id="
+									.. tostring(payload and payload.id or "nil")
+									.. " name=" .. eventName)
+							end
 							self:InvokeActiveRealtimeCallbacks(generation, "message", normalizedPayload or payload)
-							online_flow_trace("realtime_callback_message_end id=" .. tostring(payload and payload.id or "nil")
-								.. " name=" .. tostring(payload and (payload.event or payload.name) or "nil"))
+							if not isControlFrame then
+								online_flow_trace("realtime_callback_message_end id="
+									.. tostring(payload and payload.id or "nil")
+									.. " name=" .. eventName)
+							end
 						end
 						elseif msgType == "Close" then
 							self.realtimeConnecting = false
@@ -8726,10 +8765,19 @@ function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
 
 	local eventName = tostring(normalized.event or normalized.name or "")
 	local eventPayload = type(normalized.payload) == "table" and normalized.payload or {}
-	online_flow_trace("companion_realtime_event localPlayer=" .. local_player_key(player)
+	local eventTrace = "companion_realtime_event localPlayer=" .. local_player_key(player)
 		.. " id=" .. tostring(normalized.id or "nil")
 		.. " event=" .. tostring(eventName)
-		.. " room=" .. tostring(eventPayload.room_id or eventPayload.roomId or "nil"))
+		.. " room=" .. tostring(eventPayload.room_id or eventPayload.roomId or "nil")
+	if eventName == "server.ping" or eventName == "pong" then
+		online_flow_trace_throttled(
+			"companion_realtime_control:" .. local_player_key(player) .. ":" .. eventName,
+			30.0,
+			eventTrace
+		)
+	else
+		online_flow_trace(eventTrace)
+	end
 
 	if eventName == "server.ping" then
 		self:SendCompanionRealtimePing(player, "server.ping")
@@ -9324,6 +9372,9 @@ function ITGOnline:Disconnect(options)
 	self.heartbeatQueuedActivityRetryCount = 0
 	self.heartbeatQueuedFingerprint = ""
 	self.heartbeatQueuedAt = 0
+	self.heartbeatDeferredUntilSync = false
+	self.heartbeatDeferredUntilSyncForce = false
+	self.heartbeatDeferredUntilSyncActivity = false
 	self.lastHeartbeatSentAt = 0
 	self.lastHeartbeatFingerprint = ""
 	self.lastUserActivitySentAt = 0
@@ -9505,6 +9556,24 @@ function ITGOnline:FinishSync(generation, ok, decoded, response)
 	self.syncCallbacks = {}
 	for cb in ivalues(callbacks) do
 		safe_callback(cb, ok, decoded, response)
+	end
+
+	local heartbeatDeferredUntilSync = self.heartbeatDeferredUntilSync == true
+	local heartbeatDeferredForce = self.heartbeatDeferredUntilSyncForce == true
+	local heartbeatDeferredActivity = self.heartbeatDeferredUntilSyncActivity == true
+	self.heartbeatDeferredUntilSync = false
+	self.heartbeatDeferredUntilSyncForce = false
+	self.heartbeatDeferredUntilSyncActivity = false
+	if heartbeatDeferredUntilSync and not self.disconnecting then
+		local deferredStatus = self.currentRoomId and "in_room" or "available"
+		local deferredActivity = heartbeatDeferredActivity and self.currentRoomId ~= nil
+		online_flow_trace("heartbeat_deferred_sync_dispatch"
+			.. " status=" .. tostring(deferredStatus)
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " force=" .. tostring(heartbeatDeferredForce == true)
+			.. " activity=" .. tostring(deferredActivity == true)
+			.. " syncOk=" .. tostring(ok == true))
+		self:Heartbeat(deferredStatus, heartbeatDeferredForce, deferredActivity)
 	end
 
 	local shouldRunQueuedSync = self.syncQueued and not self.disconnecting
@@ -12891,6 +12960,19 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		return
 	end
 	if state.inFlight == true then
+		if final then
+			state.pendingFinalRequested = true
+			state.pendingFinalCallbacks = state.pendingFinalCallbacks or {}
+			if callback then
+				state.pendingFinalCallbacks[#state.pendingFinalCallbacks + 1] = callback
+			end
+			online_flow_trace("companion_final_score_queued localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " reason=live_score_in_flight"
+				.. " callbacks=" .. tostring(#state.pendingFinalCallbacks))
+			return
+		end
 		finish(false, nil, { inFlight = true, retryAfter = 0.5 })
 		return
 	end
@@ -13059,17 +13141,37 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			if self.companionScoreRuntime ~= state
 				or tostring(self:CanonicalGameplayRoundKey("companion_score_response") or "") ~= roundKey
 			then
+				state.inFlight = false
+				local staleFinalCallbacks = state.pendingFinalCallbacks or {}
+				state.pendingFinalRequested = false
+				state.pendingFinalCallbacks = {}
 				online_flow_trace("companion_score_response_ignored reason=stale_round localPlayer=P2"
 					.. " roundKey=" .. roundKey
 					.. " currentRoundKey="
-						.. tostring(self:CanonicalGameplayRoundKey("companion_score_stale") or ""))
-				finish(false, decoded, {
+						.. tostring(self:CanonicalGameplayRoundKey("companion_score_stale") or "")
+					.. " pendingFinalCallbacks=" .. tostring(#staleFinalCallbacks))
+				local staleResponse = {
 					cancelled = true,
 					error_code = "stale_companion_score_response",
-				}, { stale = true, roundKey = roundKey })
+				}
+				local staleMeta = { stale = true, roundKey = roundKey }
+				finish(false, decoded, staleResponse, staleMeta)
+				for queuedCallback in ivalues(staleFinalCallbacks) do
+					safe_callback(
+						queuedCallback,
+						false,
+						decoded,
+						staleResponse,
+						staleMeta
+					)
+				end
 				return
 			end
 			state.inFlight = false
+			local pendingFinalRequested = state.pendingFinalRequested == true
+			local pendingFinalCallbacks = state.pendingFinalCallbacks or {}
+			state.pendingFinalRequested = false
+			state.pendingFinalCallbacks = {}
 			local errorCode = response_error_code(response, decoded)
 			if ok then
 				state.lastAcceptedFingerprint = fingerprint
@@ -13105,6 +13207,27 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 				failed = failed,
 				roundKey = roundKey,
 			})
+			if pendingFinalRequested then
+				online_flow_trace("companion_final_score_dispatch localPlayer=P2"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(roundKey)
+					.. " afterFinal=" .. tostring(final == true)
+					.. " previousOk=" .. tostring(ok == true)
+					.. " callbacks=" .. tostring(#pendingFinalCallbacks))
+				self:SendCompanionScore(true, true, function(
+					finalOk, finalDecoded, finalResponse, finalMeta
+				)
+					for queuedCallback in ivalues(pendingFinalCallbacks) do
+						safe_callback(
+							queuedCallback,
+							finalOk,
+							finalDecoded,
+							finalResponse,
+							finalMeta
+						)
+					end
+				end)
+			end
 		end)
 end
 
@@ -13202,17 +13325,57 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 		tostring(payload.selection_id or ""),
 		tostring(phase or ""),
 		isReady and "1" or "0",
+		tostring(payload.options and payload.options.speed_mod or ""),
+		tostring(payload.options and payload.options.music_rate_bpm or ""),
+		tostring(payload.options and payload.options.stepchart or ""),
 	}, "|")
 	self.companionReadyInFlight = self.companionReadyInFlight or {}
-	if self.companionReadyInFlight[requestKey] then
-		online_flow_trace("companion_ready_skipped reason=in_flight key=" .. requestKey)
-		safe_callback(callback, false, {
-			error_code = "companion_ready_in_flight",
-			deferred = true,
-		}, nil)
+	local now = GetTimeSinceStart()
+	local inFlight = self.companionReadyInFlight[requestKey]
+	if inFlight and type(inFlight) ~= "table" then
+		online_flow_trace("companion_ready_legacy_inflight_cleared key=" .. requestKey)
+		self.companionReadyInFlight[requestKey] = nil
+		inFlight = nil
+	end
+	if inFlight
+		and now - (tonumber(inFlight.startedAt) or now)
+			> (tonumber(self.readyRequestTimeoutSeconds) or 20)
+	then
+		self.companionReadyInFlight[requestKey] = nil
+		online_flow_trace("companion_ready_watchdog_expired key=" .. requestKey
+			.. " age=" .. tostring(now - (tonumber(inFlight.startedAt) or now))
+			.. " callbacks=" .. tostring(inFlight.callbacks and #inFlight.callbacks or 0))
+		for pendingCallback in ivalues(inFlight.callbacks or {}) do
+			safe_callback(pendingCallback, false, {
+				error_code = "companion_ready_timeout",
+				errorMessage = "Player 2 ready request timed out before confirmation.",
+			}, nil)
+		end
+		inFlight = nil
+	end
+	if inFlight then
+		if callback then
+			append_coalesced_callback(
+				inFlight.callbacks,
+				callback,
+				"companion_ready",
+				function(pendingCallback)
+					safe_callback(pendingCallback, false, {
+						error_code = "companion_ready_callback_limit",
+						errorMessage = "Too many pending Player 2 ready requests.",
+					}, nil)
+				end
+			)
+		end
+		online_flow_trace("companion_ready_join_inflight key=" .. requestKey
+			.. " callbacks=" .. tostring(inFlight.callbacks and #inFlight.callbacks or 0))
 		return
 	end
-	self.companionReadyInFlight[requestKey] = true
+	local requestState = {
+		callbacks = callback and { callback } or {},
+		startedAt = now,
+	}
+	self.companionReadyInFlight[requestKey] = requestState
 	online_flow_trace("companion_ready_request localPlayer=P2"
 		.. " room=" .. tostring(self.currentRoomId)
 		.. " phase=" .. tostring(phase)
@@ -13224,14 +13387,23 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 		"/rooms/" .. tostring(self.currentRoomId) .. "/ready",
 		payload,
 		function(ok, decoded, response)
+			local pending = self.companionReadyInFlight[requestKey]
+			if pending ~= requestState then
+				online_flow_trace("companion_ready_response_ignored reason=superseded_instance"
+					.. " key=" .. requestKey
+					.. " ok=" .. tostring(ok == true))
+				return
+			end
 			self.companionReadyInFlight[requestKey] = nil
+			local callbacks = pending and pending.callbacks or {}
 			online_flow_trace("companion_ready_response localPlayer=P2"
 				.. " room=" .. tostring(self.currentRoomId or "nil")
 				.. " phase=" .. tostring(phase)
 				.. " ok=" .. tostring(ok == true)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " error=" .. tostring(decoded and decoded.error_code
-					or response and response.errorMessage or "nil"))
+					or response and response.errorMessage or "nil")
+				.. " callbacks=" .. tostring(#callbacks))
 			if ok and decoded and decoded.room then
 				self:ApplyDecodedRoomSnapshot(decoded, "companion_ready")
 				safe_broadcast("OnlineLobbyState", self:LobbyStatePayload(self.currentRoom or decoded.room))
@@ -13242,7 +13414,9 @@ function ITGOnline:SetCompanionReady(phase, isReady, callback)
 					errorCode = decoded and decoded.error_code or nil,
 				})
 			end
-			safe_callback(callback, ok, decoded, response)
+			for pendingCallback in ivalues(callbacks) do
+				safe_callback(pendingCallback, ok, decoded, response)
+			end
 		end
 	)
 end
@@ -13843,7 +14017,11 @@ function ITGOnline:CurrentOnlineOptionSummary(player)
 		chart_note_count = noteCount,
 		max_score = maxScore,
 	}
-	online_flow_trace("online_options_summary"
+	online_flow_trace_throttled(
+		"online_options_summary:" .. tostring(playerKey) .. ":"
+			.. tostring(summary.chart_hash or ""),
+		5.0,
+		"online_options_summary"
 		.. " stepchart=" .. tostring(summary.stepchart or "")
 		.. " songHash=" .. tostring(summary.song_hash or "nil"):sub(1, 12)
 		.. " songHashSource=" .. tostring(songHashSource)
@@ -13862,7 +14040,8 @@ function ITGOnline:CurrentOnlineOptionSummary(player)
 			or useLegacyRememberedState and self.pendingOnlineOptionStepsSource or "nil")
 		.. " rememberedAge=" .. tostring((GetTimeSinceStart and GetTimeSinceStart() or 0)
 			- (tonumber(playerState and playerState.at
-				or useLegacyRememberedState and self.pendingOnlineOptionStepsAt) or 0)))
+				or useLegacyRememberedState and self.pendingOnlineOptionStepsAt) or 0))
+	)
 	return summary
 end
 
@@ -15632,6 +15811,21 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 			.. " screen=" .. tostring(self.currentScreenName or "nil"))
 		status = "available"
 		activity = false
+	end
+	if self.syncInFlight == true and roomId == nil
+		and tostring(status) == "available" and not self.disconnecting
+	then
+		self.heartbeatDeferredUntilSync = true
+		self.heartbeatDeferredUntilSyncForce =
+			self.heartbeatDeferredUntilSyncForce == true or force == true
+		self.heartbeatDeferredUntilSyncActivity =
+			self.heartbeatDeferredUntilSyncActivity == true or activity == true
+		online_flow_trace("heartbeat_deferred reason=initial_sync_room_unknown"
+			.. " force=" .. tostring(self.heartbeatDeferredUntilSyncForce == true)
+			.. " activity=" .. tostring(self.heartbeatDeferredUntilSyncActivity == true)
+			.. " generation=" .. tostring(self.syncGeneration or "nil")
+			.. " screen=" .. tostring(self.currentScreenName or "nil"))
+		return
 	end
 	local isLobbyPresenceHeartbeat = roomId == nil and tostring(status) == "available"
 	local localPartyId = self:ActiveLocalPartyId()

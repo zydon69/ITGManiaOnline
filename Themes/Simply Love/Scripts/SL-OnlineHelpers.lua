@@ -1665,6 +1665,26 @@ ReturnToOnlineLobbyFromMusicSelect = function()
 	local topScreen = current_top_screen()
 	if not topScreen or topScreen:GetName() ~= "ScreenSelectMusic" then return false end
 	if not current_room_is_active({ requireMember = false, requireUser = false }) then return false end
+	if topScreen.IsTransitioning and topScreen:IsTransitioning() then
+		online_flow_trace("music_select_return_blocked reason=screen_transition_in_progress"
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " selectionTransition=" .. tostring(ITGOnline
+				and ITGOnline.songSelectionTransitionKind or ""))
+		return true
+	end
+	if ITGOnline and (
+		tostring(pendingOnlineSongSelectionKey or "") ~= ""
+		or tostring(ITGOnline.songSelectionInFlightKey or "") ~= ""
+		or (ITGOnline.IsSongSelectionTransitionLocked
+			and ITGOnline:IsSongSelectionTransitionLocked("music_select_back"))
+	) then
+		online_flow_trace("music_select_return_blocked reason=song_selection_commit_in_progress"
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " pendingKey=" .. tostring(pendingOnlineSongSelectionKey or "")
+			.. " selectionKey=" .. tostring(ITGOnline.songSelectionInFlightKey or "")
+			.. " selectionTransition=" .. tostring(ITGOnline.songSelectionTransitionKind or ""))
+		return true
+	end
 
 	UnlockOnlineInput()
 	if topScreen.ReturnToOnlineLobbyFromMusicSelect then
@@ -1726,6 +1746,26 @@ SelectMusicInputHandler = function(event)
 	end
 
 	if event.GameButton == "Back" or string.find(deviceButton, "backspace", 1, true) then
+		local topScreen = current_top_screen()
+		local transitioning = topScreen and topScreen.IsTransitioning
+			and topScreen:IsTransitioning()
+		local selectionCommitInProgress = ITGOnline and (
+			tostring(pendingOnlineSongSelectionKey or "") ~= ""
+			or tostring(ITGOnline.songSelectionInFlightKey or "") ~= ""
+			or (ITGOnline.IsSongSelectionTransitionLocked
+				and ITGOnline:IsSongSelectionTransitionLocked("music_select_input_back"))
+		)
+		if transitioning or selectionCommitInProgress then
+			online_flow_trace("music_select_back_consumed"
+				.. " reason=" .. tostring(transitioning
+					and "screen_transition_in_progress"
+					or "song_selection_commit_in_progress")
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " pendingKey=" .. tostring(pendingOnlineSongSelectionKey or "")
+				.. " selectionKey=" .. tostring(ITGOnline
+					and ITGOnline.songSelectionInFlightKey or ""))
+			return true
+		end
 		if SOUND and THEME and THEME.GetPathS then
 			safe_online_call("play online cancel sound", function()
 				SOUND:PlayOnce(THEME:GetPathS("Common", "Cancel"))
@@ -3379,6 +3419,18 @@ CreateOnlineHandler = function()
 
 					if screenName == "ScreenSelectMusic" then
 						UnlockOnlineInput()
+						-- The native ScreenSelectMusic Back handler starts a transition
+						-- before regular Lua input callbacks run.  Give the online
+						-- callback first refusal so Back can be consumed while the
+						-- selected-song transition is already committed.
+						if screen and screen.SetInputCallbacksHandleBeforeScreen then
+							local priorityOk, priorityError = pcall(function()
+								screen:SetInputCallbacksHandleBeforeScreen(true)
+							end)
+							online_flow_trace("music_select_input_priority"
+								.. " callbacksBeforeScreen=" .. tostring(priorityOk == true)
+								.. " error=" .. tostring(priorityOk and "nil" or priorityError))
+						end
 						replace_online_input_callback(screen, "select_music", SelectMusicInputHandler)
 					end
 					if screenName == "ScreenOnlineLobbies" then
@@ -3953,6 +4005,19 @@ CreateOnlineHandler = function()
 				end,
 		      CurrentSongChangedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil then
+						local screen = current_top_screen()
+						if screen and screen:GetName() == "ScreenSelectMusic"
+							and ITGOnline
+							and tostring(ITGOnline.currentScreenName or "") ~= "ScreenSelectMusic"
+						then
+							-- ScreenChanged installs the correct request generation and
+							-- already schedules PreviewInitialOnlineSong. Avoid issuing a
+							-- preview that is guaranteed to be cancelled a few ms later.
+							online_flow_trace("song_preview_deferred reason=screen_generation_not_committed"
+								.. " currentScreenName=" .. tostring(ITGOnline.currentScreenName or "nil")
+								.. " topScreen=" .. tostring(screen:GetName()))
+							return
+						end
 						maybe_preview_current_online_song(false)
 					end
 		      end,

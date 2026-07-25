@@ -4,7 +4,7 @@ local ar = GetScreenAspectRatio()
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local NoteFieldIsCentered = (GetNotefieldX(player) == _screen.cx)
 local OnlineCompactLayout = IsUsingOnlineGameplayColumns and IsUsingOnlineGameplayColumns()
-local OnlineGameplay = ITGOnline and ITGOnline.currentRoomId ~= nil
+local OnlineGameplay = IsOnlineGameplaySessionActive and IsOnlineGameplaySessionActive()
 
 -- -----------------------------------------------------------------------
 -- if the conditions aren't right, don't bother

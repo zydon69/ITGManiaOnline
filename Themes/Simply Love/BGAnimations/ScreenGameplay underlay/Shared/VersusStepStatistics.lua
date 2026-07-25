@@ -2,6 +2,16 @@ local Players = GAMESTATE:GetHumanPlayers()
 local IsUltraWide = (GetScreenAspectRatio() > 21/9)
 local FilterAlpha = BackgroundFilterValues()
 
+-- The online leaderboard is the only score presentation allowed in gameplay.
+-- This shared versus pane is separate from PerPlayer/StepStatistics, so it
+-- needs the same session-level guard for a two-player local machine.
+if IsOnlineGameplaySessionActive and IsOnlineGameplaySessionActive() then
+    if type(online_flow_trace) == "function" then
+        online_flow_trace("online_step_statistics_suppressed component=versus_shared")
+    end
+    return
+end
+
 local ShouldDisplayStatsForPlayer = function(player)
     local pn = ToEnumShortString(player)
     return (SL[pn].ActiveModifiers.DataVisualizations == "Step Statistics" or

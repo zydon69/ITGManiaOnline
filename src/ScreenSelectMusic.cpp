@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
-#include <ctime>
 #include <string>
 #include <vector>
 
@@ -22,7 +21,6 @@
 #include "GameSoundManager.h"
 #include "GameState.h"
 #include "ImageCache.h"
-#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
@@ -94,33 +92,7 @@ REGISTER_SCREEN_CLASS(ScreenSelectMusic);
 
 namespace {
 bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  static time_t lastRead = 0;
-  static bool cached = false;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return cached;
-  }
-
-  lastRead = now;
-  cached = false;
-  if (PREFSMAN == nullptr) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(
-          PREFSMAN->m_sTheme, "ITGOnlineGameplayLayoutLogs", enabled)) {
-    return false;
-  }
-
-  cached = enabled;
-  return cached;
+  return OnlineGameplayLayoutDiagnosticsEnabled();
 }
 
 void OnlineTrace(const char* fmt, ...) {

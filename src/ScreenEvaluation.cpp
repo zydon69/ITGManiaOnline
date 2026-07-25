@@ -8,7 +8,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
-#include <ctime>
 #include <limits>
 #include <string>
 #include <vector>
@@ -29,11 +28,11 @@
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
-#include "IniFile.h"
 #include "LuaManager.h"
 #include "MemoryCardManager.h"
 #include "ModsGroup.h"
 #include "OnlineSessionGuard.h"
+#include "PerfDiagnostics.h"
 #include "PlayerNumber.h"
 #include "PlayerState.h"
 #include "PrefsManager.h"
@@ -79,36 +78,7 @@ REGISTER_SCREEN_CLASS(ScreenEvaluation);
 
 namespace {
 bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  static time_t lastRead = 0;
-  static bool cached = false;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return cached;
-  }
-
-  lastRead = now;
-  cached = false;
-
-  if (PREFSMAN == nullptr) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(
-          PREFSMAN->m_sTheme,
-          "ITGOnlineNetworkLogs",
-          enabled)) {
-    return false;
-  }
-
-  cached = enabled;
-  return cached;
+  return OnlineNetworkDiagnosticsEnabled();
 }
 
 void OnlineTrace(const char* fmt, ...) {

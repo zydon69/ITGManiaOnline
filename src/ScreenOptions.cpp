@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <ctime>
 #include <string>
 #include <vector>
 
@@ -13,7 +12,6 @@
 #include "GameCommand.h"
 #include "GameInput.h"
 #include "GameState.h"
-#include "IniFile.h"
 #include "InputEventPlus.h"
 #include "InputFilter.h"
 #include "InputMapper.h"
@@ -90,36 +88,7 @@ static bool IsValidOptionsPlayer(PlayerNumber pn) {
 }
 
 static bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  static time_t lastRead = 0;
-  static bool cached = false;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return cached;
-  }
-
-  lastRead = now;
-  cached = false;
-
-  if (PREFSMAN == nullptr) {
-    return false;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return false;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(
-          PREFSMAN->m_sTheme,
-          "ITGOnlineGameplayLayoutLogs",
-          enabled)) {
-    return false;
-  }
-
-  cached = enabled;
-  return cached;
+  return OnlineGameplayLayoutDiagnosticsEnabled();
 }
 
 static void ScreenOptionsLogTrace(const std::string& message) {

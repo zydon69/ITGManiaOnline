@@ -184,6 +184,12 @@ local companionScoreEnd = assert(clientSource:find("function ITGOnline:SetCompan
 local companionScoreSource = clientSource:sub(companionScoreStart, companionScoreEnd - 1)
 assert(not companionScoreSource:find("LocalPartyRoomComplete", 1, true),
 	"a stale local snapshot must not suppress Player 2 score delivery")
+assert(companionScoreSource:find("companion_final_score_queued", 1, true),
+	"a Player 2 final score must be queued behind an in-flight live score")
+assert(companionScoreSource:find("companion_final_score_dispatch", 1, true),
+	"the queued Player 2 final score must be dispatched as soon as the live request completes")
+assert(companionScoreSource:find("state.pendingFinalCallbacks", 1, true),
+	"all callers waiting for the queued Player 2 final score must be completed")
 local localFailureStart = assert(
 	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", 1, true),
 	"early failure finalization must route by local player identity")
@@ -302,6 +308,10 @@ assert(clientSource:find("companion_ready_song_hash_recovered", 1, true),
 	"companion readiness must survive the shared options transition")
 assert(clientSource:find("action=server_authoritative_request", 1, true),
 	"the server must validate companion membership when a local room snapshot is incomplete")
+assert(companionReadySource:find("companion_ready_join_inflight", 1, true),
+	"duplicate Player 2 readiness callers must join the authoritative request")
+assert(not companionReadySource:find("error_code = \"companion_ready_in_flight\"", 1, true),
+	"an existing Player 2 readiness request must not be reported as a failure")
 assert(lobbySource:find("ITGOnlineLobbyPresentation.player_status_label", 1, true),
 	"online player statuses must use localized labels")
 assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),
@@ -328,6 +338,54 @@ local stepStatisticsSource = read_source(
 )
 assert(stepStatisticsSource:find("if OnlineGameplay then return end", 1, true),
 	"online gameplay must suppress local Step Statistics counters")
+local versusStepStatisticsSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenGameplay underlay/Shared/VersusStepStatistics.lua"
+)
+assert(versusStepStatisticsSource:find("IsOnlineGameplaySessionActive", 1, true),
+	"online local versus gameplay must suppress the shared central judgment counters")
+assert(versusStepStatisticsSource:find("online_step_statistics_suppressed", 1, true),
+	"shared judgment-counter suppression must remain diagnosable")
+
+assert(onlineHelpersSource:find("music_select_back_consumed", 1, true),
+	"Back must be consumed while the selected-song screen is already transitioning")
+assert(onlineHelpersSource:find("song_selection_commit_in_progress", 1, true),
+	"Back must not race an in-flight online song-selection commit")
+assert(onlineHelpersSource:find("screen:SetInputCallbacksHandleBeforeScreen(true)", 1, true),
+	"the online music-selection guard must run before the native Back handler")
+assert(onlineHelpersSource:find("song_preview_deferred reason=screen_generation_not_committed", 1, true),
+	"the initial song preview must wait for the music-selection screen generation")
+assert(clientSource:find("realtime_transport_frame:", 1, true),
+	"transport keepalive logs must be aggregated without disabling online diagnostics")
+assert(clientSource:find("staleFinalCallbacks", 1, true),
+	"stale companion score responses must release queued final callbacks")
+assert(clientSource:find("if previous", 1, true),
+	"a throttled trace must not suppress the first diagnostic occurrence")
+assert(clientSource:find("heartbeat_deferred reason=initial_sync_room_unknown", 1, true),
+	"initial presence must wait until synchronization resolves an existing room")
+assert(clientSource:find("heartbeat_deferred_sync_dispatch", 1, true),
+	"deferred presence must be replayed with the authoritative room context")
+
+local gameLoopSource = read_source("src/GameLoop.cpp")
+assert(gameLoopSource:find("PERF_TRACE: fps_drop", 1, true),
+	"FPS drops must have targeted diagnostics")
+assert(gameLoopSource:find("network_ms=%.3f", 1, true),
+	"low-FPS diagnostics must expose the network phase cost")
+assert(gameLoopSource:find("kCriticalFrameHitchSeconds", 1, true),
+	"critical frame hitches must be logged even with verbose diagnostics disabled")
+assert(gameLoopSource:find("if (!PerfTraceRateLimit(nowUsec))", 1, true),
+	"always-on hitch diagnostics must remain rate-limited")
+
+local messageManagerSource = read_source("src/MessageManager.cpp")
+assert(not messageManagerSource:find("LOG->Flush()", 1, true),
+	"verbose online message traces must not force synchronous disk flushes")
+local networkManagerSource = read_source("src/NetworkManager.cpp")
+assert(networkManagerSource:find("IsRoutineWebSocketControlFrame", 1, true),
+	"native transport logs must suppress redundant successful control frames")
+local perfDiagnosticsSource = read_source("src/PerfDiagnostics.cpp")
+assert(perfDiagnosticsSource:find("kRefreshIntervalSeconds = 30", 1, true),
+	"online diagnostic preferences must not poll the filesystem every frame")
+assert(perfDiagnosticsSource:find("OnlineNetworkDiagnosticsEnabled", 1, true),
+	"native online diagnostics must share one cached preference")
 
 local rankingSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Shared/OnlineFinalRanking.lua"

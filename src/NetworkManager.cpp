@@ -13,7 +13,6 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
-#include <ctime>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -27,10 +26,9 @@
 
 #include "CryptManager.h"
 #include "EnumHelper.h"
-#include "IniFile.h"
 #include "LuaManager.h"
+#include "PerfDiagnostics.h"
 #include "Preference.h"
-#include "PrefsManager.h"
 #include "ProductInfo.h"
 #include "RageFile.h"
 #include "RageFileDriverDeflate.h"
@@ -117,38 +115,8 @@ constexpr int kDefaultDownloadTransferTimeoutSeconds = 30 * 60;
 constexpr int kMinTimeoutSeconds = 1;
 constexpr int kMaxTimeoutSeconds = 60 * 60;
 
-std::atomic<bool> g_OnlineVerboseLogsEnabled{false};
-
-void RefreshOnlineVerboseLogsPreference() {
-  static time_t lastRead = 0;
-
-  const time_t now = time(nullptr);
-  if (now == lastRead) {
-    return;
-  }
-
-  lastRead = now;
-  g_OnlineVerboseLogsEnabled = false;
-
-  if (PREFSMAN == nullptr) {
-    return;
-  }
-
-  IniFile ini;
-  if (!ini.ReadFile("Save/ThemePrefs.ini")) {
-    return;
-  }
-
-  bool enabled = false;
-  if (!ini.GetValue(PREFSMAN->m_sTheme, "ITGOnlineNetworkLogs", enabled)) {
-    return;
-  }
-
-  g_OnlineVerboseLogsEnabled = enabled;
-}
-
 bool OnlineVerboseLogsEnabledFromThemePrefs() {
-  return g_OnlineVerboseLogsEnabled.load();
+  return OnlineNetworkDiagnosticsEnabled();
 }
 
 void NetworkTrace(const char* fmt, ...) {
@@ -1066,6 +1034,20 @@ static bool IsExpectedInactiveWebSocketTerminalMessage(
          type == ix::WebSocketMessageType::Error;
 }
 
+static bool IsRoutineWebSocketControlFrame(
+    ix::WebSocketMessageType type, const std::string& data) {
+  if (type == ix::WebSocketMessageType::Ping ||
+      type == ix::WebSocketMessageType::Pong) {
+    return true;
+  }
+  if (type != ix::WebSocketMessageType::Message) {
+    return false;
+  }
+
+  return data.find("\"event\":\"server.ping\"") != std::string::npos ||
+         data.find("\"event\":\"pong\"") != std::string::npos;
+}
+
 void ClearQueuedTasks(std::queue<std::function<void()>>& tasks) {
   std::queue<std::function<void()>> emptyQueue;
   tasks.swap(emptyQueue);
@@ -1400,7 +1382,7 @@ bool NetworkManager::EnqueueDownloadTask(std::function<void()> task) {
 }
 
 void NetworkManager::Update() {
-  RefreshOnlineVerboseLogsPreference();
+  RefreshOnlineDiagnosticsPreferenceCache();
   DrainDeferredLuaCallbackRefReleases();
   RageTimer timer;
   static RageTimer lastBacklogWarning;
@@ -2788,13 +2770,15 @@ class LunaNetworkManager : public Luna<NetworkManager> {
                   handleMessage(
                       L, type, data, errorInfo, openInfo, closeInfo, binary,
                       callbackState->messageRef);
-                  NetworkTrace(
-                      "ITG Online NetworkTrace: "
-                      "lua_websocket_message_delivered "
-                      "id=%llu url=%s type=%s bytes=%zu",
-                      static_cast<unsigned long long>(callbackState->id),
-                      RedactUrlForLog(callbackState->url).c_str(),
-                      IxWebSocketMessageTypeName(type), data.size());
+                  if (!IsRoutineWebSocketControlFrame(type, data)) {
+                    NetworkTrace(
+                        "ITG Online NetworkTrace: "
+                        "lua_websocket_message_delivered "
+                        "id=%llu url=%s type=%s bytes=%zu",
+                        static_cast<unsigned long long>(callbackState->id),
+                        RedactUrlForLog(callbackState->url).c_str(),
+                        IxWebSocketMessageTypeName(type), data.size());
+                  }
                 });
               },
               terminalMessage)) {

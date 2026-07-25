@@ -5,6 +5,9 @@
 
 bool PerfDiagnosticsEnabled();
 void RefreshPerfDiagnosticsPreferenceCache();
+void RefreshOnlineDiagnosticsPreferenceCache();
+bool OnlineNetworkDiagnosticsEnabled();
+bool OnlineGameplayLayoutDiagnosticsEnabled();
 bool LogAudioUnderrunDiagnosticsEnabled();
 bool LogTextureUploadDiagnosticsEnabled();
 bool LogResourceSnapshotDiagnosticsEnabled();

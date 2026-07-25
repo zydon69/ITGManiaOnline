@@ -517,6 +517,15 @@ IsOnlineGameplayLayoutLoggingEnabled = function()
 		and ThemePrefs.Get("ITGOnlineGameplayLayoutLogs") == true
 end
 
+-- Gameplay actors are constructed while SCREENMAN is between screens, so the
+-- top-screen name is not a reliable online-session signal during InitCommand.
+-- The authoritative room context survives that transition and is shared by
+-- every online gameplay layout, including local two-player versus.
+IsOnlineGameplaySessionActive = function()
+	return ITGOnline ~= nil
+		and ITGOnline.currentRoomId ~= nil
+end
+
 local function IsOnlineDiagnosticLoggingEnabled(prefName)
 	return ThemePrefs and ThemePrefs.Get and ThemePrefs.Get(prefName) == true
 end
