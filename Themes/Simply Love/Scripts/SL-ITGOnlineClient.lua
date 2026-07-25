@@ -286,8 +286,13 @@ ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 ITGOnline.onlineFlowTraceThrottleOrder = ITGOnline.onlineFlowTraceThrottleOrder or {}
 ITGOnline.maxOnlineFlowTraceThrottleKeys = tonumber(ITGOnline.maxOnlineFlowTraceThrottleKeys) or 512
-ITGOnline.debugOnlineTrace = type(IsOnlineNetworkLoggingEnabled) == "function"
-	and IsOnlineNetworkLoggingEnabled() == true
+-- Online synchronization is still being exercised across several machines.
+-- Keep its redacted network and ready-flow traces enabled in every build so a
+-- client-side state divergence is diagnosable without changing local files.
+ITGOnline.forceOnlineFlowLogging = true
+ITGOnline.debugOnlineTrace = ITGOnline.forceOnlineFlowLogging == true
+	or (type(IsOnlineNetworkLoggingEnabled) == "function"
+		and IsOnlineNetworkLoggingEnabled() == true)
 ITGOnline.debugAuthTrace = type(IsOnlineAuthLoggingEnabled) == "function"
 	and IsOnlineAuthLoggingEnabled() == true
 ITGOnline.debugScoreTrace = type(IsOnlineScoreLoggingEnabled) == "function"
@@ -1074,10 +1079,10 @@ function ITGOnline:RefreshDebugFlags(force)
 	if not file_exists(self.debugConfigPath) then
 		ini_write(self.debugConfigPath, {
 			["ITGOnlineDebug"] = {
-				["OnlineTrace"] = "false",
+				["OnlineTrace"] = "true",
 				["AuthTrace"] = "false",
 				["ScoreTrace"] = "false",
-				["ReadyFlow"] = "false",
+				["ReadyFlow"] = "true",
 			}
 		})
 	end
@@ -1090,7 +1095,8 @@ function ITGOnline:RefreshDebugFlags(force)
 		return prefEnabled or value == "true" or value == "1" or value == "yes"
 	end
 
-	self.debugOnlineTrace = enabled(IsOnlineNetworkLoggingEnabled, "OnlineTrace")
+	self.debugOnlineTrace = self.forceOnlineFlowLogging == true
+		or enabled(IsOnlineNetworkLoggingEnabled, "OnlineTrace")
 	self.debugAuthTrace = enabled(IsOnlineAuthLoggingEnabled, "AuthTrace")
 	self.debugScoreTrace = enabled(IsOnlineScoreLoggingEnabled, "ScoreTrace")
 	self.debugReadyFlow = self.debugOnlineTrace or tostring(debugSection.ReadyFlow or ""):lower() == "true"

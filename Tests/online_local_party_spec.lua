@@ -71,6 +71,10 @@ local function read_source(relativePath)
 end
 
 local clientSource = read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
+assert(clientSource:find("ITGOnline.forceOnlineFlowLogging = true", 1, true),
+	"online network diagnostics must be enabled in every build")
+assert(clientSource:find('["OnlineTrace"] = "true"', 1, true),
+	"new debug configurations must enable the online trace")
 assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
 	"client must expose an isolated Player 2 score pipeline")
 assert(clientSource:find("function ITGOnline:ConnectLocalPlayerPartyWebSockets", 1, true),
