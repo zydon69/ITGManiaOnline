@@ -73,33 +73,11 @@ constexpr int kMetalBridgeMaxBuildAttempts = 3;
 
 static MacOSOpenGLFenceWaitStats g_LastOpenGLFenceWaitStats;
 
-enum MacOSNativeWindowPresentationChangeReason {
-  kMacOSNativeWindowPresentationNone = 0,
-  kMacOSNativeWindowPresentationWillEnterFullscreen,
-  kMacOSNativeWindowPresentationDidEnterFullscreen,
-  kMacOSNativeWindowPresentationWillExitFullscreen,
-  kMacOSNativeWindowPresentationDidExitFullscreen,
-  kMacOSNativeWindowPresentationScreenChanged,
-  kMacOSNativeWindowPresentationBackingChanged,
-};
+using NativeWindowEvent =
+    MacOSMetalPresentation::NativeWindowEvent;
 
-static const char* MacOSNativeWindowPresentationReasonName(int reason) {
-  switch (reason) {
-    case kMacOSNativeWindowPresentationWillEnterFullscreen:
-      return "will_enter_fullscreen";
-    case kMacOSNativeWindowPresentationDidEnterFullscreen:
-      return "did_enter_fullscreen";
-    case kMacOSNativeWindowPresentationWillExitFullscreen:
-      return "will_exit_fullscreen";
-    case kMacOSNativeWindowPresentationDidExitFullscreen:
-      return "did_exit_fullscreen";
-    case kMacOSNativeWindowPresentationScreenChanged:
-      return "screen_changed";
-    case kMacOSNativeWindowPresentationBackingChanged:
-      return "backing_changed";
-    default:
-      return "none";
-  }
+static int NativeWindowEventValue(NativeWindowEvent event) {
+  return static_cast<int>(event);
 }
 
 #ifndef GL_READ_FRAMEBUFFER_EXT
@@ -1121,32 +1099,42 @@ class AutoreleasePool {
 
 - (void)windowWillEnterFullScreen:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationWillEnterFullscreen];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::
+                                              WillEnterFullscreen)];
 }
 
 - (void)windowDidEnterFullScreen:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationDidEnterFullscreen];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::
+                                              DidEnterFullscreen)];
 }
 
 - (void)windowWillExitFullScreen:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationWillExitFullscreen];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::
+                                              WillExitFullscreen)];
 }
 
 - (void)windowDidExitFullScreen:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationDidExitFullscreen];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::
+                                              DidExitFullscreen)];
 }
 
 - (void)windowDidChangeScreen:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationScreenChanged];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::ScreenChanged)];
 }
 
 - (void)windowDidChangeBackingProperties:(NSNotification*)aNotification {
   [self markNativePresentationChanged:aNotification
-                               reason:kMacOSNativeWindowPresentationBackingChanged];
+                               reason:NativeWindowEventValue(
+                                          NativeWindowEvent::BackingChanged)];
 }
 
 - (void)setupWindow {
@@ -1915,14 +1903,14 @@ std::string LowLevelWindow_MacOSX::TryVideoMode(const VideoModeParams& p, bool& 
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
             EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
-            m_CurrentParams.vsync);
+            MacOSMetalPresentation::Mode::CompositedWindow);
       } else {
         dispatch_sync(dispatch_get_main_queue(), ^{
           m_MetalPresenter->Initialize(
               (void*)delegate->m_Window, m_CurrentParams.width,
               m_CurrentParams.height,
               EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
-              m_CurrentParams.vsync);
+              MacOSMetalPresentation::Mode::CompositedWindow);
         });
       }
       const float initMs = initTimer.GetDeltaTime() * 1000.0f;
@@ -2618,7 +2606,7 @@ void LowLevelWindow_MacOSX::Update() {
   int resizedHeight = 0;
   bool didResize = false;
   bool didNativePresentationChange = false;
-  int nativePresentationReason = kMacOSNativeWindowPresentationNone;
+  NativeWindowEvent nativePresentationEvent = NativeWindowEvent::None;
   RageTimer resizeTimer;
   LockMutex lock(g_ResizeLock);
   if (likely(!g_bResized && !g_bNativeWindowPresentationChanged)) {
@@ -2626,10 +2614,13 @@ void LowLevelWindow_MacOSX::Update() {
   }
   didResize = g_bResized;
   didNativePresentationChange = g_bNativeWindowPresentationChanged;
-  nativePresentationReason = g_iNativeWindowPresentationChangeReason;
+  nativePresentationEvent =
+      MacOSMetalPresentation::NativeWindowEventFromRaw(
+          g_iNativeWindowPresentationChangeReason);
   g_bResized = false;
   g_bNativeWindowPresentationChanged = false;
-  g_iNativeWindowPresentationChangeReason = kMacOSNativeWindowPresentationNone;
+  g_iNativeWindowPresentationChangeReason =
+      NativeWindowEventValue(NativeWindowEvent::None);
   resizedWidth = g_iWidth;
   resizedHeight = g_iHeight;
   const bool sizeChanged =
@@ -2648,7 +2639,8 @@ void LowLevelWindow_MacOSX::Update() {
         "resize=%d native_presentation_change=%d native_reason=%s "
         "size_changed=%d size=%dx%d windowed=%d metal_requested=%d",
         didResize ? 1 : 0, didNativePresentationChange ? 1 : 0,
-        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        MacOSMetalPresentation::NativeWindowEventName(
+            nativePresentationEvent),
         sizeChanged ? 1 : 0,
         resizedWidth, resizedHeight, m_CurrentParams.windowed ? 1 : 0,
         MacOSMetalBridgeEnabled() ? 1 : 0);
@@ -2682,14 +2674,14 @@ void LowLevelWindow_MacOSX::Update() {
             (void*)delegate->m_Window, m_CurrentParams.width,
             m_CurrentParams.height,
             EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
-            m_CurrentParams.vsync);
+            MacOSMetalPresentation::Mode::CompositedWindow);
       } else {
         dispatch_sync(dispatch_get_main_queue(), ^{
           m_MetalPresenter->Initialize(
               (void*)delegate->m_Window, m_CurrentParams.width,
               m_CurrentParams.height,
               EffectiveMacOSFramePacingTargetHz(m_CurrentParams), true,
-              m_CurrentParams.vsync);
+              MacOSMetalPresentation::Mode::CompositedWindow);
         });
       }
       if (m_MetalPresenter->IsInteropReady()) {
@@ -2710,7 +2702,8 @@ void LowLevelWindow_MacOSX::Update() {
     DISPLAY->ResolutionChanged();
   }
   if (didNativePresentationChange) {
-    MacOSMetalPresenterMarkNativePresentationChange(nativePresentationReason);
+    MacOSMetalPresenterMarkNativePresentationChange(
+        nativePresentationEvent);
   }
   DISPLAY->ResetFramePacing(
       didNativePresentationChange ? "macos_native_window_presentation_change"
@@ -2724,7 +2717,8 @@ void LowLevelWindow_MacOSX::Update() {
         "size=%dx%d",
         resizeTimer.GetDeltaTime() * 1000.0f, contextUpdateMs,
         metalReconfigureMs, sizeChanged ? 1 : 0,
-        MacOSNativeWindowPresentationReasonName(nativePresentationReason),
+        MacOSMetalPresentation::NativeWindowEventName(
+            nativePresentationEvent),
         resizedWidth, resizedHeight);
   }
 }

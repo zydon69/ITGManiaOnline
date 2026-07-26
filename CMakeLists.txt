@@ -31,6 +31,21 @@ if(BUILD_TESTING)
     NAME display_link_pacing_policy
     COMMAND display_link_pacing_policy_tests)
 
+  add_executable(
+    macos_metal_presentation_policy_tests
+    Tests/macos_metal_presentation_policy_test.cpp
+    src/arch/LowLevelWindow/MacOSMetalPresentationPolicy.cpp)
+  target_include_directories(
+    macos_metal_presentation_policy_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  set_property(
+    TARGET macos_metal_presentation_policy_tests PROPERTY CXX_STANDARD 17)
+  set_property(
+    TARGET macos_metal_presentation_policy_tests
+    PROPERTY CXX_STANDARD_REQUIRED ON)
+  add_test(
+    NAME macos_metal_presentation_policy
+    COMMAND macos_metal_presentation_policy_tests)
+
   find_program(ITGMANIA_LUA_EXECUTABLE NAMES lua5.1 lua)
   if(ITGMANIA_LUA_EXECUTABLE)
     add_test(

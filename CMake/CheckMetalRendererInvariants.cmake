@@ -39,6 +39,12 @@ read_source(
   "Tests/display_link_pacing_policy_test.cpp"
   display_link_policy_test)
 read_source(
+  "src/arch/LowLevelWindow/MacOSMetalPresentationPolicy.cpp"
+  metal_presentation_policy)
+read_source(
+  "Tests/macos_metal_presentation_policy_test.cpp"
+  metal_presentation_policy_test)
+read_source(
   "src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
   metal_presenter)
 read_source(
@@ -136,7 +142,7 @@ require_contains(
   "quad-strip triangles preserve OpenGL winding")
 require_contains(
   "${metal_display}"
-  "m_bClearDepthNextFrame = true;\n  m_bLayerReconfiguredForResolutionChange = false;"
+  "m_bClearDepthNextFrame = true;\n  SetDefaultRenderStates();"
   "Metal clears persistent model depth at the beginning of every frame")
 require_contains(
   "${metal_shader}"
@@ -218,6 +224,30 @@ require_contains(
   "${metal_presenter}"
   "MetalDrawablePrefetchRenderWaitUsec(targetHz)"
   "drawable prefetch waits scale with the physical frame interval")
+require_contains(
+  "${metal_presentation_policy}"
+  "case Mode::CompositedWindow:"
+  "regular macOS windows have an explicit presentation policy")
+require_contains(
+  "${metal_presentation_policy}"
+  "policy.displaySyncEnabled = true"
+  "WindowServer-composited Metal layers remain display-synchronized")
+require_contains(
+  "${metal_presentation_policy}"
+  "policy.scheduleMinimumPresentDuration = true"
+  "composited presentation retains the release refresh-duration guard")
+require_contains(
+  "${metal_presentation_policy_test}"
+  "will-enter must switch policy before AppKit updates the style mask"
+  "native fullscreen transition ordering has executable regression coverage")
+require_contains(
+  "${metal_presenter}"
+  "ScheduleMetalDrawable("
+  "all Metal presentation paths use the selected cadence policy")
+require_absent(
+  "${metal_display}"
+  "m_Params.vsync"
+  "CAMetalLayer synchronization cannot depend on the user VSync preference")
 require_contains(
   "${display_link_policy}"
   "candidateDelta == bestDelta"

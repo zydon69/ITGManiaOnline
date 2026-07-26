@@ -137,6 +137,11 @@ std::atomic<uint64_t> g_iMetalDrawableMisses{0};
 std::atomic_bool g_bMetalPresenterRuntimeActive{false};
 std::atomic<int> g_iMetalNativePresentationChangeReason{0};
 std::atomic_bool g_bMetalNativeRendererActive{false};
+std::atomic<int> g_iMetalPresentationMode{
+    static_cast<int>(
+        MacOSMetalPresentation::Mode::CompositedWindow)};
+std::atomic_bool g_bMetalDisplaySyncEnabled{true};
+std::atomic_bool g_bMetalSchedulesMinimumPresentDuration{true};
 
 void ResetMetalRuntimeStats() {
   g_iMetalDirectPresentSubmittedFrames.store(0, std::memory_order_relaxed);
@@ -495,7 +500,9 @@ struct MacOSMetalPresenterImpl {
   bool interopReady = false;
   bool layerOwnsContentView = false;
   bool loggedFirstDirectPresent = false;
-  bool displaySyncEnabled = true;
+  MacOSMetalPresentation::Policy presentationPolicy =
+      MacOSMetalPresentation::PolicyForMode(
+          MacOSMetalPresentation::Mode::CompositedWindow);
   std::atomic_bool layerVisible { true };
 };
 
@@ -681,12 +688,52 @@ void ConfigureMetalLayer(
   // displays and made otherwise identical Metal output look grey.
   layer.colorspace = nil;
   layer.framebufferOnly = YES;
-  layer.displaySyncEnabled = impl->displaySyncEnabled ? YES : NO;
+  layer.displaySyncEnabled =
+      impl->presentationPolicy.displaySyncEnabled ? YES : NO;
   layer.allowsNextDrawableTimeout = YES;
   layer.maximumDrawableCount = 3;
   layer.frame = bounds;
   layer.contentsScale = std::max<CGFloat>(1, contentsScale);
   layer.drawableSize = drawableSize;
+}
+
+void SetMetalPresentationPolicy(
+    MacOSMetalPresenterImpl* impl,
+    MacOSMetalPresentation::Mode mode) {
+  if (impl == nullptr) {
+    return;
+  }
+  impl->presentationPolicy =
+      MacOSMetalPresentation::PolicyForMode(mode);
+  g_iMetalPresentationMode.store(
+      static_cast<int>(mode), std::memory_order_release);
+  g_bMetalDisplaySyncEnabled.store(
+      impl->presentationPolicy.displaySyncEnabled,
+      std::memory_order_release);
+  g_bMetalSchedulesMinimumPresentDuration.store(
+      impl->presentationPolicy.scheduleMinimumPresentDuration,
+      std::memory_order_release);
+}
+
+double ScheduleMetalDrawable(
+    id<MTLCommandBuffer> commandBuffer, id<CAMetalDrawable> drawable,
+    const MacOSMetalPresentation::Policy& policy, double targetHz) {
+  if (commandBuffer == nil || drawable == nil) {
+    return 0.0;
+  }
+
+  const double minimumDuration =
+      MacOSMetalPresentation::MinimumPresentDurationSeconds(
+          policy, targetHz);
+  if (minimumDuration > 0.0) {
+    if (@available(macOS 10.15, *)) {
+      [commandBuffer presentDrawable:drawable
+                 afterMinimumDuration:minimumDuration];
+      return minimumDuration;
+    }
+  }
+  [commandBuffer presentDrawable:drawable];
+  return 0.0;
 }
 
 CGFloat BackingScaleForLayerView(NSView* layerView) {
@@ -1923,6 +1970,25 @@ bool MacOSMetalPresenterNativeRendererActive() {
   return g_bMetalNativeRendererActive.load(std::memory_order_acquire);
 }
 
+MacOSMetalPresentation::Mode MacOSMetalPresentationModeForWindow(
+    void* nsWindow, bool engineWindowed,
+    MacOSMetalPresentation::NativeWindowEvent event) {
+  NSWindow* window = (__bridge NSWindow*)nsWindow;
+  __block bool nativeStyleFullscreen = false;
+  void (^readNativeFullscreenStyle)(void) = ^{
+    nativeStyleFullscreen =
+        window != nil &&
+        ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+  };
+  if ([NSThread isMainThread]) {
+    readNativeFullscreenStyle();
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), readNativeFullscreenStyle);
+  }
+  return MacOSMetalPresentation::ResolveMode(
+      engineWindowed, nativeStyleFullscreen, event);
+}
+
 MacOSMetalPresenter::MacOSMetalPresenter()
     : m_Impl(nullptr), m_Available(false) {}
 
@@ -1932,7 +1998,8 @@ MacOSMetalPresenter::~MacOSMetalPresenter() {
 
 bool MacOSMetalPresenter::Initialize(
     void* nsWindow, int width, int height, double targetHz,
-    bool createInteropSurfaces, bool displaySyncEnabled) {
+    bool createInteropSurfaces,
+    MacOSMetalPresentation::Mode presentationMode) {
   RageTimer initTimer;
   Shutdown();
   ResetMetalRuntimeStats();
@@ -1940,7 +2007,7 @@ bool MacOSMetalPresenter::Initialize(
       0, std::memory_order_release);
 
   MacOSMetalPresenterImpl* impl = new MacOSMetalPresenterImpl();
-  impl->displaySyncEnabled = displaySyncEnabled;
+  SetMetalPresentationPolicy(impl, presentationMode);
   impl->surfaceBusy = std::make_shared<MacOSMetalSurfaceBusyFlags>();
   impl->device = MTLCreateSystemDefaultDevice();
   if (impl->device == nil) {
@@ -2253,13 +2320,19 @@ bool MacOSMetalPresenter::Initialize(
       "MacOS Metal presenter initialized: device='%s' target_hz=%.3f "
       "requested_size=%dx%d layer_size=%dx%d attached=0 "
       "iosurface_ring=%d iosurface_count=%d drawable_prefetch=%d "
-      "display_sync=%d pacing_owner=engine total_ms=%.3f",
+      "presentation_mode=%s display_sync=%d minimum_duration=%d "
+      "pacing_owner=%s total_ms=%.3f",
       [[impl->device name] UTF8String], targetHz, width, height,
       static_cast<int>(bounds.size.width), static_cast<int>(bounds.size.height),
       impl->interopReady ? 1 : 0,
       createInteropSurfaces ? kMetalInteropSurfaceCount : 0,
       impl->useDrawablePrefetch ? 1 : 0,
-      impl->displaySyncEnabled ? 1 : 0,
+      MacOSMetalPresentation::ModeName(
+          impl->presentationPolicy.mode),
+      impl->presentationPolicy.displaySyncEnabled ? 1 : 0,
+      impl->presentationPolicy.scheduleMinimumPresentDuration ? 1 : 0,
+      MacOSMetalPresentation::CadenceOwnerName(
+          impl->presentationPolicy.cadenceOwner),
       initTimer.GetDeltaTime() * 1000.0f);
   return true;
 }
@@ -2686,12 +2759,14 @@ bool MacOSMetalPresenter::AttachLayerAsContentView(void* nsWindow) {
 }
 
 bool MacOSMetalPresenter::ReconfigureAttachedLayer(
-    void* nsWindow, const char* reason) {
+    void* nsWindow, const char* reason,
+    MacOSMetalPresentation::Mode presentationMode) {
   RageTimer reconfigureTimer;
   if (![NSThread isMainThread]) {
     __block bool reconfigured = false;
     dispatch_sync(dispatch_get_main_queue(), ^{
-      reconfigured = ReconfigureAttachedLayer(nsWindow, reason);
+      reconfigured =
+          ReconfigureAttachedLayer(nsWindow, reason, presentationMode);
     });
     return reconfigured;
   }
@@ -2717,6 +2792,8 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
   const NSRect beforeFrame = impl->layer.frame;
   const CGSize beforeDrawableSize = impl->layer.drawableSize;
   const bool wasPrefetchStarted = impl->drawablePrefetchStarted;
+  const MacOSMetalPresentation::Policy previousPolicy =
+      impl->presentationPolicy;
 
   StopDrawablePrefetcher(impl);
   ResetDisplayPacingTarget(impl);
@@ -2731,14 +2808,19 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
   [impl->layerView setFrame:bounds];
   [impl->layerView setHidden:NO];
   impl->layerVisible.store(true, std::memory_order_release);
+  SetMetalPresentationPolicy(impl, presentationMode);
 
   std::string configureFailure;
   if (!ConfigureLayerResourcesForView(
           impl, impl->layerView, &configureFailure)) {
+    SetMetalPresentationPolicy(impl, previousPolicy.mode);
     LOG->Warn(
         "MacOS Metal presenter could not reconfigure attached layer: "
-        "reason=%s error=%s",
-        reason != nullptr ? reason : "unknown", configureFailure.c_str());
+        "reason=%s requested_mode=%s restored_mode=%s error=%s",
+        reason != nullptr ? reason : "unknown",
+        MacOSMetalPresentation::ModeName(presentationMode),
+        MacOSMetalPresentation::ModeName(previousPolicy.mode),
+        configureFailure.c_str());
     if (wasPrefetchStarted || impl->useDrawablePrefetch) {
       StartDrawablePrefetcher(impl);
     }
@@ -2765,7 +2847,8 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
         "total_ms=%.3f before_frame=%dx%d after_frame=%dx%d "
         "before_drawable=%dx%d after_drawable=%dx%d backing_scale=%.3f "
         "depth_recreated=%d drain_budget_ms=%d prefetch_was_started=%d "
-        "prefetch_started=%d",
+        "prefetch_started=%d previous_mode=%s presentation_mode=%s "
+        "display_sync=%d minimum_duration=%d pacing_owner=%s",
         reason != nullptr ? reason : "unknown",
         reconfigureTimer.GetDeltaTime() * 1000.0f,
         static_cast<int>(beforeFrame.size.width),
@@ -2780,7 +2863,14 @@ bool MacOSMetalPresenter::ReconfigureAttachedLayer(
         depthSizeChanged ? 1 : 0,
         kMetalReconfigureDrainWaitMs,
         wasPrefetchStarted ? 1 : 0,
-        impl->drawablePrefetchStarted ? 1 : 0);
+        impl->drawablePrefetchStarted ? 1 : 0,
+        MacOSMetalPresentation::ModeName(previousPolicy.mode),
+        MacOSMetalPresentation::ModeName(
+            impl->presentationPolicy.mode),
+        impl->presentationPolicy.displaySyncEnabled ? 1 : 0,
+        impl->presentationPolicy.scheduleMinimumPresentDuration ? 1 : 0,
+        MacOSMetalPresentation::CadenceOwnerName(
+            impl->presentationPolicy.cadenceOwner));
   }
 
   return true;
@@ -2946,13 +3036,8 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
   [encoder endEncoding];
 
-  /*
-   * RageDisplay owns cadence through FrameLimitBeforeVsync.  Asking Metal to
-   * enforce a second frame duration creates an independent cadence owner and
-   * makes the effective presentation rate depend on drawable queue timing.
-   */
-  const double minimumDuration = 0.0;
-  [commandBuffer presentDrawable:drawable];
+  const double minimumDuration = ScheduleMetalDrawable(
+      commandBuffer, drawable, impl->presentationPolicy, targetHz);
 
   const uint64_t frameIndex = ++impl->offscreenPresentSubmittedFrames;
   g_iMetalOffscreenPresentSubmittedFrames.store(
@@ -3860,9 +3945,8 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
   [encoder endEncoding];
 
-  // OpenGL's display path already owns cadence through the shared frame pacer.
-  const double minimumDuration = 0.0;
-  [commandBuffer presentDrawable:drawable];
+  const double minimumDuration = ScheduleMetalDrawable(
+      commandBuffer, drawable, impl->presentationPolicy, targetHz);
   const uint64_t frameIndex =
       g_iMetalDirectPresentSubmittedFrames.fetch_add(1) + 1;
   const uint64_t submitUsec = RageTimer::GetTimeSinceStartMicroseconds();
@@ -4019,6 +4103,14 @@ MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats() {
   stats.offscreenSkippedFrameLimiterFrames =
       g_iMetalOffscreenPresentSkippedFrameLimiterFrames.load(
           std::memory_order_relaxed);
+  stats.presentationMode =
+      static_cast<MacOSMetalPresentation::Mode>(
+          g_iMetalPresentationMode.load(std::memory_order_acquire));
+  stats.displaySyncEnabled =
+      g_bMetalDisplaySyncEnabled.load(std::memory_order_acquire);
+  stats.schedulesMinimumPresentDuration =
+      g_bMetalSchedulesMinimumPresentDuration.load(
+          std::memory_order_acquire);
   return stats;
 }
 
@@ -4029,6 +4121,8 @@ std::string MacOSMetalPresenterGetRuntimeStatsLine() {
 
   const MacOSMetalPresenterRuntimeStats stats =
       MacOSMetalPresenterGetRuntimeStats();
+  const MacOSMetalPresentation::Policy policy =
+      MacOSMetalPresentation::PolicyForMode(stats.presentationMode);
   if (stats.submittedFrames == 0 && stats.offscreenSubmittedFrames == 0 &&
       stats.prefetchedDrawables == 0 &&
       stats.skippedNoPrefetchedDrawableFrames == 0 &&
@@ -4043,7 +4137,8 @@ std::string MacOSMetalPresenterGetRuntimeStatsLine() {
       "direct_skipped=%llu offscreen_submitted=%llu offscreen_completed=%llu "
       "gpu_errors=%llu "
       "offscreen_skipped_drawable=%llu offscreen_skipped_limiter=%llu "
-      "prefetched=%llu consumed=%llu slow=%llu misses=%llu",
+      "prefetched=%llu consumed=%llu slow=%llu misses=%llu "
+      "mode=%s display_sync=%d minimum_duration=%d pacing_owner=%s",
       stats.submittedFrames, stats.completedFrames,
       stats.skippedNoPrefetchedDrawableFrames,
       stats.offscreenSubmittedFrames,
@@ -4051,15 +4146,23 @@ std::string MacOSMetalPresenterGetRuntimeStatsLine() {
       stats.offscreenSkippedNoDrawableFrames,
       stats.offscreenSkippedFrameLimiterFrames,
       stats.prefetchedDrawables, stats.consumedDrawables,
-      stats.slowDrawableAcquires, stats.drawableMisses);
+      stats.slowDrawableAcquires, stats.drawableMisses,
+      MacOSMetalPresentation::ModeName(stats.presentationMode),
+      stats.displaySyncEnabled ? 1 : 0,
+      stats.schedulesMinimumPresentDuration ? 1 : 0,
+      MacOSMetalPresentation::CadenceOwnerName(
+          policy.cadenceOwner));
 }
 
-void MacOSMetalPresenterMarkNativePresentationChange(int reason) {
+void MacOSMetalPresenterMarkNativePresentationChange(
+    MacOSMetalPresentation::NativeWindowEvent event) {
   g_iMetalNativePresentationChangeReason.store(
-      reason, std::memory_order_release);
+      static_cast<int>(event), std::memory_order_release);
 }
 
-int MacOSMetalPresenterConsumeNativePresentationChangeReason() {
-  return g_iMetalNativePresentationChangeReason.exchange(
-      0, std::memory_order_acq_rel);
+MacOSMetalPresentation::NativeWindowEvent
+MacOSMetalPresenterConsumeNativePresentationChange() {
+  return MacOSMetalPresentation::NativeWindowEventFromRaw(
+      g_iMetalNativePresentationChangeReason.exchange(
+          0, std::memory_order_acq_rel));
 }

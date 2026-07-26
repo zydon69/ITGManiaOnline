@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "MacOSMetalPresentationPolicy.h"
 #include "RageTypes.h"
 
 struct MacOSMetalSolidVertex {
@@ -63,6 +64,10 @@ struct MacOSMetalPresenterRuntimeStats {
   unsigned long long skippedNoPrefetchedDrawableFrames = 0;
   unsigned long long offscreenSkippedNoDrawableFrames = 0;
   unsigned long long offscreenSkippedFrameLimiterFrames = 0;
+  MacOSMetalPresentation::Mode presentationMode =
+      MacOSMetalPresentation::Mode::CompositedWindow;
+  bool displaySyncEnabled = true;
+  bool schedulesMinimumPresentDuration = true;
 };
 
 enum class MacOSMetalPresentResult {
@@ -117,7 +122,8 @@ class MacOSMetalPresenter {
 
   bool Initialize(
       void* nsWindow, int width, int height, double targetHz,
-      bool createInteropSurfaces = true, bool displaySyncEnabled = true);
+      bool createInteropSurfaces,
+      MacOSMetalPresentation::Mode presentationMode);
   void Shutdown();
 
   bool IsAvailable() const;
@@ -128,7 +134,9 @@ class MacOSMetalPresenter {
   void SetLayerVisible(bool visible);
   bool AttachLayerToWindow(void* nsWindow);
   bool AttachLayerAsContentView(void* nsWindow);
-  bool ReconfigureAttachedLayer(void* nsWindow, const char* reason);
+  bool ReconfigureAttachedLayer(
+      void* nsWindow, const char* reason,
+      MacOSMetalPresentation::Mode presentationMode);
   void DetachLayer();
   MacOSMetalPresentResult PresentSolidBatchesOffscreenFirst(
       const MacOSMetalDrawBatch* batches, size_t batchCount,
@@ -177,7 +185,13 @@ class MacOSMetalPresenter {
 
 MacOSMetalPresenterRuntimeStats MacOSMetalPresenterGetRuntimeStats();
 std::string MacOSMetalPresenterGetRuntimeStatsLine();
-void MacOSMetalPresenterMarkNativePresentationChange(int reason);
-int MacOSMetalPresenterConsumeNativePresentationChangeReason();
+MacOSMetalPresentation::Mode MacOSMetalPresentationModeForWindow(
+    void* nsWindow, bool engineWindowed,
+    MacOSMetalPresentation::NativeWindowEvent event =
+        MacOSMetalPresentation::NativeWindowEvent::None);
+void MacOSMetalPresenterMarkNativePresentationChange(
+    MacOSMetalPresentation::NativeWindowEvent event);
+MacOSMetalPresentation::NativeWindowEvent
+MacOSMetalPresenterConsumeNativePresentationChange();
 
 #endif

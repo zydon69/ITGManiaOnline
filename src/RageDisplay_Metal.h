@@ -217,7 +217,6 @@ class RageDisplay_Metal : public RageDisplay {
   bool m_bZWrite;
   bool m_bAlphaTest;
   bool m_bClearDepthNextFrame;
-  bool m_bLayerReconfiguredForResolutionChange = false;
   uintptr_t m_iCurrentRenderTargetHandle;
   RageColor m_MaterialDiffuse;
   RageColor m_MaterialAmbient;

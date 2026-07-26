@@ -101,25 +101,6 @@ RageVColor ToVertexColor(const RageColor& color) {
   return out;
 }
 
-const char* MacOSNativePresentationReasonNameForMetal(int reason) {
-  switch (reason) {
-    case 1:
-      return "will_enter_fullscreen";
-    case 2:
-      return "did_enter_fullscreen";
-    case 3:
-      return "will_exit_fullscreen";
-    case 4:
-      return "did_exit_fullscreen";
-    case 5:
-      return "screen_changed";
-    case 6:
-      return "backing_changed";
-    default:
-      return "unknown";
-  }
-}
-
 RageColor ClampColor(const RageColor& color) {
   const auto clampFinite = [](float value) {
     return std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.0f;
@@ -844,7 +825,6 @@ bool RageDisplay_Metal::BeginFrame() {
   // cleared when this flag is set.  Re-arm it here so depth-writing models do
   // not occlude later frames with stale geometry.
   m_bClearDepthNextFrame = true;
-  m_bLayerReconfiguredForResolutionChange = false;
   SetDefaultRenderStates();
   return true;
 }
@@ -1881,6 +1861,11 @@ MacOSMetalPresentResult RageDisplay_Metal::SubmitActiveBatches() {
   SetRuntimeFramePacingTargetHz(static_cast<float>(targetHz));
   const int frameLimitHz =
       std::max(1, static_cast<int>(std::lround(targetHz)));
+  /*
+   * Keep frame production bounded at the physical refresh rate.  This does not
+   * decide the final presentation cadence: the presenter delegates composited
+   * windows to WindowServer and keeps engine-owned cadence in fullscreen.
+   */
   FrameLimitBeforeVsync(frameLimitHz);
   const bool clearDepth = m_bClearDepthNextFrame;
   /*
@@ -2013,13 +1998,20 @@ void RageDisplay_Metal::EndFrame() {
   }
   if (m_Window) {
     m_Window->Update();
-    const int nativePresentationReason =
-        MacOSMetalPresenterConsumeNativePresentationChangeReason();
-    if (nativePresentationReason != 0 && m_Presenter && m_bReady &&
-        !m_bLayerReconfiguredForResolutionChange) {
+    const MacOSMetalPresentation::NativeWindowEvent nativePresentationEvent =
+        MacOSMetalPresenterConsumeNativePresentationChange();
+    if (nativePresentationEvent !=
+            MacOSMetalPresentation::NativeWindowEvent::None &&
+        m_Presenter && m_bReady) {
+      void* nativeWindow = m_Window->GetNativeWindowHandle();
+      const MacOSMetalPresentation::Mode presentationMode =
+          MacOSMetalPresentationModeForWindow(
+              nativeWindow, m_Params.windowed, nativePresentationEvent);
       m_Presenter->ReconfigureAttachedLayer(
-          m_Window->GetNativeWindowHandle(),
-          MacOSNativePresentationReasonNameForMetal(nativePresentationReason));
+          nativeWindow,
+          MacOSMetalPresentation::NativeWindowEventName(
+              nativePresentationEvent),
+          presentationMode);
     }
   }
   ReleasePendingTextureDeletes();
@@ -2038,9 +2030,12 @@ void RageDisplay_Metal::ResolutionChanged() {
 
   bool layerReconfigured = false;
   if (m_Presenter != nullptr && m_bReady) {
+    void* nativeWindow = m_Window->GetNativeWindowHandle();
+    const MacOSMetalPresentation::Mode presentationMode =
+        MacOSMetalPresentationModeForWindow(
+            nativeWindow, m_Params.windowed);
     layerReconfigured = m_Presenter->ReconfigureAttachedLayer(
-        m_Window->GetNativeWindowHandle(), "resolution_changed");
-    m_bLayerReconfiguredForResolutionChange = layerReconfigured;
+        nativeWindow, "resolution_changed", presentationMode);
     if (!layerReconfigured) {
       LOG->Warn(
           "RageDisplay_Metal: layer reconfiguration failed after resize "
@@ -2474,10 +2469,13 @@ std::string RageDisplay_Metal::TryVideoMode(
 
     const double targetHz =
         MetalDisplayPacingTargetHz(m_Presenter, m_Params, pacingRefreshRate);
+    const MacOSMetalPresentation::Mode presentationMode =
+        MacOSMetalPresentationModeForWindow(
+            nativeWindow, m_Params.windowed);
     if (!m_Presenter->Initialize(
             nativeWindow, std::max(1, m_Params.width),
             std::max(1, m_Params.height), targetHz, false,
-            m_Params.vsync)) {
+            presentationMode)) {
       if (failureOut != nullptr) {
         *failureOut = m_Presenter->FailureReason().empty()
                           ? "Native Metal presenter initialization failed."

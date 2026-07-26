@@ -128,9 +128,11 @@ source_group("Arch Specific\\\\Memory Card"
 
 list(APPEND SMDATA_ARCH_LOWLEVEL_SRC
             "arch/LowLevelWindow/DisplayLinkPacingPolicy.cpp"
+            "arch/LowLevelWindow/MacOSMetalPresentationPolicy.cpp"
             "arch/LowLevelWindow/LowLevelWindow.cpp")
 list(APPEND SMDATA_ARCH_LOWLEVEL_HPP
             "arch/LowLevelWindow/DisplayLinkPacingPolicy.h"
+            "arch/LowLevelWindow/MacOSMetalPresentationPolicy.h"
             "arch/LowLevelWindow/LowLevelWindow.h")
 
 if(WIN32)
