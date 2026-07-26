@@ -63,9 +63,20 @@ constexpr int kMetalMaxSolidFramesInFlight = 3;
 constexpr int kMetalFrameLimiterWaitMs = 4;
 constexpr int kMetalReconfigureDrainWaitMs = 24;
 constexpr int kMetalShutdownDrainWaitMs = 250;
-constexpr int kMetalDrawablePrefetchRenderWaitUs = 500;
-constexpr int kMetalInteropDrawablePrefetchRenderWaitUs = 500;
+constexpr int kMetalDrawablePrefetchMinRenderWaitUs = 500;
+constexpr int kMetalDrawablePrefetchMaxRenderWaitUs = 4000;
 constexpr uint64_t kMetalDisplayPacingRefreshUsec = 2000000;
+
+int MetalDrawablePrefetchRenderWaitUsec(double targetHz) {
+  if (!std::isfinite(targetHz) || targetHz <= 1.0) {
+    return kMetalDrawablePrefetchMaxRenderWaitUs;
+  }
+  const double halfIntervalUsec = 500000.0 / targetHz;
+  return std::clamp(
+      static_cast<int>(std::llround(halfIntervalUsec)),
+      kMetalDrawablePrefetchMinRenderWaitUs,
+      kMetalDrawablePrefetchMaxRenderWaitUs);
+}
 
 bool ShouldTraceMetalRenderThreadPrefetchWait(float waitMs, int waitUsec) {
   return waitUsec > 0 && waitMs >= static_cast<float>(waitUsec) / 1000.0f;
@@ -921,7 +932,7 @@ void LogMetalPresenterTimingSummary(MacOSMetalPresenterImpl* impl) {
           impl->offscreenPresentSkippedNoDrawable),
       static_cast<unsigned long long>(
           impl->offscreenPresentSkippedFrameLimiter),
-      static_cast<float>(kMetalInteropDrawablePrefetchRenderWaitUs) / 1000.0f,
+      static_cast<float>(kMetalDrawablePrefetchMaxRenderWaitUs) / 1000.0f,
       kMetalSlowNextDrawableSummaryMs, kMetalTraceNextDrawableMs);
 
   const std::shared_ptr<MacOSMetalTimingState> timingState = impl->timingState;
@@ -2859,8 +2870,10 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
   }
 
   MacOSMetalDrawableAcquireInfo drawableInfo;
+  const int drawableWaitUsec =
+      MetalDrawablePrefetchRenderWaitUsec(targetHz);
   id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
-      impl, &drawableInfo, kMetalDrawablePrefetchRenderWaitUs);
+      impl, &drawableInfo, drawableWaitUsec);
   if (drawable == nil) {
     const uint64_t skippedFrames = ++impl->offscreenPresentSkippedNoDrawable;
     g_iMetalOffscreenPresentSkippedNoDrawableFrames.store(
@@ -2875,7 +2888,7 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
           "render_wait_budget_us=%d target_hz=%.3f size=%dx%d",
           static_cast<unsigned long long>(skippedFrames),
           static_cast<unsigned long long>(drawableInfo.misses),
-          drawableInfo.renderThreadWaitMs, kMetalDrawablePrefetchRenderWaitUs,
+          drawableInfo.renderThreadWaitMs, drawableWaitUsec,
           targetHz, width, height);
     }
     return MacOSMetalPresentResult::Skipped;
@@ -3763,8 +3776,10 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   }
 
   MacOSMetalDrawableAcquireInfo drawableInfo;
+  const int drawableWaitUsec =
+      MetalDrawablePrefetchRenderWaitUsec(targetHz);
   id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
-      impl, &drawableInfo, kMetalInteropDrawablePrefetchRenderWaitUs);
+      impl, &drawableInfo, drawableWaitUsec);
   if (drawable == nil) {
     const uint64_t skippedFrames = ++impl->directPresentSkippedNoDrawable;
     g_iMetalDirectPresentSkippedNoDrawableFrames.store(
@@ -3912,7 +3927,7 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
       drawableInfo.renderThreadNextDrawableMs >= kMetalTraceNextDrawableMs ||
       ShouldTraceMetalRenderThreadPrefetchWait(
           drawableInfo.renderThreadWaitMs,
-          kMetalInteropDrawablePrefetchRenderWaitUs);
+          drawableWaitUsec);
   if (PerfDiagnosticsEnabled() && traceSubmit) {
     LOG->Trace(
         "PERF_TRACE: macos_metal_direct_present_submitted surface_index=%d "

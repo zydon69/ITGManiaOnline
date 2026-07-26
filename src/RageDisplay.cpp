@@ -2592,11 +2592,52 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
     }
 
     FramePacingWaitStats waitStats;
+#ifdef __APPLE__
+    g_bFramePacerLastDisplayLinkPhaseAligned = false;
+    g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
+#endif
     if (plannedWaitUsec > 0) {
       waitStats = WaitUntilFramePacingWakeUsec(
           wakeUsec, g_iFramePacerNextPresentUsec, intervalUsec, fineWaitUsec,
           maxSleepChunkUsec, HOOKS->AppHasFocus(), macOSPresentLeadUsec);
     }
+
+#ifdef __APPLE__
+    if (waitStats.display_link_used &&
+        waitStats.display_link_output_aligned_present &&
+        ((waitStats.display_link_selected_output_usec >=
+              g_iFramePacerNextPresentUsec &&
+          waitStats.display_link_selected_output_usec -
+                  g_iFramePacerNextPresentUsec <=
+              intervalUsec) ||
+         (waitStats.display_link_selected_output_usec <
+              g_iFramePacerNextPresentUsec &&
+          g_iFramePacerNextPresentUsec -
+                  waitStats.display_link_selected_output_usec <=
+              std::min<uint64_t>(
+                  waitStats.display_link_phase_tolerance_usec,
+                  intervalUsec / 2)))) {
+      const uint64_t previousTargetUsec = g_iFramePacerNextPresentUsec;
+      g_iFramePacerNextPresentUsec =
+          waitStats.display_link_selected_output_usec;
+      g_bFramePacerLastDisplayLinkPhaseAligned = true;
+      g_iFramePacerLastDisplayLinkPhaseAlignUsec =
+          g_iFramePacerNextPresentUsec >= previousTargetUsec
+              ? static_cast<int64_t>(
+                    g_iFramePacerNextPresentUsec - previousTargetUsec)
+              : -static_cast<int64_t>(
+                    previousTargetUsec - g_iFramePacerNextPresentUsec);
+      const uint64_t alignedPresentLeadUsec =
+          waitStats.display_link_present_lead_usec;
+      wakeUsec =
+          g_iFramePacerNextPresentUsec > alignedPresentLeadUsec
+              ? g_iFramePacerNextPresentUsec - alignedPresentLeadUsec
+              : g_iFramePacerNextPresentUsec;
+      plannedWaitUsec =
+          static_cast<int64_t>(wakeUsec) -
+          static_cast<int64_t>(nowUsec);
+    }
+#endif
 
     const uint64_t afterWaitUsec =
         RageTimer::GetTimeSinceStartMicroseconds();
@@ -2778,10 +2819,6 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
     bool phaseResynced = false;
     bool waitResynced = false;
     g_szFramePacerLastAfterSwapResyncReason = "none";
-#ifdef __APPLE__
-    g_bFramePacerLastDisplayLinkPhaseAligned = false;
-    g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
-#endif
     if (presentLateUsec >
             static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec)) ||
         nextPresentUsec <= nowUsec) {

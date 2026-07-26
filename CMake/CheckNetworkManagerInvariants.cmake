@@ -30,6 +30,13 @@ foreach(REQUIRED_SNIPPET
     "this->shutdownWorkers, this->httpWorkerMutex, this->httpWorkerCv"
     "this->shutdownWorkers, this->downloadWorkerMutex, this->downloadWorkerCv"
     "this->shutdownWorkers, this->webSocketWorkerMutex"
+    "CloseAllWebSocketsInternal(false, true)"
+    "EnqueueWebSocketStop("
+    "websocket_close_end handle=%llu"
+    "websocket_stop_end handle=%llu"
+    "socket->stop();"
+    "WaitForWebSocketWorker()"
+    "terminal stop tasks"
     "effectiveMaxDownloadBytes"
     "kMaxDownloadBytes = 5LL * 1024LL * 1024LL * 1024LL"
     "std::atomic<int64_t> latestProgressCurrent"
@@ -44,6 +51,19 @@ foreach(REQUIRED_SNIPPET
     message(
         FATAL_ERROR
         "NetworkManager invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(FORBIDDEN_SNIPPET
+    "this->webSocketWorkerQueue = {};"
+    "LUA->YieldLua();"
+    "LUA->UnyieldLua();"
+    "webSocket.stop();")
+  string(FIND "${NETWORK_MANAGER_TEXT}" "${FORBIDDEN_SNIPPET}" SNIPPET_OFFSET)
+  if(NOT SNIPPET_OFFSET EQUAL -1)
+    message(
+      FATAL_ERROR
+      "NetworkManager websocket shutdown must stay off the main thread: forbidden '${FORBIDDEN_SNIPPET}'")
   endif()
 endforeach()
 

@@ -6,6 +6,7 @@
 #include "ActorUtil.h"
 #include "LuaManager.h"
 #include "MessageManager.h"
+#include "PerfDiagnostics.h"
 #include "PrefsManager.h"
 #include "RageDisplay.h"
 #include "RageLog.h"
@@ -24,6 +25,12 @@ const char* SKIP_Y_METRIC = "SkipY";
 const char* SKIP_SPACING_Y_METRIC = "SkipSpacingY";
 const char* SKIP_WIDTH_METRIC = "SkipWidth";
 const char* SHOW_STATS_CHANGED_COMMAND = "ShowStatsChangedCommand";
+
+bool ShouldLogFrameTimingDiagnostics() {
+  return LOG != nullptr &&
+         (PerfDiagnosticsEnabled() ||
+          (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips));
+}
 
 bool CanReadThemeMetrics() {
   return THEME != nullptr && THEME->IsThemeLoaded() && LUA != nullptr;
@@ -255,7 +262,7 @@ void ScreenStatsOverlay::UpdateSkips() {
             static_cast<unsigned long long>(newlyDroppedFrames),
             newlyDroppedFrames == 1 ? "" : "s"),
         RageColor(1.0f, 0.4f, 0.4f, 1));
-    if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips && LOG != nullptr) {
+    if (ShouldLogFrameTimingDiagnostics()) {
       LOG->Trace(
           "Presentation drop: new=%llu total=%llu attempted=%llu "
           "presented=%llu",
@@ -310,7 +317,7 @@ void ScreenStatsOverlay::UpdateSkips() {
             UpdateTime / ExpectedUpdate),
         colors[skip]);
 
-    if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips && LOG != nullptr) {
+    if (ShouldLogFrameTimingDiagnostics()) {
       LOG->Trace(
           "Frame skip: %.0fms (%.0f)", 1000 * UpdateTime,
           UpdateTime / ExpectedUpdate);

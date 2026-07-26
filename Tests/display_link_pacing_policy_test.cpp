@@ -58,10 +58,10 @@ int main() {
   phase = SelectFutureOutputForTarget(110, 101, 10, 5, 90);
   Require(
       phase.output_usec == 100 && phase.projection_steps == -1,
-      "an eligible prior lattice point may be selected");
+      "a prior lattice point inside the jitter window may be selected");
   Require(
       phase.source == OutputSource::Previous,
-      "a prior lattice point must retain its source");
+      "a bounded prior lattice point must retain its source");
 
   phase = SelectFutureOutputForTarget(100, 105, 10, 5, 100);
   Require(
@@ -81,8 +81,9 @@ int main() {
 
   // Exhaustively compare small inputs with a direct lattice search.  This
   // protects the scheduling invariant independently of the production caller:
-  // a selected deadline is eligible, on the physical refresh phase, nearest to
-  // the target, and resolves exact ties in favor of the future output.
+  // a selected deadline is eligible, on the physical refresh phase, and is the
+  // nearest lattice point after the current deadline, with ties resolved in
+  // favor of the future output.
   for (uint64_t observed = 20; observed <= 80; observed += 5) {
     for (uint64_t period = 1; period <= 12; ++period) {
       for (uint64_t target = 1; target <= 120; ++target) {
@@ -121,6 +122,9 @@ int main() {
           Require(
               !phase.valid || phase.output_usec >= earliest,
               "policy must never return an expired deadline");
+          Require(
+              !phase.valid || phase.output_usec + period / 2 >= target,
+              "nearest-phase selection must bound early correction");
         }
       }
     }

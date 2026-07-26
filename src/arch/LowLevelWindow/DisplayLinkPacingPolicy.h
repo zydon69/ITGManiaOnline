@@ -23,13 +23,14 @@ struct OutputPhase {
 };
 
 /*
- * Select the display-link phase nearest to targetPresentUsec while requiring
- * the chosen output deadline to be at or after earliestOutputUsec.
+ * Select the display-link phase nearest to targetPresentUsec while always
+ * respecting earliestOutputUsec.
  *
  * lastOutputUsec is the latest phase observed by the display-link callback.
  * periodUsec projects that phase forwards (or, when still safe, backwards)
- * onto the physical refresh lattice.  The future-deadline requirement keeps a
- * stale callback timestamp from turning frame pacing into a zero-length wait.
+ * onto the physical refresh lattice.  The caller adopts the selected output
+ * as its next engine target, so a nearest previous point corrects phase jitter
+ * instead of accumulating an early cadence.
  */
 OutputPhase SelectFutureOutputForTarget(
     uint64_t lastOutputUsec, uint64_t targetPresentUsec,

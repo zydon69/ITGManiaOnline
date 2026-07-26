@@ -29,6 +29,7 @@
 #include "ixwebsocket/IXWebSocketOpenInfo.h"
 
 struct lua_State;
+class NetworkManager;
 
 enum HttpErrorCode {
   HttpErrorCode_Blocked,
@@ -121,7 +122,7 @@ struct WebSocketArgs {
 
 class WebSocketHandle {
  public:
-  WebSocketHandle() {};
+  WebSocketHandle() : webSocket(std::make_shared<ix::WebSocket>()) {}
   ~WebSocketHandle();
 
   static int Collect(lua_State* L);
@@ -129,9 +130,10 @@ class WebSocketHandle {
   static int Send(lua_State* L);
 
   void CloseSocket(bool calledFromLua);
-  ix::WebSocket webSocket;
+  std::shared_ptr<ix::WebSocket> webSocket;
   std::function<void()> onClose;
   void InvalidateCallbacks();
+  NetworkManager* owner{nullptr};
   std::uint64_t debugId{0};
   std::string debugUrl;
   std::atomic<bool> closed{false};
@@ -162,13 +164,19 @@ class NetworkManager {
   void PushSelf(lua_State* L);
 
  private:
+  friend class WebSocketHandle;
+
   void RunHttpWorker();
   void RunDownloadWorker();
   void RunWebSocketWorker();
   void StopWorkers();
   void ClearMainThreadTasks();
   void DrainMainThreadTasks();
-  void CloseAllWebSocketsInternal(bool calledFromLua);
+  void CloseAllWebSocketsInternal(bool calledFromLua, bool waitForWorker);
+  bool EnqueueWebSocketStop(
+      const std::shared_ptr<ix::WebSocket>& socket, std::uint64_t debugId,
+      const std::string& debugUrl, bool calledFromLua);
+  void WaitForWebSocketWorker();
   void CancelActiveHttpRequests();
 
   std::string GetUserAgent();

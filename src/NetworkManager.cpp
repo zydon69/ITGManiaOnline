@@ -13,6 +13,7 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -1182,7 +1183,7 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
 
 NetworkManager::~NetworkManager() {
   NetworkTrace("ITG Online NetworkTrace: network_manager_dtor_begin");
-  this->CloseAllWebSockets();
+  this->CloseAllWebSocketsInternal(false, true);
   this->StopWorkers();
   this->DrainMainThreadTasks();
   if (!WithLua([](Lua* L) { ReleaseAllLuaCallbackRefs(L); })) {
@@ -1204,23 +1205,24 @@ NetworkManager::~NetworkManager() {
   NetworkTrace("ITG Online NetworkTrace: network_manager_dtor_end");
 }
 
-void NetworkManager::CloseAllWebSockets() { CloseAllWebSocketsInternal(false); }
-
-void NetworkManager::CloseAllWebSocketsFromLua() {
-  CloseAllWebSocketsInternal(true);
+void NetworkManager::CloseAllWebSockets() {
+  CloseAllWebSocketsInternal(false, false);
 }
 
-void NetworkManager::CloseAllWebSocketsInternal(bool calledFromLua) {
-  NetworkTrace(
-      "ITG Online NetworkTrace: close_all_websockets_begin calledFromLua=%d",
-      calledFromLua ? 1 : 0);
-  // Drop queued websocket starts so no new connections come up after cleanup.
-  {
-    std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
-    this->webSocketWorkerQueue = {};
-  }
+void NetworkManager::CloseAllWebSocketsFromLua() {
+  CloseAllWebSocketsInternal(true, false);
+}
 
-  // Stop all active websocket connections without aggressively clearing.
+void NetworkManager::CloseAllWebSocketsInternal(
+    bool calledFromLua, bool waitForWorker) {
+  NetworkTrace(
+      "ITG Online NetworkTrace: close_all_websockets_begin calledFromLua=%d "
+      "waitForWorker=%d",
+      calledFromLua ? 1 : 0, waitForWorker ? 1 : 0);
+
+  // Marking each handle closed makes queued start tasks harmless.  Do not
+  // clear the worker queue here: it may already contain terminal stop tasks
+  // which own the last reference to their ix::WebSocket.
   std::vector<WebSocketHandlePtr> webSocketHandlesCopy;
   {
     std::lock_guard<std::mutex> lock(this->webSocketHandlesMutex);
@@ -1238,10 +1240,72 @@ void NetworkManager::CloseAllWebSocketsInternal(bool calledFromLua) {
   for (auto& handle : webSocketHandlesCopy) {
     handle->CloseSocket(calledFromLua);
   }
+  if (waitForWorker) {
+    WaitForWebSocketWorker();
+  }
   NetworkTrace(
       "ITG Online NetworkTrace: close_all_websockets_end calledFromLua=%d "
-      "handles=%zu",
-      calledFromLua ? 1 : 0, webSocketHandlesCopy.size());
+      "waitForWorker=%d handles=%zu",
+      calledFromLua ? 1 : 0, waitForWorker ? 1 : 0,
+      webSocketHandlesCopy.size());
+}
+
+bool NetworkManager::EnqueueWebSocketStop(
+    const std::shared_ptr<ix::WebSocket>& socket, std::uint64_t debugId,
+    const std::string& debugUrl, bool calledFromLua) {
+  if (!socket) {
+    return true;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
+    if (this->shutdownWorkers.load()) {
+      return false;
+    }
+    // Stop tasks are terminal lifecycle work and deliberately bypass the
+    // start-task queue limit. Dropping one can leak a live connection.
+    this->webSocketWorkerQueue.push(
+        [socket, debugId, debugUrl, calledFromLua]() {
+          RageTimer stopTimer;
+          NetworkTrace(
+              "ITG Online NetworkTrace: websocket_stop_begin handle=%llu "
+              "calledFromLua=%d url=%s",
+              static_cast<unsigned long long>(debugId),
+              calledFromLua ? 1 : 0,
+              RedactUrlForLog(debugUrl).c_str());
+          socket->disableAutomaticReconnection();
+          socket->stop();
+          NetworkTrace(
+              "ITG Online NetworkTrace: websocket_stop_end handle=%llu "
+              "calledFromLua=%d elapsed_ms=%.3f url=%s",
+              static_cast<unsigned long long>(debugId),
+              calledFromLua ? 1 : 0,
+              stopTimer.GetDeltaTime() * 1000.0f,
+              RedactUrlForLog(debugUrl).c_str());
+        });
+  }
+  this->webSocketWorkerCv.notify_one();
+  return true;
+}
+
+void NetworkManager::WaitForWebSocketWorker() {
+  if (!this->webSocketWorker.joinable() ||
+      std::this_thread::get_id() == this->webSocketWorker.get_id()) {
+    return;
+  }
+
+  auto completion = std::make_shared<std::promise<void>>();
+  std::future<void> completed = completion->get_future();
+  {
+    std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
+    if (this->shutdownWorkers.load()) {
+      return;
+    }
+    this->webSocketWorkerQueue.push(
+        [completion]() { completion->set_value(); });
+  }
+  this->webSocketWorkerCv.notify_one();
+  completed.wait();
 }
 
 void NetworkManager::RunHttpWorker() {
@@ -1806,6 +1870,7 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
 
 WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
   auto handle = std::make_shared<WebSocketHandle>();
+  handle->owner = this;
   handle->debugId = ++g_WebSocketHandleIds;
   handle->debugUrl = args.url;
   handle->onClose = args.onClose;
@@ -1836,13 +1901,13 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
       static_cast<unsigned long long>(handle->debugId),
       RedactUrlForLog(handle->debugUrl).c_str());
 
-  handle->webSocket.setUrl(args.url);
-  handle->webSocket.setTLSOptions(this->tlsOptions);
-  handle->webSocket.disablePerMessageDeflate();
+  handle->webSocket->setUrl(args.url);
+  handle->webSocket->setTLSOptions(this->tlsOptions);
+  handle->webSocket->disablePerMessageDeflate();
   const int64_t maxMessageBytes = args.maxMessageBytes >= 0
                                       ? args.maxMessageBytes
                                       : kDefaultMaxWebSocketMessageBytes;
-  handle->webSocket.setOnMessageCallback(
+  handle->webSocket->setOnMessageCallback(
       [onMessage = args.onMessage,
        maxMessageBytes](const ix::WebSocketMessagePtr& msg) {
         if (onMessage && msg) {
@@ -1861,30 +1926,33 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
   for (const auto& entry : args.headers) {
     headers[entry.first] = entry.second;
   }
-  handle->webSocket.setExtraHeaders(headers);
+  handle->webSocket->setExtraHeaders(headers);
 
   if (args.handshakeTimeout > -1) {
-    handle->webSocket.setHandshakeTimeout(args.handshakeTimeout);
+    handle->webSocket->setHandshakeTimeout(args.handshakeTimeout);
   }
 
   if (args.pingInterval > -1) {
-    handle->webSocket.setPingInterval(args.pingInterval);
+    handle->webSocket->setPingInterval(args.pingInterval);
   }
 
   if (args.automaticReconnect) {
-    handle->webSocket.enableAutomaticReconnection();
+    handle->webSocket->enableAutomaticReconnection();
   } else {
-    handle->webSocket.disableAutomaticReconnection();
+    handle->webSocket->disableAutomaticReconnection();
   }
 
   {
-    std::lock_guard<std::mutex> lock(this->webSocketWorkerMutex);
+    std::unique_lock<std::mutex> lock(this->webSocketWorkerMutex);
     if (this->shutdownWorkers.load()) {
       handle->closed = true;
+      lock.unlock();
+      handle->InvalidateCallbacks();
       return handle;
     }
     if (this->webSocketWorkerQueue.size() >= kMaxWebSocketWorkerQueue) {
       handle->closed = true;
+      lock.unlock();
       NetworkWarn(
           "WebSocket worker queue is full for %s",
           RedactUrlForLog(args.url).c_str());
@@ -1917,7 +1985,7 @@ WebSocketHandlePtr NetworkManager::WebSocket(const WebSocketArgs& args) {
           "ITG Online NetworkTrace: websocket_start_begin handle=%llu url=%s",
           static_cast<unsigned long long>(handle->debugId),
           RedactUrlForLog(handle->debugUrl).c_str());
-      handle->webSocket.start();
+      handle->webSocket->start();
       NetworkTrace(
           "ITG Online NetworkTrace: websocket_start_end handle=%llu url=%s",
           static_cast<unsigned long long>(handle->debugId),
@@ -2042,19 +2110,25 @@ void WebSocketHandle::CloseSocket(bool calledFromLua) {
       static_cast<unsigned long long>(debugId), calledFromLua ? 1 : 0,
       RedactUrlForLog(debugUrl).c_str());
   InvalidateCallbacks();
-  webSocket.disableAutomaticReconnection();
-  const bool canYieldLua = calledFromLua && LUA != nullptr;
-  if (canYieldLua) {
-    LUA->YieldLua();
-  }
-  webSocket.stop();
-  if (canYieldLua) {
-    LUA->UnyieldLua();
+
+  const bool queued =
+      owner != nullptr &&
+      owner->EnqueueWebSocketStop(
+          webSocket, debugId, debugUrl, calledFromLua);
+  if (!queued && webSocket) {
+    // This path is reserved for teardown after the worker has stopped.
+    // Normal runtime and Lua close calls must never execute stop() here.
+    NetworkWarn(
+        "WebSocket worker unavailable; stopping handle %llu synchronously",
+        static_cast<unsigned long long>(debugId));
+    webSocket->disableAutomaticReconnection();
+    webSocket->stop();
   }
   NetworkTrace(
       "ITG Online NetworkTrace: websocket_close_end handle=%llu "
-      "calledFromLua=%d url=%s",
+      "calledFromLua=%d queued=%d url=%s",
       static_cast<unsigned long long>(debugId), calledFromLua ? 1 : 0,
+      queued ? 1 : 0,
       RedactUrlForLog(debugUrl).c_str());
 }
 
@@ -2101,12 +2175,12 @@ int WebSocketHandle::Send(lua_State* L) {
   bool binary = lua_toboolean(L, 3);
 
   if (handle->closed.load() ||
-      handle->webSocket.getReadyState() != ix::ReadyState::Open) {
+      handle->webSocket->getReadyState() != ix::ReadyState::Open) {
     lua_pushboolean(L, false);
     return 1;
   }
 
-  auto info = handle->webSocket.send(data, binary);
+  auto info = handle->webSocket->send(data, binary);
 
   lua_pushboolean(L, info.success);
   return 1;

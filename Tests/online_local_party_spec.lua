@@ -325,8 +325,10 @@ local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerO
 local themeMetricsSource = read_source("Themes/Simply Love/metrics.ini")
 local onlineLobbyMetrics = ini_section(themeMetricsSource, "ScreenOnlineLobbies")
 equal(onlineLobbyMetrics.PrepareScreens,
-	"ScreenSelectMusic,ScreenPlayerOptions,ScreenPlayerOptions2,ScreenPlayerOptions3",
-	"online selection and option screens must preload without persisting transient state")
+	"ScreenSelectMusic",
+	"only song-independent online screens may preload before a song is selected")
+assert(not tostring(onlineLobbyMetrics.PrepareScreens or ""):find("ScreenPlayerOptions", 1, true),
+	"song-dependent player option screens must not be constructed from the lobby")
 equal(onlineLobbyMetrics.PersistScreens, "",
 	"stateful online screens must be reconstructed between rounds")
 assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),

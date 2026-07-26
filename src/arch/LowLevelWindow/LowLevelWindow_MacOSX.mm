@@ -51,9 +51,7 @@ static RageMutex g_ResizeLock("Window resize lock.");
 constexpr float kMacOSFramePacingDisplayLinkTimeoutMs = 33.0f;
 constexpr float kMacOSFramePacingDisplayLinkPresentLeadMs = 2.0f;
 constexpr float kMacOSFramePacingDisplayLinkLateToleranceMs = 1.0f;
-constexpr float kMacOSFramePacingDisplayLinkFinalSleepChunkMs = 0.5f;
-constexpr float kMacOSFramePacingDisplayLinkFinalYieldMs = 5.0f;
-constexpr float kMacOSFramePacingDisplayLinkFinalSpinMs = 1.5f;
+constexpr float kMacOSFramePacingDisplayLinkFinalSpinMs = 1.0f;
 constexpr float kMacOSOpenGLFenceAutoWaitHighRefreshMs = 1.5f;
 constexpr float kMacOSOpenGLFenceAutoMinRefreshHz = 90.0f;
 constexpr float kMacOSOpenGLFenceTraceMinMs = 12.0f;
@@ -142,14 +140,6 @@ float MacOSFramePacingDisplayLinkPresentLeadMs() {
 
 float MacOSFramePacingDisplayLinkLateToleranceMs() {
   return kMacOSFramePacingDisplayLinkLateToleranceMs;
-}
-
-float MacOSFramePacingDisplayLinkFinalSleepChunkMs() {
-  return kMacOSFramePacingDisplayLinkFinalSleepChunkMs;
-}
-
-float MacOSFramePacingDisplayLinkFinalYieldMs() {
-  return kMacOSFramePacingDisplayLinkFinalYieldMs;
 }
 
 float MacOSFramePacingDisplayLinkFinalSpinMs() {
@@ -246,41 +236,14 @@ struct DisplayLinkFinalWaitStats {
   int yields = 0;
 };
 
-uint64_t DisplayLinkFinalSleepChunkUsec(uint64_t intervalUsec) {
-  const uint64_t maxSleepUsec =
-      std::max<uint64_t>(100, std::min<uint64_t>(500, intervalUsec / 8));
-  return ClampedDisplayLinkUsecPreference(
-      MacOSFramePacingDisplayLinkFinalSleepChunkMs(), 500, 100,
-      maxSleepUsec);
-}
-
-uint64_t DisplayLinkFinalYieldWindowUsec(
+uint64_t DisplayLinkFinalSpinWindowUsec(
     uint64_t periodUsec, uint64_t intervalUsec) {
   const uint64_t effectivePeriodUsec =
       periodUsec != 0 ? periodUsec : intervalUsec;
-  const uint64_t maxYieldUsec = std::max<uint64_t>(
-      5000, std::min<uint64_t>(7000, (effectivePeriodUsec * 3) / 4));
-  const uint64_t requestedYieldUsec =
-      ClampedDisplayLinkUsecPreference(
-          MacOSFramePacingDisplayLinkFinalYieldMs(), 5000, 1000,
-          maxYieldUsec);
-  return std::max<uint64_t>(5000, requestedYieldUsec);
-}
-
-uint64_t DisplayLinkFinalSpinWindowUsec(
-    uint64_t periodUsec, uint64_t intervalUsec,
-    uint64_t yieldWindowUsec) {
-  const uint64_t effectivePeriodUsec =
-      periodUsec != 0 ? periodUsec : intervalUsec;
-  const uint64_t maxSpinUsec = std::min<uint64_t>(
-      std::max<uint64_t>(100, yieldWindowUsec),
-      std::max<uint64_t>(1500, std::min<uint64_t>(2500,
-                                                  effectivePeriodUsec / 4)));
-  const uint64_t requestedSpinUsec =
-      ClampedDisplayLinkUsecPreference(
-          MacOSFramePacingDisplayLinkFinalSpinMs(), 1500, 0,
-          maxSpinUsec);
-  return std::max<uint64_t>(1500, requestedSpinUsec);
+  const uint64_t maxSpinUsec =
+      std::clamp<uint64_t>(effectivePeriodUsec / 8, 500, 1500);
+  return ClampedDisplayLinkUsecPreference(
+      MacOSFramePacingDisplayLinkFinalSpinMs(), 1000, 0, maxSpinUsec);
 }
 
 DisplayLinkFinalWaitStats WaitUntilDisplayLinkPresentUsec(
@@ -292,43 +255,23 @@ DisplayLinkFinalWaitStats WaitUntilDisplayLinkPresentUsec(
     return stats;
   }
 
-  const uint64_t yieldWindowUsec =
-      DisplayLinkFinalYieldWindowUsec(periodUsec, intervalUsec);
   const uint64_t spinWindowUsec =
-      DisplayLinkFinalSpinWindowUsec(
-          periodUsec, intervalUsec, yieldWindowUsec);
-  const uint64_t sleepChunkUsec =
-      DisplayLinkFinalSleepChunkUsec(intervalUsec);
+      DisplayLinkFinalSpinWindowUsec(periodUsec, intervalUsec);
+  const uint64_t remainingUsec = targetUsec - nowUsec;
+  if (remainingUsec > spinWindowUsec) {
+    const uint64_t sleepStartUsec = nowUsec;
+    WaitUntilRageUsec(targetUsec - spinWindowUsec);
+    nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+    stats.sleep_usec = nowUsec - sleepStartUsec;
+    stats.sleep_chunks = 1;
+  }
 
-  while (nowUsec < targetUsec) {
-    const uint64_t remainingUsec = targetUsec - nowUsec;
-    if (remainingUsec > yieldWindowUsec) {
-      const uint64_t sleepLimitUsec = targetUsec - yieldWindowUsec;
-      const uint64_t sleepTargetUsec =
-          std::min<uint64_t>(nowUsec + sleepChunkUsec, sleepLimitUsec);
-      const uint64_t sleepStartUsec = nowUsec;
-      WaitUntilRageUsec(sleepTargetUsec);
-      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-      stats.sleep_usec += nowUsec - sleepStartUsec;
-      ++stats.sleep_chunks;
-      continue;
-    }
-
-    if (remainingUsec > spinWindowUsec) {
-      const uint64_t yieldStartUsec = nowUsec;
-      std::this_thread::yield();
-      nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-      stats.yield_usec += nowUsec - yieldStartUsec;
-      ++stats.yields;
-      continue;
-    }
-
+  if (nowUsec < targetUsec) {
     const uint64_t spinStartUsec = nowUsec;
     do {
       nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
     } while (nowUsec < targetUsec);
     stats.spin_usec += nowUsec - spinStartUsec;
-    break;
   }
 
   stats.total_usec = nowUsec - startUsec;
@@ -427,21 +370,6 @@ uint64_t DisplayLinkLateToleranceUsec(
                                        std::max<uint64_t>(500,
                                                           intervalUsec / 4)));
   return std::clamp<uint64_t>(requestedUsec, 0, maxToleranceUsec);
-}
-
-uint64_t CappedDisplayLinkDesiredPresentUsec(
-    uint64_t desiredPresentUsec, uint64_t latestPresentUsec,
-    bool* capped) {
-  if (capped != nullptr) {
-    *capped = false;
-  }
-  if (desiredPresentUsec > latestPresentUsec) {
-    if (capped != nullptr) {
-      *capped = true;
-    }
-    return latestPresentUsec;
-  }
-  return desiredPresentUsec;
 }
 
 bool DisplayLinkUseOutputAlignedPresent(
@@ -556,6 +484,13 @@ class MacOSDisplayLinkPacer {
       if (hasFreshTick && outputPhase.phase_accepted) {
         break;
       }
+      if (outputPhase.valid && !outputPhase.phase_accepted) {
+        // A new display-link callback advances the same physical lattice; it
+        // cannot repair a phase mismatch. Fall back to the engine target
+        // immediately instead of stalling for the full callback timeout.
+        status = "phase_miss";
+        break;
+      }
 
       if (!initialOutputAlignedPresent && nowUsec >= latestAllowedUsec) {
         status = "target_cap";
@@ -591,7 +526,7 @@ class MacOSDisplayLinkPacer {
         DisplayLinkPhaseToleranceUsec(periodUsec, intervalUsec);
     const uint64_t lateToleranceUsec =
         DisplayLinkLateToleranceUsec(periodUsec, intervalUsec);
-    const uint64_t latestPresentUsec =
+    const uint64_t engineLatestPresentUsec =
         (targetPresentUsec > presentLeadUsec
              ? targetPresentUsec - presentLeadUsec
              : targetPresentUsec) +
@@ -609,20 +544,18 @@ class MacOSDisplayLinkPacer {
         outputPhase.phase_accepted;
     const bool selectedOutputPhaseAccepted =
         outputPhase.phase_accepted;
-    uint64_t desiredPresentUsec =
+    const uint64_t desiredPresentUsec =
         outputAlignedPresent && selectedOutputPhaseAccepted &&
                 outputPhase.output_usec > presentLeadUsec
             ? outputPhase.output_usec - presentLeadUsec
             : targetPresentUsec > presentLeadUsec
                   ? targetPresentUsec - presentLeadUsec
                   : targetPresentUsec;
-    bool finalWaitCapped = false;
-    desiredPresentUsec = CappedDisplayLinkDesiredPresentUsec(
-        desiredPresentUsec, latestPresentUsec, &finalWaitCapped);
-    if (!timedOut && outputAlignedPresent && !finalWaitCapped) {
+    const uint64_t latestPresentUsec =
+        outputAlignedPresent ? desiredPresentUsec
+                             : engineLatestPresentUsec;
+    if (!timedOut && outputAlignedPresent) {
       status = "output_aligned";
-    } else if (!timedOut && outputAlignedPresent && finalWaitCapped) {
-      status = "output_capped";
     } else if (!timedOut && !selectedOutputPhaseAccepted &&
         std::strcmp(status, "target_cap") != 0) {
       status = "phase_miss";
@@ -676,7 +609,7 @@ class MacOSDisplayLinkPacer {
               ? 0
               : static_cast<int64_t>(afterUsec) -
                     static_cast<int64_t>(outputPhase.output_usec);
-      stats->final_wait_capped = finalWaitCapped;
+      stats->final_wait_capped = false;
       stats->output_phase_accepted = selectedOutputPhaseAccepted;
       stats->output_aligned_present = outputAlignedPresent;
       stats->output_aligned_present_enabled =

@@ -215,13 +215,33 @@ require_contains(
   "MacOSMetalPresentResult::Skipped"
   "dropped presentation frames are distinct from hard failures")
 require_contains(
+  "${metal_presenter}"
+  "MetalDrawablePrefetchRenderWaitUsec(targetHz)"
+  "drawable prefetch waits scale with the physical frame interval")
+require_contains(
   "${display_link_policy}"
-  "earliestOutputUsec > lastOutputUsec"
-  "stale display-link phases are projected to a future output deadline")
+  "candidateDelta == bestDelta"
+  "display-link phase correction selects the nearest physical output")
 require_contains(
   "${display_link_policy_test}"
-  "a stale observed phase must never produce a past deadline"
-  "future display-link deadline selection has executable regression coverage")
+  "nearest-phase selection must bound early correction"
+  "nearest display-link phase selection has executable regression coverage")
+require_contains(
+  "${macos_window}"
+  "outputPhase.valid && !outputPhase.phase_accepted"
+  "a fixed display-link phase miss cannot stall for the callback timeout")
+require_contains(
+  "${rage_display}"
+  "g_iFramePacerNextPresentUsec =\n          waitStats.display_link_selected_output_usec"
+  "the engine cadence must adopt the selected physical display phase")
+require_contains(
+  "${rage_display}"
+  "g_iFramePacerNextPresentUsec > alignedPresentLeadUsec"
+  "wake-lateness telemetry must use the adopted physical phase")
+require_absent(
+  "${macos_window}"
+  "CappedDisplayLinkDesiredPresentUsec"
+  "the engine target cannot cap away a valid future physical phase")
 require_contains(
   "${metal_display}"
   "framePresentResult == MacOSMetalPresentResult::Presented"

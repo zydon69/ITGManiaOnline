@@ -26,6 +26,7 @@ function(require_not_contains contents needle label)
 endfunction()
 
 read_source("src/ScreenGameplay.cpp" screen_gameplay)
+read_source("src/ScreenStatsOverlay.cpp" stats_overlay)
 read_source("src/GameLoop.cpp" game_loop)
 read_source("src/RageLog.cpp" rage_log)
 read_source("src/ThemeManager.cpp" theme_manager)
@@ -57,6 +58,9 @@ require_not_contains(
 require_contains(
   "${game_loop}" "incoming_delta_hitch"
   "frame hitch diagnostics must remain centralized and preference-gated")
+require_contains(
+  "${stats_overlay}" "PerfDiagnosticsEnabled() ||"
+  "performance diagnostics must include exact visible drop timestamps")
 require_contains(
   "${rage_log}" "const bool writeToMainLog"
   "user content diagnostics must be isolated from the engine log")
