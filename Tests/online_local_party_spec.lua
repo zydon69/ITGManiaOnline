@@ -160,8 +160,14 @@ assert(clientSource:find("onlineStateTraceThrottle", 1, true),
 	"high-frequency state tracing must be throttled without disabling online diagnostics")
 assert(clientSource:find('"rv:" .. tostring(roomVersion or 0)', 1, true),
 	"versioned room snapshots must avoid recursive whole-payload fingerprints")
-assert(clientSource:find("options_room_snapshot_authoritative", 1, true),
-	"the options screen must not refresh the whole lobby from a room-scoped realtime update")
+assert(clientSource:find("reason=current_room_snapshot_authoritative", 1, true),
+	"a current-room snapshot must suppress the redundant full-lobby refresh on every online screen")
+assert(clientSource:find("reason=presence_payload_authoritative", 1, true),
+	"an authoritative presence row must update the lobby cache without a second full-lobby request")
+assert(clientSource:find("lobby_updated_current_room:", 1, true),
+	"a missed current-room snapshot must reconcile the room instead of downloading the full lobby")
+assert(clientSource:find("room_left_event_duplicate reason=already_applied", 1, true),
+	"a late room.left event must be diagnosed as an idempotent duplicate after local exit")
 assert(clientSource:find("function ITGOnline:ConnectLocalPlayerPartyWebSockets", 1, true),
 	"client must open both authenticated realtime connections")
 assert(clientSource:find("function ITGOnline:CanLocalPlayerControlOnlineRoom", 1, true),
@@ -174,6 +180,12 @@ assert(not clientSource:find("function ITGOnline:RequestCompanionJoinRequest", 1
 	"the client must not create a second, divergent private-room join request for Player 2")
 assert(clientSource:find("function ITGOnline:ActiveLocalPartyId", 1, true),
 	"both local presences must publish the same ephemeral party identity")
+assert(clientSource:find('localPartyId and "coordinator" or nil', 1, true),
+	"Player 1 heartbeats must declare the room-control coordinator")
+assert(clientSource:find('localPartyId and "companion" or nil', 1, true),
+	"Player 2 heartbeats must declare the non-controlling companion")
+assert(clientSource:find("payload.local_party_role = localPartyRole", 1, true),
+	"both local heartbeat payloads must publish their explicit party role")
 assert(clientSource:find("function ITGOnline:CaptureLocalPartyPlan", 1, true),
 	"the online session must capture local party membership once")
 assert(clientSource:find("function ITGOnline:RequiredLocalPlayers", 1, true),
@@ -336,6 +348,8 @@ assert(autoReadySource:find("self:ConfirmSelectedSongAvailability", 1, true),
 	"readiness must begin with the local availability barrier")
 assert(autoReadySource:find('self:SetReady("lobby_ready", true', 1, true),
 	"a successful availability barrier must progress to ready")
+assert(clientSource:find("song_availability_confirm_selected_deferred", 1, true),
+	"an acknowledged missing-song report must not progress to any ready endpoint")
 assert(autoReadySource:find("songSelectedAutoReadyInFlightCallbacks", 1, true),
 	"every caller for one selected-song round must join the same ready transaction")
 assert(autoReadySource:find("ready_snapshot_applied_by_availability", 1, true),
@@ -399,6 +413,9 @@ assert(lobbySource:find("ITGOnlineLobbyModel.online_lobby_state_signature", 1, t
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
 local onlinePackSyncSource = read_source("Themes/Simply Love/Scripts/SL-OnlinePackSync.lua")
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
+local judgmentPreviewSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/JudgmentGraphic.lua"
+)
 local themeMetricsSource = read_source("Themes/Simply Love/metrics.ini")
 local onlineLobbyMetrics = ini_section(themeMetricsSource, "ScreenOnlineLobbies")
 equal(onlineLobbyMetrics.PrepareScreens,
@@ -406,6 +423,10 @@ equal(onlineLobbyMetrics.PrepareScreens,
 	"only song-independent online screens may preload before a song is selected")
 assert(not tostring(onlineLobbyMetrics.PrepareScreens or ""):find("ScreenPlayerOptions", 1, true),
 	"song-dependent player option screens must not be constructed from the lobby")
+assert(not judgmentPreviewSource:find("or selected_count == 0", 1, true),
+	"a transient missing player context must not cold-load every judgment graphic")
+assert(judgmentPreviewSource:find("remember_selected_judgment(judgment_filename)", 1, true),
+	"the judgment preview must retain a deterministic cold-start fallback")
 equal(onlineLobbyMetrics.PersistScreens, "",
 	"stateful online screens must be reconstructed between rounds")
 assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),
@@ -414,6 +435,15 @@ assert(not clientSource:find("function ITGOnline:MaybeAutoReadyManager", 1, true
 	"the manager must not run a second readiness orchestrator")
 assert(not onlineHelpersSource:find("OnlineManagerAutoReadyRetryRequested", 1, true),
 	"the obsolete manager ready retry handler must be removed")
+local playingTickStart = assert(onlineHelpersSource:find("OnlinePlayingCountdownTickCommand=function", 1, true),
+	"online runtime must expose its room countdown tick")
+local playingTickEnd = assert(onlineHelpersSource:find("OnlineSongReloadCompletedMessageCommand=function", playingTickStart, true),
+	"online countdown tick boundary must remain identifiable")
+local playingTickSource = onlineHelpersSource:sub(playingTickStart, playingTickEnd - 1)
+assert(not playingTickSource:find("ITGOnline:FlushLiveScore", 1, true),
+	"the room countdown must not duplicate ScreenGameplay's primary live-score transport loop")
+assert(onlineScorePushSource:find("ITGOnline:FlushLiveScore()", 1, true),
+	"ScreenGameplay must remain the sole owner of primary live-score transport")
 local helperReadyStart = assert(onlineHelpersSource:find("function maybe_set_lobby_ready", 1, true),
 	"online screens must expose a single ready delegation helper")
 local helperReadyEnd = assert(onlineHelpersSource:find("function maybe_preview_current_online_song", helperReadyStart, true),

@@ -221,8 +221,6 @@ if(NOT FINAL_RESULT_INDEX_AS_USER_ID_OFFSET EQUAL -1)
 endif()
 
 foreach(REQUIRED_SNIPPET
-    "live_score_finalized_for_runtime"
-    "not live_score_finalized_for_runtime()"
     "ITGOnlineRealtimeReconnectScheduledMessageCommand"
     "realtime_reconnect_handler_armed")
   string(FIND "${ONLINE_HELPERS_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
@@ -233,12 +231,23 @@ foreach(REQUIRED_SNIPPET
   endif()
 endforeach()
 
+string(FIND
+    "${ONLINE_HELPERS_TEXT}"
+    "ITGOnline:FlushLiveScore"
+    DUPLICATE_LIVE_SCORE_FLUSH_OFFSET)
+if(NOT DUPLICATE_LIVE_SCORE_FLUSH_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "Online live score ownership invariant failed: global room timers must not duplicate gameplay score transport")
+endif()
+
 foreach(REQUIRED_SNIPPET
     "IsLiveScoreFinalizedForCurrentRound(\"track_online_score_push\")"
     "tracker_stop reason=final_score_already_accepted"
     "_skipped reason=inactive_online_context"
     "CaptureOnlineScoreCommand"
     "self.scoreCaptureQueued"
+    "ITGOnline:FlushLiveScore()"
     "HoldJudgmentMessageCommand"
     "ExCountsChangedMessageCommand")
   string(FIND "${TRACK_ONLINE_SCORE_PUSH_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)

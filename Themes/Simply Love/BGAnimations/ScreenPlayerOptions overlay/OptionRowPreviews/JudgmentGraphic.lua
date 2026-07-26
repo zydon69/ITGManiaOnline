@@ -19,9 +19,24 @@ for player in ivalues(GAMESTATE:GetHumanPlayers()) do
 	end
 end
 
-for judgment_filename in ivalues( GetJudgmentGraphics() ) do
+local judgment_graphics = GetJudgmentGraphics()
+if selected_count == 0 then
+	-- During the first online transition the engine can construct this overlay
+	-- before GetHumanPlayers() exposes the active player. Loading every judgment
+	-- in that transient state caused a multi-second cold-start stall. The first
+	-- asset is Simply Love's deterministic default; any actual profile choice
+	-- is loaded on demand by OptionRow Frame once player state is available.
+	for judgment_filename in ivalues(judgment_graphics) do
+		if judgment_filename ~= "None" then
+			remember_selected_judgment(judgment_filename)
+			break
+		end
+	end
+end
+
+for judgment_filename in ivalues(judgment_graphics) do
 	local stripped_name = StripSpriteHints(judgment_filename)
-	local should_load = judgment_filename == "None" or selected_count == 0
+	local should_load = judgment_filename == "None"
 		or selected_judgments[judgment_filename] or selected_judgments[stripped_name]
 
 	if should_load and judgment_filename ~= "None" then

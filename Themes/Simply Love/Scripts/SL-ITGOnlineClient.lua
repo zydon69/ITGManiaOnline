@@ -1021,6 +1021,22 @@ local function response_error_code(response, decoded)
 	return ""
 end
 
+local function annotate_song_availability_result(decoded, missing, duplicate)
+	decoded = type(decoded) == "table" and decoded or {}
+	decoded.song_availability = type(decoded.song_availability) == "table"
+		and decoded.song_availability or {}
+	if decoded.song_availability.missing == nil then
+		decoded.song_availability.missing = missing == true
+	end
+	-- Keep compatibility with a server version that predates the explicit
+	-- `missing` response field during rolling updates.
+	decoded.song_availability.reported_missing = missing == true
+	if duplicate == true then
+		decoded.song_availability.duplicate = true
+	end
+	return decoded
+end
+
 local function sync_current_room_meta(decoded)
 	local meta = decoded and decoded.meta or nil
 	local currentRoomMeta = meta and meta.current_room or nil
@@ -6016,6 +6032,7 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 	room.online_snapshot_source = source
 	self.lastAuthoritativeRoomSnapshotAt = GetTimeSinceStart()
 	self.lastAuthoritativeRoomSnapshotSource = tostring(source or "unknown")
+	self.lastAuthoritativeRoomSnapshotRoomId = self:RoomKey(room.id)
 	self.currentRoom = room
 	self:ObserveRoomServerTime(room.server_time_ms or room.server_time, "room_snapshot:" .. tostring(source or "unknown"))
 	self:MarkRoomSnapshotApplied(room)
@@ -16131,8 +16148,9 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
 	local session = local_player_session(player)
 	if not session then return false end
 	local localPartyId = self:ActiveLocalPartyId()
+	local localPartyRole = localPartyId and "companion" or nil
 	local fingerprint = tostring(status or "available") .. "|" .. tostring(roomId or "")
-		.. "|" .. tostring(localPartyId or "")
+		.. "|" .. tostring(localPartyId or "") .. "|" .. tostring(localPartyRole or "")
 	local now = GetTimeSinceStart()
 	if session.heartbeatInFlight then
 		session.heartbeatQueued = {
@@ -16155,6 +16173,7 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
 	if roomId then payload.room_id = roomId end
 	if activity == true then payload.activity = true end
 	if localPartyId then payload.local_party_id = localPartyId end
+	if localPartyRole then payload.local_party_role = localPartyRole end
 	session.heartbeatInFlight = true
 	session.lastHeartbeatSentAt = now
 	session.lastHeartbeatFingerprint = fingerprint
@@ -16228,6 +16247,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	end
 	local isLobbyPresenceHeartbeat = roomId == nil and tostring(status) == "available"
 	local localPartyId = self:ActiveLocalPartyId()
+	local localPartyRole = localPartyId and "coordinator" or nil
 	if self:IsLocalTwoPlayerSession() then
 		self:HeartbeatCompanion(PLAYER_2, status, roomId, force, activity)
 	end
@@ -16246,7 +16266,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 		inFlight = self.heartbeatInFlight == true,
 		queued = self.heartbeatQueuedStatus or "nil",
 		fingerprint = tostring(status) .. "|" .. tostring(roomId or "")
-			.. "|" .. tostring(localPartyId or ""),
+			.. "|" .. tostring(localPartyId or "") .. "|" .. tostring(localPartyRole or ""),
 	})
 	if tostring(self.currentRoomBlockedReason or "") ~= "" and not isLobbyPresenceHeartbeat then
 		online_trace("Heartbeat suppressed while current room is blocked: status="
@@ -16260,7 +16280,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	end
 
 	local fingerprint = tostring(status) .. "|" .. tostring(roomId or "")
-		.. "|" .. tostring(localPartyId or "")
+		.. "|" .. tostring(localPartyId or "") .. "|" .. tostring(localPartyRole or "")
 	local now = GetTimeSinceStart()
 
 	if self.heartbeatInFlight then
@@ -16315,6 +16335,7 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 	if roomId then payload.room_id = roomId end
 	if activity == true then payload.activity = true end
 	if localPartyId then payload.local_party_id = localPartyId end
+	if localPartyRole then payload.local_party_role = localPartyRole end
 
 	self.heartbeatInFlight = true
 	self.lastHeartbeatSentAt = now
@@ -16384,7 +16405,11 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 		end
 		if not ok and errorCode == "presence_room_not_available"
 			and roomId ~= nil and requestContextStillCurrent then
-			self:ClearCurrentRoomState("heartbeat_room_not_available")
+			self:ApplyAuthoritativeRoomExit(
+				roomId,
+				errorCode,
+				"heartbeat_room_not_available"
+			)
 			queuedStatus = "available"
 			queuedForce = true
 			queuedFingerprint = "available|"
@@ -16824,6 +16849,7 @@ function ITGOnline:QueueLobbyRefresh(options)
 	options = type(options) == "table" and options or {}
 	local ignoreSuppression = options.ignoreSuppression == true
 	local refreshReason = tostring(options.reason or "unknown")
+	if refreshReason == "" then refreshReason = "unknown" end
 	local refreshScreen = tostring(self.currentScreenName or "nil")
 	local forceFresh = options.forceFresh == true
 		or refreshReason:match("^post_room_exit:") ~= nil
@@ -17811,7 +17837,12 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	if self.songAvailabilityReportedContextKey == availabilityContextKey then
 		online_flow_trace("song_availability_skipped reason=already_reported_context"
 			.. " contextKey=" .. tostring(availabilityContextKey))
-		safe_callback(callback, true, nil, { duplicate = true })
+		safe_callback(
+			callback,
+			true,
+			annotate_song_availability_result(nil, missing, true),
+			{ duplicate = true }
+		)
 		return
 	end
 
@@ -17882,7 +17913,12 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 	end
 	if self.songAvailabilityReportedKey == availabilityKey then
 		online_flow_trace("song_availability_skipped reason=already_reported key=" .. tostring(availabilityKey))
-		safe_callback(callback, true, nil, { duplicate = true })
+		safe_callback(
+			callback,
+			true,
+			annotate_song_availability_result(nil, missing, true),
+			{ duplicate = true }
+		)
 		return
 	end
 	local suppressedUntil = tonumber(self.songAvailabilitySuppressedUntil[availabilityKey]) or 0
@@ -17930,6 +17966,9 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 				or companionDecoded and companionDecoded.error_code
 				or "local_party_companion_song_availability_failed"
 			finalResponse = companionResponse or finalResponse
+		end
+		if finalOk then
+			finalDecoded = annotate_song_availability_result(finalDecoded, missing, false)
 		end
 		if finalOk then
 			self.songAvailabilityReportedKey = availabilityKey
@@ -18091,7 +18130,42 @@ function ITGOnline:ConfirmSelectedSongAvailability(reason, callback)
 	online_flow_trace("song_availability_confirm_selected reason=" .. tostring(reason or "nil")
 		.. " room=" .. tostring(self.currentRoomId or "nil")
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
-	self:ReportSongAvailability(false, "reloaded", callback)
+	self:ReportSongAvailability(false, "reloaded", function(ok, decoded, response)
+		local confirmed = ok == true
+		local confirmationReason = ok and "selected_song_confirmed"
+			or response_error_code(response, decoded)
+		if ITGOnlineProtocol and ITGOnlineProtocol.song_availability_confirmation_state then
+			confirmed, confirmationReason =
+				ITGOnlineProtocol.song_availability_confirmation_state(ok, decoded, response)
+		elseif ok and decoded and decoded.song_availability
+			and (
+				decoded.song_availability.missing == true
+				or decoded.song_availability.reported_missing == true
+			)
+		then
+			confirmed = false
+			confirmationReason = "selected_song_missing"
+		end
+
+		if ok and not confirmed and confirmationReason == "selected_song_missing" then
+			decoded = type(decoded) == "table" and decoded or {}
+			decoded.error_code = "selected_song_missing"
+			decoded.message = "The selected song is not available locally."
+			response = type(response) == "table" and response or {}
+			response.errorCode = "selected_song_missing"
+			response.errorMessage = decoded.message
+			response.deferred = true
+			response.retryAfter = tonumber(response.retryAfter) or 0.75
+			online_flow_trace("song_availability_confirm_selected_deferred"
+				.. " reason=selected_song_missing"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil"))
+			safe_callback(callback, false, decoded, response)
+			return
+		end
+
+		safe_callback(callback, ok, decoded, response)
+	end)
 end
 
 function ITGOnline:RequestJoinUserRoom(userId, callback)
@@ -18418,6 +18492,49 @@ function ITGOnline:ClearCurrentRoomState(source)
 		.. " previousRoomId=" .. tostring(previousRoomId or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
 		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+end
+
+function ITGOnline:ApplyAuthoritativeRoomExit(roomId, reason, source)
+	if roomId == nil then
+		online_flow_trace("authoritative_room_exit_ignored reason=missing_room_id"
+			.. " source=" .. tostring(source or "unknown"))
+		return false, "missing_room_id"
+	end
+
+	local activeRoomMatches = online_room_ids_match(roomId, self.currentRoomId)
+		or online_room_ids_match(roomId, self.pendingJoinRoomId)
+	if not activeRoomMatches then
+		if self:ShouldIgnoreRoomEvents(roomId) then
+			online_flow_trace("authoritative_room_exit_duplicate reason=already_applied"
+				.. " room=" .. tostring(roomId)
+				.. " source=" .. tostring(source or "unknown"))
+			return false, "already_applied"
+		end
+		online_flow_trace("authoritative_room_exit_ignored reason=room_mismatch"
+			.. " room=" .. tostring(roomId)
+			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+			.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+			.. " source=" .. tostring(source or "unknown"))
+		return false, "room_mismatch"
+	end
+
+	local roomCode = self.currentRoom
+		and (self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode)
+		or nil
+	online_flow_trace("authoritative_room_exit_apply room=" .. tostring(roomId)
+		.. " roomCode=" .. tostring(roomCode or "nil")
+		.. " reason=" .. tostring(reason or "")
+		.. " source=" .. tostring(source or "unknown"))
+	self:IgnoreRoomEvents(roomId, 30)
+	self:ClearCurrentRoomState(tostring(source or "authoritative_room_exit"))
+	safe_broadcast("OnlineLobbyLeft", {
+		left = true,
+		roomId = roomId,
+		lobbyCode = roomCode,
+		reason = tostring(reason or ""),
+		source = tostring(source or "authoritative_room_exit"),
+	})
+	return true, "applied"
 end
 
 function ITGOnline:LeavePrimaryRoom(callback)
@@ -19163,28 +19280,24 @@ elseif name == "client.error" then
 		return
 	elseif name == "room.left" then
 		local roomId = payload.room_id
-		if not online_room_ids_match(roomId, self.currentRoomId) then
-			online_flow_trace("room_left_event_ignored reason=room_mismatch"
-				.. " payloadRoomId=" .. tostring(roomId)
-				.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-				.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+		local reason = tostring(payload.reason or "")
+		local roomExitApplied, roomExitResult =
+			self:ApplyAuthoritativeRoomExit(roomId, reason, "room.left")
+		if not roomExitApplied then
+			if roomExitResult == "already_applied" then
+				online_flow_trace("room_left_event_duplicate reason=already_applied"
+					.. " payloadRoomId=" .. tostring(roomId))
+			else
+				online_flow_trace("room_left_event_ignored reason=" .. tostring(roomExitResult or "unknown")
+					.. " payloadRoomId=" .. tostring(roomId)
+					.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
+					.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+			end
 			return
 		end
 
-		local reason = tostring(payload.reason or "")
-		local roomCode = self.currentRoom and (self.currentRoom.code or self.currentRoom.room_code or self.currentRoom.roomCode) or nil
 		online_flow_trace("room_left_event_apply room=" .. tostring(roomId)
-			.. " reason=" .. tostring(reason)
-			.. " roomCode=" .. tostring(roomCode or "nil"))
-		self:IgnoreRoomEvents(roomId, 30)
-		self:ClearCurrentRoomState("room_left_event")
-		safe_broadcast("OnlineLobbyLeft", {
-			left=true,
-			roomId=roomId,
-			lobbyCode=roomCode,
-			reason=reason,
-			source="room.left",
-		})
+			.. " reason=" .. tostring(reason))
 		safe_broadcast("OnlineResponseStatus", {
 			event = "leaveLobby",
 			success = true,
@@ -19241,18 +19354,55 @@ elseif name == "client.error" then
 				online_flow_trace("lobby_updated_event broadcast_cached")
 				safe_broadcast("LobbySearched", self.cachedLobbySearchPayload)
 			end
-			-- A room-scoped realtime snapshot already drives the options screen.
-			-- Fetching the complete lobby here starts an unnecessary large request
-			-- in the exact frame in which ScreenPlayerOptions is constructed.
-			if self:IsOnlineOptionsScreen(tostring(self.currentScreenName or ""))
-				and self.currentRoomId
+
+			-- Presence events carry the complete player row required by the
+			-- lobby cache. Re-fetching every room and every online player after
+			-- applying that row only duplicates work on the render thread.
+			if hasUserPayload then
+				online_flow_trace("lobby_updated_event refresh_skipped"
+					.. " reason=presence_payload_authoritative"
+					.. " updateReason=" .. lobbyUpdateReason
+					.. " userId=" .. tostring(payload.user_id or payload.user and payload.user.id or "nil")
+					.. " applied=" .. tostring(appliedPresence == true))
+				return
+			end
+
+			-- Room mutations are broadcast first as a full room snapshot and
+			-- then as a compact lobby-list invalidation. A member already in
+			-- that room must not download the complete lobby for the second
+			-- event. If the room snapshot was missed, reconcile only the room.
+			if self.currentRoomId
 				and lobbyRoomId
 				and online_room_ids_match(lobbyRoomId, self.currentRoomId)
-				and not hasUserPayload
 			then
-				online_flow_trace("lobby_updated_event refresh_deferred reason=options_room_snapshot_authoritative"
+				local snapshotRoomId = tostring(self.lastAuthoritativeRoomSnapshotRoomId or "")
+				local snapshotAge = GetTimeSinceStart()
+					- (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+				local recentCurrentRoomSnapshot =
+					snapshotRoomId == self:RoomKey(self.currentRoomId)
+					and snapshotAge >= 0
+					and snapshotAge < 2.0
+				if recentCurrentRoomSnapshot then
+					online_flow_trace("lobby_updated_event refresh_skipped"
+						.. " reason=current_room_snapshot_authoritative"
+						.. " updateReason=" .. lobbyUpdateReason
+						.. " roomId=" .. tostring(lobbyRoomId)
+						.. " snapshotAge=" .. string.format("%.3f", snapshotAge)
+						.. " snapshotSource=" .. tostring(self.lastAuthoritativeRoomSnapshotSource or "nil"))
+					return
+				end
+
+				online_flow_trace("lobby_updated_event room_reconcile_requested"
+					.. " reason=current_room_snapshot_not_recent"
 					.. " updateReason=" .. lobbyUpdateReason
-					.. " roomId=" .. tostring(lobbyRoomId))
+					.. " roomId=" .. tostring(lobbyRoomId)
+					.. " snapshotAge=" .. string.format("%.3f", math.max(0, snapshotAge)))
+				if self.FetchCurrentRoomFallback then
+					self:FetchCurrentRoomFallback(
+						"lobby_updated_current_room:" .. lobbyUpdateReason,
+						0.05
+					)
+				end
 				return
 			end
 			online_flow_trace("lobby_updated_event queue_lobby_refresh")

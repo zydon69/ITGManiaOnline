@@ -189,6 +189,33 @@ function ITGOnlineProtocol.selected_song_payload_matches(payload, selectedSong)
 	return true, "matched", variances
 end
 
+-- A successful HTTP response only confirms that the server processed the
+-- availability report.  It does not necessarily mean that the selected song
+-- exists locally: reporting `missing=true` is also a successful write.
+-- Centralize that distinction so ready/config/download flows cannot interpret
+-- an acknowledged missing-song report as permission to advance.
+function ITGOnlineProtocol.song_availability_confirmation_state(ok, decoded, response)
+	if ok ~= true then
+		local errorCode = type(decoded) == "table" and decoded.error_code
+			or type(response) == "table" and (response.error_code or response.errorCode)
+			or "song_availability_request_failed"
+		return false, tostring(errorCode)
+	end
+
+	local availability = type(decoded) == "table"
+		and type(decoded.song_availability) == "table"
+		and decoded.song_availability
+		or nil
+	if availability and (
+		availability.missing == true
+		or availability.reported_missing == true
+	) then
+		return false, "selected_song_missing"
+	end
+
+	return true, "selected_song_confirmed"
+end
+
 local function sanitize(value, depth, seen, path)
 	local valueType = type(value)
 	if valueType == "string" then

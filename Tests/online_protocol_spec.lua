@@ -86,6 +86,27 @@ payloadMatches, payloadReason =
 equal(payloadMatches, false, "different semantic chart")
 equal(payloadReason, "chart_hash_mismatch", "different semantic chart reason")
 
+local availabilityConfirmed, availabilityReason =
+	protocol.song_availability_confirmation_state(true, {
+		song_availability = { applied = true, missing = false },
+	}, nil)
+equal(availabilityConfirmed, true, "available song acknowledgement")
+equal(availabilityReason, "selected_song_confirmed", "available song acknowledgement reason")
+
+availabilityConfirmed, availabilityReason =
+	protocol.song_availability_confirmation_state(true, {
+		song_availability = { applied = true, missing = true },
+	}, nil)
+equal(availabilityConfirmed, false, "missing song acknowledgement")
+equal(availabilityReason, "selected_song_missing", "missing song acknowledgement reason")
+
+availabilityConfirmed, availabilityReason =
+	protocol.song_availability_confirmation_state(false, {
+		error_code = "song_availability_hash_mismatch",
+	}, nil)
+equal(availabilityConfirmed, false, "rejected song availability")
+equal(availabilityReason, "song_availability_hash_mismatch", "rejected song availability reason")
+
 local logged = protocol.safe_log_text("room\r\nforged", 32)
 assert(not logged:find("\r") and not logged:find("\n"), "log controls must be removed")
 
@@ -375,6 +396,26 @@ assert(deletedRoomHandler:find('safe_broadcast("OnlineLobbyLeft"', 1, true),
 	"deleted active rooms must leave the joined-lobby UI")
 assert(deletedRoomHandler:find('self:ClearCurrentRoomState', 1, true),
 	"deleted active rooms must clear cached room state")
+local authoritativeRoomExit = assert(
+	onlineClientContent:match("function ITGOnline:ApplyAuthoritativeRoomExit%b()%s*(.-)%s*function ITGOnline:"),
+	"missing authoritative room-exit handler"
+)
+assert(authoritativeRoomExit:find('safe_broadcast("OnlineLobbyLeft"', 1, true),
+	"every authoritative room exit must leave the joined-lobby UI")
+assert(authoritativeRoomExit:find("self:ClearCurrentRoomState", 1, true),
+	"every authoritative room exit must clear cached room state")
+local heartbeatRoomUnavailableHandler = assert(
+	onlineClientContent:match('if not ok and errorCode == "presence_room_not_available"(.-)%s*elseif not ok'),
+	"missing heartbeat room-unavailable reconciliation"
+)
+assert(heartbeatRoomUnavailableHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"a heartbeat proving server-side removal must immediately leave the joined-lobby UI")
+local roomLeftHandler = assert(
+	onlineClientContent:match('elseif name == "room%.left" then(.-)%s*elseif name == "lobby%.updated"'),
+	"missing room.left handler"
+)
+assert(roomLeftHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"room.left and heartbeat removal must share the idempotent authoritative exit path")
 
 local packSyncPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-OnlinePackSync.lua"
 local packSyncFile = assert(io.open(packSyncPath, "rb"), "missing online pack-sync source: " .. packSyncPath)
