@@ -58,6 +58,14 @@ equal(party.companion_score_is_terminal(true, false), true,
 	"an accepted companion final must suppress every later score")
 equal(party.companion_score_is_terminal(false, true), true,
 	"an authoritative room final must suppress every later score")
+equal(party.companion_live_score_should_send(false, false, false), true,
+	"the first zero-progress companion snapshot establishes server state")
+equal(party.companion_live_score_should_send(true, false, false), false,
+	"accepted zero-progress companion snapshots must not be resent")
+equal(party.companion_live_score_should_send(true, false, true), true,
+	"real companion progress must resume live score publication")
+equal(party.companion_live_score_should_send(true, true, false), true,
+	"a final companion snapshot must never be suppressed")
 equal(lobbyPresentation.text("MissingTranslation", "Fallback"), "Fallback",
 	"lobby presentation must preserve safe translation fallbacks")
 equal(lobbyModel.joined_player_stable_key({ playerId = 42 }), "id:42",
@@ -136,6 +144,10 @@ local function format_placeholders(value)
 end
 
 local clientSource = read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
+local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
+local onlineScorePushSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackOnlineScorePush.lua"
+)
 assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
 	"new installations must enable online network diagnostics by default")
 assert(not clientSource:find("forceOnlineFlowLogging", 1, true),
@@ -203,8 +215,57 @@ assert(companionScoreSource:find("state.pendingFinalCallbacks", 1, true),
 	"all callers waiting for the queued Player 2 final score must be completed")
 assert(companionScoreSource:find("IsCompanionScoreFinalizedForCurrentRound", 1, true),
 	"live and final Player 2 scores must stop after final acceptance")
+assert(companionScoreSource:find("companion_live_score_should_send", 1, true)
+	and companionScoreSource:find("state.zeroLiveAccepted = true", 1, true),
+	"Player 2 must suppress repeated zero-progress live score writes")
 assert(clientSource:find("companion_score_suppressed reason=final_already_accepted", 1, true),
 	"suppression of post-final Player 2 score traffic must remain diagnosable")
+assert(clientSource:find("ITGOnline.liveScoreMinIntervalSeconds = ITGOnline.liveScoreMinIntervalSeconds or 1.00", 1, true)
+	and clientSource:find("ITGOnline.liveScoreEndgameIntervalSeconds = ITGOnline.liveScoreEndgameIntervalSeconds or 0.50", 1, true),
+	"live leaderboard publication must use a low-cost normal cadence with a bounded endgame refresh")
+local scoreEventStart = assert(clientSource:find('elseif name == "room.score_updated" then', 1, true),
+	"client must handle realtime score updates")
+local scoreEventEnd = assert(clientSource:find('elseif name == "room.deleted" then', scoreEventStart, true),
+	"realtime score handler boundary must remain identifiable")
+local scoreEventSource = clientSource:sub(scoreEventStart, scoreEventEnd - 1)
+assert(scoreEventSource:find("suppressLobbyBroadcast = true", 1, true),
+	"score ticks must not rebuild and broadcast the complete lobby state")
+assert(scoreEventSource:find("suppressUnchangedPlayStateBroadcast = true", 1, true),
+	"score ticks must suppress unchanged play-state broadcasts")
+assert(scoreEventSource:find('traceCategory = "score"', 1, true),
+	"high-frequency score diagnostics must stay behind the dedicated score trace")
+assert(clientSource:find("local isLiveScoreRequest =", 1, true)
+	and clientSource:find("local traceHttpRequest = not isLiveScoreRequest or self.debugScoreTrace == true", 1, true),
+	"successful live-score HTTP transport traces must stay behind ScoreTrace")
+assert(clientSource:find('local scoreUpdateSource = tostring(source or "") == "score_updated"', 1, true)
+	and clientSource:find("if not scoreUpdateSource or self.debugScoreTrace == true then", 1, true),
+	"live leaderboard row summaries must not be built while routine score tracing is disabled")
+assert(clientSource:find('if self.debugScoreTrace == true then\n\t\tonline_score_trace("live_score_queue room="', 1, true),
+	"live score queue diagnostics must not allocate strings on every gameplay snapshot")
+assert(clientSource:find("local companionTickDue =", 1, true)
+	and clientSource:find("self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()", 1, true),
+	"Player 2 score collection must run at the network cadence instead of every 100 ms")
+assert(onlineHelpersSource:find("if ITGOnline.debugScoreTrace == true then", 1, true)
+	and onlineHelpersSource:find('online_trace("score_snapshot_remember', 1, true),
+	"score snapshot messages must use the opt-in score trace instead of the default flow trace")
+assert(onlineScorePushSource:find("local function score_trace_enabled()", 1, true)
+	and onlineScorePushSource:find('if score_trace_enabled() then\n\t\t\t\tonline_score_trace("judgment_snapshot', 1, true),
+	"the gameplay score tracker must avoid per-judgment diagnostic string construction when disabled")
+assert(onlineScorePushSource:find("local transportTickSeconds = 0.25", 1, true)
+	and onlineScorePushSource:find("self:sleep(transportTickSeconds)", 1, true),
+	"the gameplay transport poll must match its sub-second network cadence without running at 10 Hz")
+assert(clientSource:find('tostring(self.lastFinalScoreInFlightKey or "") == roundKey', 1, true),
+	"an in-flight final score must stop later live-score flushes")
+local primaryScoreStart = assert(clientSource:find("function ITGOnline:SendScore", 1, true),
+	"client must expose the primary score request")
+local primaryScoreSource = clientSource:sub(primaryScoreStart, companionScoreStart - 1)
+assert(primaryScoreSource:find("self:UpdatePlayStateFromResponse(decoded)", 1, true),
+	"Player 1 must apply the authoritative final-score HTTP play-state fallback")
+assert(companionScoreSource:find("self:UpdatePlayStateFromResponse(decoded)", 1, true),
+	"Player 2 must apply the authoritative final-score HTTP play-state fallback")
+assert(primaryScoreSource:find("compact_response = not final", 1, true)
+	and companionScoreSource:find("compact_response = not final", 1, true),
+	"both local players must request compact HTTP acknowledgements for live score ticks")
 local localFailureStart = assert(
 	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", 1, true),
 	"early failure finalization must route by local player identity")
@@ -478,13 +539,22 @@ assert(perfDiagnosticsSource:find("OnlineNetworkDiagnosticsEnabled", 1, true),
 local metalPresenterSource = read_source(
 	"src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
 )
+local metalPresentationPolicySource = read_source(
+	"src/arch/LowLevelWindow/MacOSMetalPresentationPolicy.cpp"
+)
 assert(metalPresenterSource:find(
-	"layer.displaySyncEnabled = impl->displaySyncEnabled ? YES : NO", 1, true
-), "Metal layer display sync must follow the configured Vsync mode")
-assert(not metalPresenterSource:find("afterMinimumDuration:", 1, true),
-	"Metal presentation must not add a second frame-duration limiter")
-assert(metalPresenterSource:find("pacing_owner=engine", 1, true),
-	"Metal cadence ownership must remain explicit in runtime diagnostics")
+	"impl->presentationPolicy.displaySyncEnabled ? YES : NO", 1, true
+), "Metal layer display sync must follow the explicit presentation policy")
+assert(metalPresentationPolicySource:find(
+	"case Mode::CompositedWindow:", 1, true
+) and metalPresentationPolicySource:find(
+	"policy.scheduleMinimumPresentDuration = true", 1, true
+), "WindowServer-composited presentation must retain its refresh guard")
+assert(metalPresenterSource:find("afterMinimumDuration:", 1, true)
+	and metalPresenterSource:find("ScheduleMetalDrawable(", 1, true),
+	"Metal presentation must schedule drawables through the selected policy")
+assert(metalPresenterSource:find("pacing_owner=%s", 1, true),
+	"Metal cadence ownership must remain mode-aware in runtime diagnostics")
 
 local rankingSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Shared/OnlineFinalRanking.lua"

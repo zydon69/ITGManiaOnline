@@ -8,11 +8,14 @@ end
 
 local onlineScoreTraceLastAt = 0
 local onlineScoreTraceSuppressed = 0
+local transportTickSeconds = 0.25
+
+local function score_trace_enabled()
+	return ITGOnline ~= nil and ITGOnline.debugScoreTrace == true
+end
 
 local function online_score_trace(message, force)
-	if type(online_logs_enabled) == "function" and not online_logs_enabled("score") then
-		return
-	end
+	if not score_trace_enabled() then return end
 	local now = GetTimeSinceStart and GetTimeSinceStart() or 0
 	if not force and now - onlineScoreTraceLastAt < 1.5 then
 		onlineScoreTraceSuppressed = onlineScoreTraceSuppressed + 1
@@ -50,24 +53,31 @@ end
 
 local function remember_current_score()
 	if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
-		online_score_trace("remember_skipped reason=missing_context"
-			.. " hasClient=" .. tostring(ITGOnline ~= nil)
-			.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
-			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-			.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+		if score_trace_enabled() then
+			online_score_trace("remember_skipped reason=missing_context"
+				.. " hasClient=" .. tostring(ITGOnline ~= nil)
+				.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
+				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+		end
 		return
 	end
 
 	local snapshot = ITGOnline.lastDisplayedScoreSnapshot
 	if type(snapshot) ~= "table" then
-		online_score_trace("remember_skipped reason=no_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil"))
+		if score_trace_enabled() then
+			online_score_trace("remember_skipped reason=no_snapshot room="
+				.. tostring(ITGOnline.currentRoomId or "nil"))
+		end
 		return
 	end
 
 	ITGOnline:RememberLiveScoreSnapshot(snapshot)
-	online_score_trace("remember_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
-		.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
-		.. " combo=" .. tostring(snapshot.combo or "nil"))
+	if score_trace_enabled() then
+		online_score_trace("remember_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
+			.. " combo=" .. tostring(snapshot.combo or "nil"))
+	end
 end
 
 return Def.Actor{
@@ -114,16 +124,18 @@ return Def.Actor{
 		-- Judgment messages own snapshot construction. The timer only transports
 		-- the last immutable snapshot, avoiding a full stats walk every 100 ms.
 		remember_current_score()
-		online_score_trace("flush_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-			.. " hasLastSnapshot=" .. tostring(ITGOnline and ITGOnline.lastDisplayedScoreSnapshot ~= nil))
+		if score_trace_enabled() then
+			online_score_trace("flush_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+				.. " hasLastSnapshot=" .. tostring(ITGOnline and ITGOnline.lastDisplayedScoreSnapshot ~= nil))
+		end
 		if ITGOnline and ITGOnline.QueueLiveScoreTickIfDue then
 			ITGOnline:QueueLiveScoreTickIfDue()
 		end
 		if ITGOnline and ITGOnline.FlushLiveScore then
 			ITGOnline:FlushLiveScore()
 		end
-		self:sleep(0.10):queuecommand("FlushOnlineScore")
+		self:sleep(transportTickSeconds):queuecommand("FlushOnlineScore")
 	end,
 	JudgmentMessageCommand=function(self, params)
 		if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
@@ -137,8 +149,10 @@ return Def.Actor{
 
 		local primary = primary_enabled_player()
 		if primary and params and params.Player and params.Player ~= primary then
-			online_score_trace("judgment_skipped reason=non_primary player=" .. tostring(params.Player)
-				.. " primary=" .. tostring(primary))
+			if score_trace_enabled() then
+				online_score_trace("judgment_skipped reason=non_primary player=" .. tostring(params.Player)
+					.. " primary=" .. tostring(primary))
+			end
 			return
 		end
 
@@ -149,10 +163,12 @@ return Def.Actor{
 		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
 		if snapshot then
 			ITGOnline:RememberLiveScoreSnapshot(snapshot)
-			online_score_trace("judgment_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
-				.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
-				.. " combo=" .. tostring(snapshot.combo or "nil"))
-		else
+			if score_trace_enabled() then
+				online_score_trace("judgment_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
+					.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
+					.. " combo=" .. tostring(snapshot.combo or "nil"))
+			end
+		elseif score_trace_enabled() then
 			online_score_trace("judgment_skipped reason=no_snapshot")
 		end
 	end,

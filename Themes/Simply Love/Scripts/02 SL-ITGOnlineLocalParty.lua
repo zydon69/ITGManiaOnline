@@ -95,4 +95,12 @@ function Party.companion_score_is_terminal(finalAccepted, roomHasFinalResult)
 	return finalAccepted == true or roomHasFinalResult == true
 end
 
+function Party.companion_live_score_should_send(zeroLiveAccepted, final, hasLiveProgress)
+	if final == true or hasLiveProgress == true then
+		return true
+	end
+
+	return zeroLiveAccepted ~= true
+end
+
 return Party

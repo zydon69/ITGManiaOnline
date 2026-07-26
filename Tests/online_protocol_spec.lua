@@ -360,7 +360,7 @@ local liveScoreFlush = assert(
 	"missing live-score flush handler"
 )
 local liveScoreResponseTrace = assert(
-	liveScoreFlush:match('online_flow_trace%("live_score_flush_response(.-)local errorCode'),
+	liveScoreFlush:match('online_score_transport_trace%(false, "live_score_flush_response(.-)local errorCode'),
 	"missing live-score response trace"
 )
 assert(not liveScoreResponseTrace:find("hasRoom=", 1, true),

@@ -3199,14 +3199,16 @@ CreateOnlineHandler = function()
 							return
 						end
 
-						online_flow_trace("score_snapshot_remember room=" .. tostring(ITGOnline.currentRoomId or "nil")
-							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-							.. " player=" .. tostring(params.Player)
-							.. " score=" .. tostring(params.ScorePercent or "nil")
-							.. " ex=" .. tostring(params.ExScorePercent or "nil")
-							.. " hardex=" .. tostring(params.HardExScorePercent or "nil")
-							.. " displayed=" .. tostring(params.DisplayedPercent or "nil")
-							.. " combo=" .. tostring(params.Combo or "nil"))
+						if ITGOnline.debugScoreTrace == true then
+							online_trace("score_snapshot_remember room=" .. tostring(ITGOnline.currentRoomId or "nil")
+								.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+								.. " player=" .. tostring(params.Player)
+								.. " score=" .. tostring(params.ScorePercent or "nil")
+								.. " ex=" .. tostring(params.ExScorePercent or "nil")
+								.. " hardex=" .. tostring(params.HardExScorePercent or "nil")
+								.. " displayed=" .. tostring(params.DisplayedPercent or "nil")
+								.. " combo=" .. tostring(params.Combo or "nil"), "score")
+						end
 						ITGOnline:RememberLiveScoreSnapshot({
 							scorePercent = params.ScorePercent,
 							exScorePercent = params.ExScorePercent,
