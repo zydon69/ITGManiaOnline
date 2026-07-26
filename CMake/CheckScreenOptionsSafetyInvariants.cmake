@@ -107,6 +107,26 @@ require_contains(
   "local lines = \"GameplayPresets,SpeedModType"
   "Gameplay presets must remain first while speed type remains the initial editable row")
 require_contains(
+  "Themes/Simply Love/metrics.ini"
+  "[ScreenTextEntry]\nQuestionY=_screen.cy-64\nQuestionOnCommand=_wrapwidthpixels,600\nAnswerY=_screen.cy+16\nPlayMusic=false"
+  "Text entry overlays must preserve the song preview playing underneath")
+require_contains(
+  "Themes/Simply Love/Languages/en.ini"
+  "GameplayPresets=Choose one of six per-profile gameplay presets.\n"
+  "English gameplay preset help must remain a single concise sentence")
+require_contains(
+  "Themes/Simply Love/Languages/fr.ini"
+  "GameplayPresets=Choisis l'un des six préréglages de gameplay propres au profil.\n"
+  "French gameplay preset help must remain a single concise sentence")
+require_not_contains(
+  "Themes/Simply Love/Languages/en.ini"
+  "GameplayPresets=Choose one of six per-profile gameplay presets.\\n"
+  "English gameplay preset help must not regain additional paragraphs")
+require_not_contains(
+  "Themes/Simply Love/Languages/fr.ini"
+  "GameplayPresets=Choisis l'un des six préréglages de gameplay propres au profil.\\n"
+  "French gameplay preset help must not regain additional paragraphs")
+require_contains(
   "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
   "ScreenOptions:SetOptionRowIndex(player, SpeedModTypeRowIndex)"
   "Player options must initially focus the speed type row")

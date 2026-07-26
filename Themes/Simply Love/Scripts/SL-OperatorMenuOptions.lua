@@ -642,7 +642,9 @@ function offsetMS(pref, low, high)
 		LayoutType = "ShowOneInRow",
 		SelectType = "SelectOne",
 		OneChoiceForAllPlayers = true,
-		ExportOnChange = false,
+		-- The active named slot must be updated before another profile can be
+		-- selected; otherwise Reload discards the unexported row selection.
+		ExportOnChange = pref == "GlobalOffsetSeconds",
 		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
 		Reload = function(self)
 			update_range(self)
@@ -685,7 +687,18 @@ OperatorMenuOptionRows.GlobalOffsetProfile = function()
 		SelectType = "SelectOne",
 		OneChoiceForAllPlayers = true,
 		ExportOnChange = true,
-		ReloadRowMessages = { "GlobalOffsetProfileChanged" },
+		ReloadRowMessages = {
+			"GlobalOffsetProfileChanged",
+			-- Listen to slot values, not GlobalOffsetSecondsChanged: selecting
+			-- a profile changes the runtime preference from inside this row's
+			-- SaveSelections and must not re-enter Reload on the same row.
+			"GlobalOffsetProfile1SecondsChanged",
+			"GlobalOffsetProfile2SecondsChanged",
+			"GlobalOffsetProfile3SecondsChanged",
+			"GlobalOffsetProfile4SecondsChanged",
+			"GlobalOffsetProfile5SecondsChanged",
+			"GlobalOffsetProfile6SecondsChanged",
+		},
 		Reload = function(self)
 			self.Choices = global_offset_profile_choices()
 			log_global_offset("reload_profile_row")
@@ -703,6 +716,9 @@ OperatorMenuOptionRows.GlobalOffsetProfile = function()
 					log_global_offset("save_profile_selection requested=" .. tostring(selected))
 					if selected ~= PREFSMAN:GetGlobalOffsetProfileSelected() then
 						PREFSMAN:SetGlobalOffsetProfileSelected(selected)
+						-- Persist the profile being left as well as the new
+						-- selection before reloading either option row.
+						PREFSMAN:SavePreferences()
 						MESSAGEMAN:Broadcast("GlobalOffsetProfileChanged")
 					end
 					break

@@ -119,8 +119,7 @@ static bool ShouldTraceOnlineMessage(const std::string& messageName) {
   // These are high-frequency state replication messages. Their Lua owners
   // already emit throttled, domain-specific diagnostics; tracing every
   // broadcast here drowns out the room transitions needed for investigation.
-  if (messageName == "OnlineScoreSnapshot" ||
-      messageName == "OnlineLobbyState" ||
+  if (messageName == "OnlineLobbyState" ||
       messageName == "OnlinePackSyncLocalStatus") {
     return false;
   }

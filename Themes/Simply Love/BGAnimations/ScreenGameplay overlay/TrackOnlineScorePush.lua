@@ -1,5 +1,9 @@
--- Extra reliability path: remember every score change, then send fixed music-time
--- ticks so every client fills the same leaderboard table rows.
+-- The sole owner of primary live-score capture and transport.
+--
+-- Judgment messages are intentionally coalesced into a queued actor command:
+-- engine statistics and theme judgment counters have finished updating by the
+-- time the snapshot is built.  The transport timer never walks gameplay stats;
+-- it only flushes the latest immutable snapshot.
 
 local function primary_enabled_player()
 	local enabled = GAMESTATE:GetEnabledPlayers()
@@ -51,37 +55,37 @@ local function live_score_playing()
 	return phase == "playing"
 end
 
-local function remember_current_score()
-	if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
-		if score_trace_enabled() then
-			online_score_trace("remember_skipped reason=missing_context"
-				.. " hasClient=" .. tostring(ITGOnline ~= nil)
-				.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
-				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-				.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
+local function queue_score_capture(actor, params, source)
+	if not (live_score_playing() and ITGOnline and ITGOnline.QueueLiveScore) then
+		-- Local gameplay can emit thousands of judgments. It is not an online
+		-- failure and must not fill the online diagnostic log.
+		if score_trace_enabled()
+			and ITGOnline and (ITGOnline.currentRoomId or ITGOnline.currentRoom) then
+			online_score_trace(tostring(source or "score")
+				.. "_skipped reason=inactive_online_context")
 		end
 		return
 	end
 
-	local snapshot = ITGOnline.lastDisplayedScoreSnapshot
-	if type(snapshot) ~= "table" then
+	local primary = primary_enabled_player()
+	if primary and params and params.Player and params.Player ~= primary then
 		if score_trace_enabled() then
-			online_score_trace("remember_skipped reason=no_snapshot room="
-				.. tostring(ITGOnline.currentRoomId or "nil"))
+			online_score_trace(tostring(source or "score")
+				.. "_skipped reason=non_primary player=" .. tostring(params.Player)
+				.. " primary=" .. tostring(primary))
 		end
 		return
 	end
 
-	ITGOnline:RememberLiveScoreSnapshot(snapshot)
-	if score_trace_enabled() then
-		online_score_trace("remember_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
-			.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
-			.. " combo=" .. tostring(snapshot.combo or "nil"))
+	if not actor.scoreCaptureQueued then
+		actor.scoreCaptureQueued = true
+		actor:queuecommand("CaptureOnlineScore")
 	end
 end
 
 return Def.Actor{
 	OnCommand=function(self)
+		self.scoreCaptureQueued = false
 		if live_score_finalized() then
 			online_score_trace("tracker_off reason=final_score_already_accepted"
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
@@ -121,48 +125,30 @@ return Def.Actor{
 			return
 		end
 
-		-- Judgment messages own snapshot construction. The timer only transports
-		-- the last immutable snapshot, avoiding a full stats walk every 100 ms.
-		remember_current_score()
 		if score_trace_enabled() then
 			online_score_trace("flush_tick room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 				.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
 				.. " hasLastSnapshot=" .. tostring(ITGOnline and ITGOnline.lastDisplayedScoreSnapshot ~= nil))
 		end
-		if ITGOnline and ITGOnline.QueueLiveScoreTickIfDue then
-			ITGOnline:QueueLiveScoreTickIfDue()
+		if ITGOnline and ITGOnline.TickLiveScoreTransport then
+			ITGOnline:TickLiveScoreTransport()
 		end
 		if ITGOnline and ITGOnline.FlushLiveScore then
 			ITGOnline:FlushLiveScore()
 		end
 		self:sleep(transportTickSeconds):queuecommand("FlushOnlineScore")
 	end,
-	JudgmentMessageCommand=function(self, params)
-		if not (live_score_playing() and ITGOnline.RememberLiveScoreSnapshot) then
-			-- Local gameplay can emit thousands of judgments.  It is not an
-			-- online failure and must not fill the online diagnostic log.
-			if ITGOnline and (ITGOnline.currentRoomId or ITGOnline.currentRoom) then
-				online_score_trace("judgment_skipped reason=inactive_online_context")
-			end
+	CaptureOnlineScoreCommand=function(self)
+		self.scoreCaptureQueued = false
+		if not (live_score_playing() and ITGOnline and ITGOnline.QueueLiveScore) then
 			return
 		end
 
-		local primary = primary_enabled_player()
-		if primary and params and params.Player and params.Player ~= primary then
-			if score_trace_enabled() then
-				online_score_trace("judgment_skipped reason=non_primary player=" .. tostring(params.Player)
-					.. " primary=" .. tostring(primary))
-			end
-			return
-		end
-
-		local snapshot = nil
-		if ITGOnline.BuildCurrentScoreSnapshot then
-			snapshot = ITGOnline:BuildCurrentScoreSnapshot()
-		end
-		snapshot = snapshot or ITGOnline.lastDisplayedScoreSnapshot
+		local snapshot = ITGOnline.BuildCurrentScoreSnapshot
+			and ITGOnline:BuildCurrentScoreSnapshot()
+			or nil
 		if snapshot then
-			ITGOnline:RememberLiveScoreSnapshot(snapshot)
+			ITGOnline:QueueLiveScore(snapshot)
 			if score_trace_enabled() then
 				online_score_trace("judgment_snapshot room=" .. tostring(ITGOnline.currentRoomId or "nil")
 					.. " score=" .. tostring(snapshot.scorePercent or snapshot.displayedPercent or "nil")
@@ -171,5 +157,14 @@ return Def.Actor{
 		elseif score_trace_enabled() then
 			online_score_trace("judgment_skipped reason=no_snapshot")
 		end
+	end,
+	JudgmentMessageCommand=function(self, params)
+		queue_score_capture(self, params, "judgment")
+	end,
+	HoldJudgmentMessageCommand=function(self, params)
+		queue_score_capture(self, params, "hold_judgment")
+	end,
+	ExCountsChangedMessageCommand=function(self, params)
+		queue_score_capture(self, params, "ex_counts")
 	end,
 }

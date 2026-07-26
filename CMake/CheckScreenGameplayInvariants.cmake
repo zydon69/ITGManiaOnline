@@ -236,7 +236,11 @@ endforeach()
 foreach(REQUIRED_SNIPPET
     "IsLiveScoreFinalizedForCurrentRound(\"track_online_score_push\")"
     "tracker_stop reason=final_score_already_accepted"
-    "judgment_skipped reason=inactive_online_context")
+    "_skipped reason=inactive_online_context"
+    "CaptureOnlineScoreCommand"
+    "self.scoreCaptureQueued"
+    "HoldJudgmentMessageCommand"
+    "ExCountsChangedMessageCommand")
   string(FIND "${TRACK_ONLINE_SCORE_PUSH_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
@@ -244,6 +248,14 @@ foreach(REQUIRED_SNIPPET
         "Online score tracker invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
+
+string(FIND "${ONLINE_HELPERS_TEXT}" "OnlineScoreSnapshot" LEGACY_SCORE_HELPER_OFFSET)
+string(FIND "${TRACK_ONLINE_SCORE_PUSH_TEXT}" "CaptureOnlineScoreCommand" SCORE_CAPTURE_OFFSET)
+if(NOT LEGACY_SCORE_HELPER_OFFSET EQUAL -1 OR SCORE_CAPTURE_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "Online score ownership invariant failed: transport must have one capture owner and no legacy helper receiver")
+endif()
 
 string(FIND
     "${TRACK_ONLINE_SCORE_PUSH_TEXT}"

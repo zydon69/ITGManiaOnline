@@ -87,7 +87,11 @@ Policy PolicyForMode(Mode mode) {
     default:
       policy.cadenceOwner = CadenceOwner::WindowServer;
       policy.displaySyncEnabled = true;
-      policy.scheduleMinimumPresentDuration = true;
+      // displaySyncEnabled already queues each drawable for the next display
+      // refresh.  Adding presentDrawable:afterMinimumDuration: at the physical
+      // refresh interval can defer a frame by a second vblank when the two
+      // schedules straddle the same deadline, starving the drawable pool.
+      policy.scheduleMinimumPresentDuration = false;
       break;
   }
   return policy;

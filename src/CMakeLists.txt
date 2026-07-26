@@ -586,6 +586,32 @@ if(BUILD_TESTING)
       RUN_SERIAL TRUE
       TIMEOUT 45
       WORKING_DIRECTORY "${SM_ROOT_DIR}")
+
+  if(APPLE)
+    add_test(
+      NAME global_offset_profile_runtime
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
+        "-DITGMANIA_APP_BUNDLE=$<TARGET_BUNDLE_DIR:${SM_EXE_NAME}>"
+        "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/global_offset_profile_runtime"
+        -P "${SM_CMAKE_DIR}/RunGlobalOffsetProfileRuntimeTest.cmake")
+  else()
+    add_test(
+      NAME global_offset_profile_runtime
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DITGMANIA_EXE=$<TARGET_FILE:${SM_EXE_NAME}>"
+        "-DITGMANIA_USER_DATA_DIR=${CMAKE_BINARY_DIR}/test-user-data/global_offset_profile_runtime"
+        -P "${SM_CMAKE_DIR}/RunGlobalOffsetProfileRuntimeTest.cmake")
+  endif()
+  set_tests_properties(
+    global_offset_profile_runtime
+    PROPERTIES
+      LABELS "preferences"
+      RUN_SERIAL TRUE
+      TIMEOUT 90
+      WORKING_DIRECTORY "${SM_ROOT_DIR}")
 endif()
 
 if(WIN32)

@@ -1,6 +1,7 @@
 #include "PrefsManager.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <string>
@@ -32,6 +33,32 @@ PrefsManager* PREFSMAN =
 static const float MIN_GLOBAL_OFFSET_SECONDS = -10.0f;
 static const float MAX_GLOBAL_OFFSET_SECONDS = 10.0f;
 static const float DEFAULT_GLOBAL_OFFSET_SECONDS = -0.008f;
+static const int GLOBAL_OFFSET_PROFILE_STORAGE_VERSION = 1;
+static const char* GLOBAL_OFFSET_PROFILE_STORAGE_SECTION =
+    "GlobalOffsetProfiles";
+
+namespace {
+std::string SanitizeGlobalOffsetProfileName(const std::string& requestedName) {
+  std::string normalized;
+  normalized.reserve(requestedName.size());
+  for (const unsigned char character : requestedName) {
+    if (character >= 0x20 && character != 0x7f) {
+      normalized.push_back(static_cast<char>(character));
+    }
+  }
+  Trim(normalized);
+  return normalized;
+}
+
+std::string NormalizeGlobalOffsetProfileName(
+    int index, const std::string& requestedName) {
+  std::string normalized = SanitizeGlobalOffsetProfileName(requestedName);
+  if (normalized.empty()) {
+    normalized = index == 0 ? "Default" : ssprintf("Offset %d", index + 1);
+  }
+  return normalized;
+}
+}  // namespace
 
 static const char* MusicWheelUsesSectionsNames[] = {
     "Never",
@@ -575,19 +602,25 @@ std::string PrefsManager::GetGlobalOffsetProfileName(int index) const {
 void PrefsManager::SetGlobalOffsetProfileName(
     int index, const std::string& name) {
   const int requested_index = index;
+  if (index < 0 || index >= NUM_GLOBAL_OFFSET_PROFILES) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: rejected global offset profile name for invalid "
+          "index %d.",
+          index);
+    }
+    return;
+  }
   index = ClampGlobalOffsetProfileIndex(index);
   const std::string old_name = GetGlobalOffsetProfileName(index);
-  std::string trimmed = name;
-  Trim(trimmed);
-  if (trimmed.empty()) {
-    trimmed = index == 0 ? "Default" : ssprintf("Offset %d", index + 1);
-  }
-  GetMutableGlobalOffsetProfileName(index).Set(trimmed);
+  const std::string normalized =
+      NormalizeGlobalOffsetProfileName(index, name);
+  GetMutableGlobalOffsetProfileName(index).Set(normalized);
   if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: profile_name_set requested_index=%d index=%d "
         "old='%s' new='%s'",
-        requested_index, index, old_name.c_str(), trimmed.c_str());
+        requested_index, index, old_name.c_str(), normalized.c_str());
   }
   LogGlobalOffsetDiagnostics("profile_name_set");
 }
@@ -598,6 +631,15 @@ float PrefsManager::GetGlobalOffsetProfileSeconds(int index) const {
 
 void PrefsManager::SetGlobalOffsetProfileSeconds(int index, float seconds) {
   const int requested_index = index;
+  if (index < 0 || index >= NUM_GLOBAL_OFFSET_PROFILES) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: rejected global offset value for invalid profile "
+          "index %d.",
+          index);
+    }
+    return;
+  }
   index = ClampGlobalOffsetProfileIndex(index);
   seconds = SanitizeGlobalOffsetSeconds(seconds, "profile_seconds_set");
   const float old_profile_seconds = GetGlobalOffsetProfileSeconds(index);
@@ -623,8 +665,10 @@ void PrefsManager::SetGlobalOffsetSeconds(float seconds) {
   const float old_runtime_seconds = m_fGlobalOffsetSeconds.Get();
   const int selected = GetGlobalOffsetProfileSelected();
   const float old_profile_seconds = GetGlobalOffsetProfileSeconds(selected);
+  // Update the named slot before broadcasting GlobalOffsetSecondsChanged.
+  // Theme rows handling that message must always observe one coherent value.
+  GetMutableGlobalOffsetProfileSeconds(selected).Set(seconds);
   m_fGlobalOffsetSeconds.Set(seconds);
-  SyncActiveGlobalOffsetProfileFromCurrentOffset();
   if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace(
         "GLOBAL_OFFSET_TRACE: runtime_seconds_set selected=%d "
@@ -651,6 +695,15 @@ void PrefsManager::SyncActiveGlobalOffsetProfileFromCurrentOffset() {
 
 void PrefsManager::SetGlobalOffsetProfileSelected(int index) {
   const int requested_index = index;
+  if (index < 0 || index >= NUM_GLOBAL_OFFSET_PROFILES) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: rejected invalid global offset profile selection "
+          "%d.",
+          index);
+    }
+    return;
+  }
   const int old_selected = GetGlobalOffsetProfileSelected();
   const float old_runtime_seconds = m_fGlobalOffsetSeconds.Get();
   index = ClampGlobalOffsetProfileIndex(index);
@@ -678,11 +731,10 @@ void PrefsManager::InitializeGlobalOffsetProfiles() {
   }
 
   for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
-    std::string name = GetGlobalOffsetProfileName(i);
-    Trim(name);
-    if (name.empty()) {
-      SetGlobalOffsetProfileName(
-          i, i == 0 ? "Default" : ssprintf("Offset %d", i + 1));
+    const std::string name =
+        NormalizeGlobalOffsetProfileName(i, GetGlobalOffsetProfileName(i));
+    if (name != GetGlobalOffsetProfileName(i)) {
+      SetGlobalOffsetProfileName(i, name);
     }
 
     const std::string source = ssprintf("initialize_profile_%d", i + 1);
@@ -717,6 +769,176 @@ void PrefsManager::InitializeGlobalOffsetProfiles() {
   LogGlobalOffsetDiagnostics("initialize_end");
 }
 
+bool PrefsManager::ReadGlobalOffsetProfilesFromFile(
+    const std::string& path) {
+  IniFile ini;
+  if (!ini.ReadFile(path)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: failed to read global offset profile storage '%s': %s",
+          path.c_str(), ini.GetError().c_str());
+    }
+    return false;
+  }
+
+  int version = 0;
+  int profileCount = 0;
+  int selected = -1;
+  if (!ini.GetValue(
+          GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "Version", version) ||
+      version != GLOBAL_OFFSET_PROFILE_STORAGE_VERSION ||
+      !ini.GetValue(
+          GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "ProfileCount",
+          profileCount) ||
+      profileCount != NUM_GLOBAL_OFFSET_PROFILES ||
+      !ini.GetValue(
+          GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "SelectedProfile",
+          selected) ||
+      selected < 0 || selected >= NUM_GLOBAL_OFFSET_PROFILES) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: rejected invalid global offset profile storage "
+          "header '%s'.",
+          path.c_str());
+    }
+    return false;
+  }
+
+  std::array<std::string, NUM_GLOBAL_OFFSET_PROFILES> names;
+  std::array<float, NUM_GLOBAL_OFFSET_PROFILES> seconds{};
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    const std::string nameKey = ssprintf("Profile%dName", i + 1);
+    const std::string secondsKey = ssprintf("Profile%dSeconds", i + 1);
+    if (!ini.GetValue(
+            GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, nameKey, names[i]) ||
+        !ini.GetValue(
+            GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, secondsKey, seconds[i]) ||
+        !std::isfinite(seconds[i]) ||
+        seconds[i] < MIN_GLOBAL_OFFSET_SECONDS ||
+        seconds[i] > MAX_GLOBAL_OFFSET_SECONDS) {
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "PrefsManager: rejected invalid global offset profile slot %d "
+            "from '%s'.",
+            i + 1, path.c_str());
+      }
+      return false;
+    }
+    names[i] = SanitizeGlobalOffsetProfileName(names[i]);
+    if (names[i].empty()) {
+      if (LOG != nullptr) {
+        LOG->Warn(
+            "PrefsManager: rejected blank global offset profile name in slot "
+            "%d from '%s'.",
+            i + 1, path.c_str());
+      }
+      return false;
+    }
+  }
+
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    GetMutableGlobalOffsetProfileName(i).Set(names[i]);
+    GetMutableGlobalOffsetProfileSeconds(i).Set(seconds[i]);
+  }
+  m_iGlobalOffsetProfileSelected.Set(selected);
+  m_bGlobalOffsetProfilesInitialized.Set(true);
+  m_fGlobalOffsetSeconds.Set(seconds[selected]);
+
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: loaded_profile_storage path='%s' version=%d "
+        "selected=%d",
+        path.c_str(), version, selected);
+  }
+  LogGlobalOffsetDiagnostics("profile_storage_loaded");
+  return true;
+}
+
+bool PrefsManager::LoadGlobalOffsetProfilesFromDisk(
+    bool& storageFound, bool& restoredFromBackup) {
+  const bool primaryExists =
+      DoesFileExist(SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH);
+  const bool backupExists =
+      DoesFileExist(SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH);
+  storageFound = primaryExists || backupExists;
+  restoredFromBackup = false;
+
+  if (primaryExists &&
+      ReadGlobalOffsetProfilesFromFile(
+          SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH)) {
+    return true;
+  }
+
+  if (backupExists &&
+      ReadGlobalOffsetProfilesFromFile(
+          SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH)) {
+    restoredFromBackup = true;
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: restored global offset profiles from backup '%s'.",
+          SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH.c_str());
+    }
+    return true;
+  }
+
+  if (storageFound && LOG != nullptr) {
+    LOG->Warn(
+        "PrefsManager: no valid global offset profile storage remains; "
+        "falling back to Preferences.ini without overwriting the invalid "
+        "storage yet.");
+  }
+  return false;
+}
+
+bool PrefsManager::SaveGlobalOffsetProfilesToDisk() {
+  IniFile ini;
+  ini.SetValue(
+      GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "Version",
+      GLOBAL_OFFSET_PROFILE_STORAGE_VERSION);
+  ini.SetValue(
+      GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "ProfileCount",
+      NUM_GLOBAL_OFFSET_PROFILES);
+  ini.SetValue(
+      GLOBAL_OFFSET_PROFILE_STORAGE_SECTION, "SelectedProfile",
+      GetGlobalOffsetProfileSelected());
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    ini.SetValue(
+        GLOBAL_OFFSET_PROFILE_STORAGE_SECTION,
+        ssprintf("Profile%dName", i + 1), GetGlobalOffsetProfileName(i));
+    ini.SetValue(
+        GLOBAL_OFFSET_PROFILE_STORAGE_SECTION,
+        ssprintf("Profile%dSeconds", i + 1),
+        GetGlobalOffsetProfileSeconds(i));
+  }
+
+  if (!ini.WriteFile(SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: failed to write global offset profiles to '%s': %s",
+          SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH.c_str(),
+          ini.GetError().c_str());
+    }
+    return false;
+  }
+
+  if (!ini.WriteFile(SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH) &&
+      LOG != nullptr) {
+    LOG->Warn(
+        "PrefsManager: global offset profiles were saved, but backup '%s' "
+        "could not be refreshed: %s",
+        SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH.c_str(),
+        ini.GetError().c_str());
+  }
+
+  if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
+    LOG->Trace(
+        "GLOBAL_OFFSET_TRACE: saved_profile_storage primary='%s' backup='%s'",
+        SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH.c_str(),
+        SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH.c_str());
+  }
+  return true;
+}
+
 void PrefsManager::ReadPrefsFromDisk() {
   if (LogGlobalOffsetDiagnosticsEnabled() && LOG != nullptr) {
     LOG->Trace("GLOBAL_OFFSET_TRACE: read_prefs_from_disk_begin");
@@ -737,7 +959,52 @@ void PrefsManager::ReadPrefsFromDisk() {
   }
 
   RefreshPerfDiagnosticsPreferenceCache();
+  const bool preferencesHadInitializedProfiles =
+      m_bGlobalOffsetProfilesInitialized.Get();
+  const int preferencesSelectedProfile =
+      m_iGlobalOffsetProfileSelected.Get();
+  std::array<std::string, NUM_GLOBAL_OFFSET_PROFILES> preferenceProfileNames;
+  std::array<float, NUM_GLOBAL_OFFSET_PROFILES> preferenceProfileSeconds{};
+  for (int i = 0; i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    preferenceProfileNames[i] = GetGlobalOffsetProfileName(i);
+    preferenceProfileSeconds[i] = GetGlobalOffsetProfileSeconds(i);
+  }
+
+  bool profileStorageFound = false;
+  bool restoredProfilesFromBackup = false;
+  const bool loadedProfileStorage = LoadGlobalOffsetProfilesFromDisk(
+      profileStorageFound, restoredProfilesFromBackup);
   InitializeGlobalOffsetProfiles();
+
+  bool preferencesNeedProfileRepair =
+      loadedProfileStorage && !preferencesHadInitializedProfiles;
+  if (loadedProfileStorage &&
+      preferencesSelectedProfile != GetGlobalOffsetProfileSelected()) {
+    preferencesNeedProfileRepair = true;
+  }
+  for (int i = 0;
+       loadedProfileStorage && i < NUM_GLOBAL_OFFSET_PROFILES; ++i) {
+    if (preferenceProfileNames[i] != GetGlobalOffsetProfileName(i) ||
+        preferenceProfileSeconds[i] != GetGlobalOffsetProfileSeconds(i)) {
+      preferencesNeedProfileRepair = true;
+      break;
+    }
+  }
+
+  if (preferencesNeedProfileRepair) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: repaired global offset profile keys in "
+          "Preferences.ini from dedicated storage.");
+    }
+    SavePrefsToDisk();
+  } else if (!profileStorageFound || restoredProfilesFromBackup) {
+    SaveGlobalOffsetProfilesToDisk();
+  } else if (!loadedProfileStorage && LOG != nullptr) {
+    LOG->Warn(
+        "PrefsManager: using global offset profiles from Preferences.ini for "
+        "this session because the dedicated storage is invalid.");
+  }
   LogGlobalOffsetDiagnostics("read_prefs_from_disk_end");
 }
 
@@ -864,15 +1131,29 @@ void PrefsManager::TranslateDeprecatedFlags() {
 bool PrefsManager::SavePrefsToDisk() {
   LogGlobalOffsetDiagnostics("save_prefs_to_disk_begin");
   IniFile ini;
+  // Preserve preference keys introduced by a newer build.  Rebuilding the
+  // file from an empty tree made alternating between branches destructive.
+  if (DoesFileExist(SpecialFiles::PREFERENCES_INI_PATH) &&
+      !ini.ReadFile(SpecialFiles::PREFERENCES_INI_PATH)) {
+    if (LOG != nullptr) {
+      LOG->Warn(
+          "PrefsManager: existing preferences could not be merged before "
+          "save: %s",
+          ini.GetError().c_str());
+    }
+    ini.Clear();
+  }
   SavePrefsToIni(ini);
-  const bool bSaved = ini.WriteFile(SpecialFiles::PREFERENCES_INI_PATH);
-  if (!bSaved && LOG != nullptr) {
+  const bool preferencesSaved =
+      ini.WriteFile(SpecialFiles::PREFERENCES_INI_PATH);
+  if (!preferencesSaved && LOG != nullptr) {
     LOG->Warn(
         "PrefsManager: failed to write %s.",
         SpecialFiles::PREFERENCES_INI_PATH.c_str());
   }
+  const bool profilesSaved = SaveGlobalOffsetProfilesToDisk();
   LogGlobalOffsetDiagnostics("save_prefs_to_disk_end");
-  return bSaved;
+  return preferencesSaved && profilesSaved;
 }
 
 void PrefsManager::SavePrefsToIni(IniFile& ini) {

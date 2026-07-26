@@ -240,20 +240,36 @@ assert(clientSource:find("local isLiveScoreRequest =", 1, true)
 assert(clientSource:find('local scoreUpdateSource = tostring(source or "") == "score_updated"', 1, true)
 	and clientSource:find("if not scoreUpdateSource or self.debugScoreTrace == true then", 1, true),
 	"live leaderboard row summaries must not be built while routine score tracing is disabled")
-assert(clientSource:find('if self.debugScoreTrace == true then\n\t\tonline_score_trace("live_score_queue room="', 1, true),
-	"live score queue diagnostics must not allocate strings on every gameplay snapshot")
+assert(clientSource:find('online_score_trace("live_score_queue_activity room="', 1, true)
+	and not clientSource:find('online_score_trace("live_score_queue room="', 1, true),
+	"live score queue diagnostics must aggregate gameplay snapshots")
 assert(clientSource:find("local companionTickDue =", 1, true)
 	and clientSource:find("self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()", 1, true),
 	"Player 2 score collection must run at the network cadence instead of every 100 ms")
-assert(onlineHelpersSource:find("if ITGOnline.debugScoreTrace == true then", 1, true)
-	and onlineHelpersSource:find('online_trace("score_snapshot_remember', 1, true),
-	"score snapshot messages must use the opt-in score trace instead of the default flow trace")
+assert(not onlineHelpersSource:find("OnlineScoreSnapshotMessageCommand", 1, true),
+	"the online handler must not retain the legacy HUD score receiver")
 assert(onlineScorePushSource:find("local function score_trace_enabled()", 1, true)
-	and onlineScorePushSource:find('if score_trace_enabled() then\n\t\t\t\tonline_score_trace("judgment_snapshot', 1, true),
+	and onlineScorePushSource:find("CaptureOnlineScoreCommand", 1, true)
+	and onlineScorePushSource:find("self.scoreCaptureQueued", 1, true),
 	"the gameplay score tracker must avoid per-judgment diagnostic string construction when disabled")
 assert(onlineScorePushSource:find("local transportTickSeconds = 0.25", 1, true)
 	and onlineScorePushSource:find("self:sleep(transportTickSeconds)", 1, true),
 	"the gameplay transport poll must match its sub-second network cadence without running at 10 Hz")
+local scoreFlushStart = assert(onlineScorePushSource:find("FlushOnlineScoreCommand", 1, true),
+	"the score tracker must expose its transport cadence")
+local scoreCaptureStart = assert(onlineScorePushSource:find("CaptureOnlineScoreCommand", scoreFlushStart, true),
+	"the score tracker must isolate snapshot capture from transport")
+local scoreFlushSource = onlineScorePushSource:sub(scoreFlushStart, scoreCaptureStart - 1)
+assert(not scoreFlushSource:find("BuildCurrentScoreSnapshot", 1, true)
+	and not scoreFlushSource:find("QueueLiveScore", 1, true),
+	"the transport timer must never walk or requeue gameplay statistics")
+assert(not clientSource:find("RememberLiveScoreSnapshot", 1, true)
+	and not clientSource:find("QueueLiveScoreTickIfDue", 1, true)
+	and clientSource:find("function ITGOnline:TickLiveScoreTransport()", 1, true),
+	"the score client must expose one capture API and one transport tick API")
+assert(onlineScorePushSource:find("HoldJudgmentMessageCommand", 1, true)
+	and onlineScorePushSource:find("ExCountsChangedMessageCommand", 1, true),
+	"tap, hold, and EX score changes must converge on the same coalesced capture owner")
 assert(clientSource:find('tostring(self.lastFinalScoreInFlightKey or "") == roundKey', 1, true),
 	"an in-flight final score must stop later live-score flushes")
 local primaryScoreStart = assert(clientSource:find("function ITGOnline:SendScore", 1, true),
@@ -454,8 +470,11 @@ assert(optionsSource:find("onlineOptionsSessionActive", 1, true),
 	"online options must preserve their room context during screen transitions")
 
 local scoreSource = read_source("Themes/Simply Love/BGAnimations/ScreenGameplay underlay/PerPlayer/Score.lua")
-assert(scoreSource:find("should_broadcast_online_score_snapshot", 1, true),
-	"only the primary local score feed must use OnlineScoreSnapshot")
+local messageManagerSource = read_source("src/MessageManager.cpp")
+assert(not scoreSource:find("OnlineScoreSnapshot", 1, true)
+	and not onlineHelpersSource:find("OnlineScoreSnapshot", 1, true)
+	and not messageManagerSource:find("OnlineScoreSnapshot", 1, true),
+	"presentation code and the native message bus must not retain the legacy score pipeline")
 
 local trackFailTimeSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackFailTime.lua"
@@ -506,6 +525,18 @@ assert(clientSource:find("heartbeat_deferred reason=initial_sync_room_unknown", 
 	"initial presence must wait until synchronization resolves an existing room")
 assert(clientSource:find("heartbeat_deferred_sync_dispatch", 1, true),
 	"deferred presence must be replayed with the authoritative room context")
+assert(onlineHelpersSource:find("queue_presence_update", 1, true)
+	and onlineHelpersSource:find("PresenceUpdateTimer", 1, true)
+	and onlineHelpersSource:find("FlushPresenceUpdateCommand", 1, true),
+	"screen presence must be deferred and coalesced outside the transition frame")
+assert(not onlineHelpersSource:find('safe_broadcast("UpdateMachineState")', 1, true)
+	and not onlineHelpersSource:find("UpdateMachineStateMessageCommand", 1, true),
+	"screen changes must not fan out through the legacy forced-heartbeat message")
+assert(onlineHelpersSource:find("OnlineGameplayInitializeTimer", 1, true)
+	and onlineHelpersSource:find("InitializeOnlineGameplayCommand", 1, true),
+	"gameplay network initialization must run after the screen transition frame")
+assert(clientSource:find('stream_profile = "control"', 1, true),
+	"the companion websocket must request the low-volume control stream")
 
 local gameLoopSource = read_source("src/GameLoop.cpp")
 assert(gameLoopSource:find("PERF_TRACE: fps_drop", 1, true),
@@ -548,8 +579,10 @@ assert(metalPresenterSource:find(
 assert(metalPresentationPolicySource:find(
 	"case Mode::CompositedWindow:", 1, true
 ) and metalPresentationPolicySource:find(
-	"policy.scheduleMinimumPresentDuration = true", 1, true
-), "WindowServer-composited presentation must retain its refresh guard")
+	"policy.displaySyncEnabled = true;", 1, true
+) and metalPresentationPolicySource:find(
+	"policy.scheduleMinimumPresentDuration = false;", 1, true
+), "WindowServer-composited presentation must not add a second cadence")
 assert(metalPresenterSource:find("afterMinimumDuration:", 1, true)
 	and metalPresenterSource:find("ScheduleMetalDrawable(", 1, true),
 	"Metal presentation must schedule drawables through the selected policy")

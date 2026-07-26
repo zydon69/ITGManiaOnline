@@ -68,6 +68,11 @@ if(BUILD_TESTING)
       COMMAND ${ITGMANIA_LUA_EXECUTABLE}
               ${CMAKE_SOURCE_DIR}/Tests/gameplay_presets_spec.lua
               ${CMAKE_SOURCE_DIR})
+    add_test(
+      NAME global_offset_options_behavior
+      COMMAND ${ITGMANIA_LUA_EXECUTABLE}
+              ${CMAKE_SOURCE_DIR}/Tests/global_offset_options_spec.lua
+              ${CMAKE_SOURCE_DIR})
   endif()
   add_test(
     NAME audio_refactor_source_invariants
@@ -434,6 +439,11 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckLogHygieneInvariants.cmake)
+  add_test(
+    NAME global_offset_profile_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckGlobalOffsetProfileInvariants.cmake)
   add_test(
     NAME rage_file_invariants
     COMMAND ${CMAKE_COMMAND}

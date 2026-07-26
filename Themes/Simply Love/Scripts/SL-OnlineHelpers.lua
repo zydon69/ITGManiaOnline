@@ -37,6 +37,7 @@ local onlineOperationToken = 0
 local evaluationExitTransitionRequestedAt = 0
 local evaluationExitTransitionRoomId = ""
 local lastGameplayResultsForceKey = ""
+local queue_presence_update
 UnlockOnlineInput = nil
 local onlineInputCallbacks = {}
 
@@ -936,7 +937,6 @@ InputHandler = function(event)
 			lastDisconnectCountdown = nil
 			if topScreenName == "ScreenGameplay" then
 				readyState[pn] = true
-				safe_broadcast("UpdateMachineState")
 			end
 		elseif event.type == "InputEventType_Repeat" and event.GameButton == "Start" then
 			-- Check if Start has been held for 5 seconds
@@ -1858,7 +1858,7 @@ RestoreCurrentRoom = function(actor, callback)
 			local payload = build_lobby_payload(decoded.room)
 			DisplayLobbyState(payload, actor)
 			safe_broadcast("OnlineLobbyState", payload)
-			ITGOnline:Heartbeat("in_room")
+			queue_presence_update(actor, "restore_current_room", false)
 			if callback then callback(true) end
 			return
 		end
@@ -1873,7 +1873,7 @@ RestoreCurrentRoom = function(actor, callback)
 		end
 
 		actor.inLobby = false
-		ITGOnline:Heartbeat("available")
+		queue_presence_update(actor, "restore_current_room_empty", false)
 		if callback then callback(false) end
 	end)
 end
@@ -2558,10 +2558,12 @@ local onlineConnectionTimerNames = {
 	"BusyOperationWatchdogTimer",
 	"ReconnectTimer",
 	"DeferredLobbyRefreshTimer",
+	"PresenceUpdateTimer",
 }
 local onlineRoomTimerNames = {
 	"OnlinePlayingCountdownTimer",
 	"OnlineGameplayStartTimer",
+	"OnlineGameplayInitializeTimer",
 	"PreviewInitialSongTimer",
 	"ReplayDeferredLobbyStateTimer",
 	"ManagerAutoReadyRetryTimer",
@@ -2602,6 +2604,26 @@ function schedule_named_timer(actor, name, delay, command)
 	else
 		actor:sleep(math.max(0, delay)):queuecommand(command)
 	end
+end
+
+queue_presence_update = function(actor, source, force)
+	if not actor or onlineHandlerShuttingDown then return end
+	actor.pendingPresenceUpdate = true
+	actor.pendingPresenceForce = actor.pendingPresenceForce == true or force == true
+	actor.pendingPresenceSource = tostring(source or "unknown")
+	schedule_named_timer(actor, "PresenceUpdateTimer", 0.10, "Fire")
+end
+
+local function current_presence_status()
+	if not (ITGOnline and ITGOnline.currentRoomId) then
+		return "available"
+	end
+	local screenName = current_online_screen_name()
+	local phase = normalized_room_phase_for_runtime()
+	if gameplayScreens[screenName] and phase == "playing" then
+		return "playing"
+	end
+	return "in_room"
 end
 
 function normalized_room_phase_for_runtime()
@@ -3172,52 +3194,6 @@ CreateOnlineHandler = function()
 							end
 							schedule_named_timer(self, "OnlinePlayingCountdownTimer", 0.25, "Fire")
 						end,
-					OnlineScoreSnapshotMessageCommand=function(self, params)
-						if onlineHandlerShuttingDown then
-							online_flow_trace_throttled("score_snapshot_ignored_handler_shutting_down", 5.0,
-								"score_snapshot_ignored reason=handler_shutting_down")
-							return
-						end
-						if not (ITGOnline and ITGOnline.RememberLiveScoreSnapshot and ITGOnline.currentRoomId and ITGOnline.currentRoom and current_room_is_active()) then
-							online_flow_trace_throttled("score_snapshot_ignored_missing_context", 5.0,
-								"score_snapshot_ignored reason=missing_context"
-								.. " hasClient=" .. tostring(ITGOnline ~= nil)
-								.. " hasRememberApi=" .. tostring(ITGOnline and ITGOnline.RememberLiveScoreSnapshot ~= nil)
-								.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-								.. " hasRoom=" .. tostring(ITGOnline and ITGOnline.currentRoom ~= nil))
-							return
-						end
-						if not GAMESTATE then return end
-						local enabled = GAMESTATE:GetEnabledPlayers()
-						local primary = enabled and enabled[1] or nil
-						if not (params and primary and params.Player == primary) then
-							online_flow_trace_throttled("score_snapshot_ignored_non_primary", 5.0,
-								"score_snapshot_ignored reason=non_primary_or_missing_params"
-								.. " hasParams=" .. tostring(params ~= nil)
-								.. " player=" .. tostring(params and params.Player or "nil")
-								.. " primary=" .. tostring(primary or "nil"))
-							return
-						end
-
-						if ITGOnline.debugScoreTrace == true then
-							online_trace("score_snapshot_remember room=" .. tostring(ITGOnline.currentRoomId or "nil")
-								.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-								.. " player=" .. tostring(params.Player)
-								.. " score=" .. tostring(params.ScorePercent or "nil")
-								.. " ex=" .. tostring(params.ExScorePercent or "nil")
-								.. " hardex=" .. tostring(params.HardExScorePercent or "nil")
-								.. " displayed=" .. tostring(params.DisplayedPercent or "nil")
-								.. " combo=" .. tostring(params.Combo or "nil"), "score")
-						end
-						ITGOnline:RememberLiveScoreSnapshot({
-							scorePercent = params.ScorePercent,
-							exScorePercent = params.ExScorePercent,
-							hardExScorePercent = params.HardExScorePercent,
-							displayedPercent = params.DisplayedPercent,
-							scoreMode = params.ScoreMode,
-							combo = params.Combo,
-						})
-					end,
 					OnlineSongReloadCompletedMessageCommand=function(self)
 						online_flow_trace("song_reload_completed_message"
 							.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
@@ -3450,69 +3426,33 @@ CreateOnlineHandler = function()
 						end
 					end
 
-					if screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared" then
-						if GAMESTATE then
-							for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
-								local pn = ToEnumShortString(player)
-								readyState[pn] = false
+						if screenName == "ScreenGameplay" or screenName == "ScreenGameplayShared" then
+							if GAMESTATE then
+								for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
+									local pn = ToEnumShortString(player)
+									readyState[pn] = false
+								end
 							end
-						end
 							replace_online_input_callback(screen, "gameplay_wait", InputHandler)
 							if ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing" then
 								UnlockOnlineInput()
 								SetGameplayPaused(screen, false)
 							elseif ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "starting" then
 								SetGameplayPaused(screen, true)
-								if ITGOnline.MarkSongLoaded then
-									local songLoadedContext = room_context_token("mark_song_loaded")
-									ITGOnline:MarkSongLoaded(function(ok, decoded, response)
-										if not room_context_still_active(songLoadedContext, { phase = "starting" }) then
-											online_flow_trace("mark_song_loaded_callback_ignored reason=stale_context")
-											return
-										end
-										if not ok then
-											UnlockOnlineInput()
-											if current_top_screen() == screen then
-												SetGameplayPaused(screen, false)
-												transition_screen(screen, "ScreenOnlineLobbies", "SM_GoToNextScreen", "song_loaded_failed")
-											end
-										safe_broadcast("OnlineResponseStatus", {
-											event="songLoaded",
-											success=false,
-											message=(decoded and decoded.message) or (response and response.errorMessage)
-												or online_lobby_text("ConfirmSongLoadFailed", "Could not confirm song loading.")
-										})
-									end
-								end)
-								end
-								QueueOnlineGameplayStartRelease(self)
+								self.pendingGameplayInitializationScreen = screen
+								schedule_named_timer(self, "OnlineGameplayInitializeTimer", 0.05, "Fire")
 							else
 								SetGameplayPaused(screen, false)
 								if ITGOnline and ITGOnline.EnforceRoomPhaseScreen then
 									ITGOnline:EnforceRoomPhaseScreen(screenName)
 								end
-						end
-					elseif isWaiting then
-						replace_online_input_callback(screen, "wait", InputHandler)
+							end
+						elseif isWaiting then
+							replace_online_input_callback(screen, "wait", InputHandler)
 					end
 
-					if wsConnected and ITGOnline and ITGOnline.currentRoomId then
-						local status = (gameplayScreens[screenName] and ITGOnline.currentRoom and ITGOnline.currentRoom.phase == "playing") and "playing" or "in_room"
-						online_flow_trace("heartbeat_screen_update status=" .. tostring(status)
-							.. " screen=" .. tostring(screenName)
-							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
-							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-							.. " wsConnected=" .. tostring(wsConnected == true))
-						ITGOnline:Heartbeat(status)
-					elseif wsConnected
-						and ITGOnline
-						and ITGOnline.ForceLobbyPresenceHeartbeat
-						and screenName == "ScreenOnlineLobbies" then
-						online_flow_trace("heartbeat_screen_update status=available"
-							.. " screen=" .. tostring(screenName)
-							.. " room=nil"
-							.. " wsConnected=" .. tostring(wsConnected == true))
-						ITGOnline:ForceLobbyPresenceHeartbeat("screen_online_lobbies_no_room")
+					if wsConnected and ITGOnline and ITGOnline.Heartbeat then
+						queue_presence_update(self, "screen_changed:" .. tostring(screenName), false)
 					end
 						if evaluationScreens[screenName]
 							and ITGOnline
@@ -3532,8 +3472,74 @@ CreateOnlineHandler = function()
 							replayDeferredLobbyStateQueued = true
 							schedule_named_timer(self, "ReplayDeferredLobbyStateTimer", 0.05, "Fire")
 						end
-					safe_broadcast("UpdateMachineState")
 		      end,
+					InitializeOnlineGameplayCommand=function(self)
+						local screen = self.pendingGameplayInitializationScreen
+						self.pendingGameplayInitializationScreen = nil
+						local phase = normalized_room_phase_for_runtime()
+						if not screen or current_top_screen() ~= screen
+							or not (ITGOnline and ITGOnline.currentRoom) then
+							online_flow_trace("gameplay_initialize_skipped reason=stale_context"
+								.. " screen=" .. tostring(screen_name(current_top_screen()))
+								.. " phase=" .. tostring(phase))
+							return
+						end
+						if phase == "playing" then
+							UnlockOnlineInput()
+							SetGameplayPaused(screen, false)
+							online_flow_trace("gameplay_initialize_completed reason=already_playing")
+							return
+						end
+						if phase ~= "starting" then
+							SetGameplayPaused(screen, false)
+							online_flow_trace("gameplay_initialize_skipped reason=inactive_phase phase="
+								.. tostring(phase))
+							return
+						end
+
+						local songLoadedContext = room_context_token("mark_song_loaded")
+						if ITGOnline.MarkSongLoaded then
+							ITGOnline:MarkSongLoaded(function(ok, decoded, response)
+								if not room_context_still_active(songLoadedContext, { phase = "starting" }) then
+									online_flow_trace("mark_song_loaded_callback_ignored reason=stale_context")
+									return
+								end
+								if not ok then
+									UnlockOnlineInput()
+									if current_top_screen() == screen then
+										SetGameplayPaused(screen, false)
+										transition_screen(screen, "ScreenOnlineLobbies", "SM_GoToNextScreen", "song_loaded_failed")
+									end
+									safe_broadcast("OnlineResponseStatus", {
+										event="songLoaded",
+										success=false,
+										message=(decoded and decoded.message) or (response and response.errorMessage)
+											or online_lobby_text("ConfirmSongLoadFailed", "Could not confirm song loading.")
+									})
+								end
+							end)
+						end
+						QueueOnlineGameplayStartRelease(self)
+					end,
+					FlushPresenceUpdateCommand=function(self)
+						if not self.pendingPresenceUpdate then return end
+						local source = tostring(self.pendingPresenceSource or "unknown")
+						local force = self.pendingPresenceForce == true
+						self.pendingPresenceUpdate = false
+						self.pendingPresenceForce = false
+						self.pendingPresenceSource = nil
+						if not (self.connected and self.socket ~= nil and self.inLobby
+							and ITGOnline and ITGOnline.Heartbeat) then
+							return
+						end
+						local status = current_presence_status()
+						online_flow_trace("presence_update_flush"
+							.. " source=" .. source
+							.. " status=" .. tostring(status)
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " force=" .. tostring(force))
+						ITGOnline:Heartbeat(status, force)
+					end,
 					ReplayDeferredLobbyStateCommand=function(self)
 						replayDeferredLobbyStateQueued = false
 						if replayDeferredLobbyStateRunning then return end
@@ -3582,20 +3588,12 @@ CreateOnlineHandler = function()
 					end,
 	      PlayerJoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby and ITGOnline and ITGOnline.Heartbeat then
-	          online_flow_trace("heartbeat_forced source=PlayerJoined room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-	          ITGOnline:Heartbeat("in_room", true)
+	          queue_presence_update(self, "player_joined", true)
 	        end
 	      end,
 	      PlayerUnjoinedMessageCommand=function(self)
 					if self.connected and self.socket ~= nil and self.inLobby and ITGOnline and ITGOnline.Heartbeat then
-	          online_flow_trace("heartbeat_forced source=PlayerUnjoined room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-	          ITGOnline:Heartbeat("in_room", true)
-	        end
-	      end,
-			UpdateMachineStateMessageCommand=function(self)
-					if self.connected and self.socket ~= nil and self.inLobby and ITGOnline and ITGOnline.Heartbeat then
-	          online_flow_trace("heartbeat_forced source=UpdateMachineState room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
-	          ITGOnline:Heartbeat("in_room", true)
+	          queue_presence_update(self, "player_unjoined", true)
 	        end
 	      end,
 			      OnlineConfigReadyMessageCommand=function(self)
@@ -3868,9 +3866,7 @@ CreateOnlineHandler = function()
 								.. " screen=" .. tostring(SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"))
 							self.inLobby = true
 							start_room_timers(self, "online_lobby_state_apply")
-							if ITGOnline and ITGOnline.Heartbeat then
-								ITGOnline:Heartbeat("in_room")
-							end
+							queue_presence_update(self, "online_lobby_state", false)
 							params.__receivedLocalTime = GetTimeSinceStart()
 							self.lastLobbyStatePayload = params
 							self.lastLobbyStateSignature = stateSignature
@@ -4675,6 +4671,14 @@ CreateOnlineHandler = function()
 					Def.Actor{
 						Name="OnlineGameplayStartTimer",
 						FireCommand=function(self) self:GetParent():playcommand("ReleaseOnlineGameplayAtStart") end,
+					},
+					Def.Actor{
+						Name="OnlineGameplayInitializeTimer",
+						FireCommand=function(self) self:GetParent():playcommand("InitializeOnlineGameplay") end,
+					},
+					Def.Actor{
+						Name="PresenceUpdateTimer",
+						FireCommand=function(self) self:GetParent():playcommand("FlushPresenceUpdate") end,
 					},
 					Def.Actor{
 						Name="PreviewInitialSongTimer",

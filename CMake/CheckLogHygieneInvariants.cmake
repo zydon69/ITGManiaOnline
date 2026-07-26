@@ -98,7 +98,7 @@ require_contains(
   "Win32 event diagnostics must remain configurable")
 require_contains(
   "${prefs_manager}"
-  "TranslateDeprecatedFlags();\n  RefreshPerfDiagnosticsPreferenceCache();\n  InitializeGlobalOffsetProfiles();"
+  "TranslateDeprecatedFlags();\n  RefreshPerfDiagnosticsPreferenceCache();"
   "factory reset must refresh diagnostic preference caches")
 require_contains(
   "${prefs_manager}" "m_bLogSkips(\"LogSkips\", false)"

@@ -7,6 +7,10 @@ const std::string SpecialFiles::KEYMAPS_PATH = "Save/Keymaps.ini";
 const std::string SpecialFiles::EDIT_MODE_KEYMAPS_PATH =
     "Save/EditMode_Keymaps.ini";
 const std::string SpecialFiles::PREFERENCES_INI_PATH = "Save/Preferences.ini";
+const std::string SpecialFiles::GLOBAL_OFFSET_PROFILES_INI_PATH =
+    "Save/GlobalOffsetProfiles.ini";
+const std::string SpecialFiles::GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH =
+    "Save/GlobalOffsetProfiles.backup.ini";
 const std::string SpecialFiles::THEMES_DIR = "Themes/";
 const std::string SpecialFiles::LANGUAGES_SUBDIR = "Languages/";
 // TODO: A theme should be able to specify a base language.

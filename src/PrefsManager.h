@@ -423,6 +423,10 @@ class PrefsManager {
       const std::string& sIni, const std::string& sSection);
   void TranslateDeprecatedFlags();
   void InitializeGlobalOffsetProfiles();
+  bool ReadGlobalOffsetProfilesFromFile(const std::string& path);
+  bool LoadGlobalOffsetProfilesFromDisk(
+      bool& storageFound, bool& restoredFromBackup);
+  bool SaveGlobalOffsetProfilesToDisk();
   int ClampGlobalOffsetProfileIndex(int index) const;
   float SanitizeGlobalOffsetSeconds(float seconds, const char* source) const;
   void InitializeGlobalOffsetProfileStorage();

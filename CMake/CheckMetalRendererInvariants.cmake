@@ -234,8 +234,12 @@ require_contains(
   "WindowServer-composited Metal layers remain display-synchronized")
 require_contains(
   "${metal_presentation_policy}"
-  "policy.scheduleMinimumPresentDuration = true"
-  "composited presentation retains the release refresh-duration guard")
+  "policy.displaySyncEnabled = true;\n      // displaySyncEnabled already queues each drawable for the next display\n      // refresh."
+  "composited presentation uses WindowServer synchronization without a second timer")
+require_contains(
+  "${metal_presentation_policy}"
+  "policy.scheduleMinimumPresentDuration = false;\n      break;"
+  "composited presentation submits drawables immediately")
 require_contains(
   "${metal_presentation_policy_test}"
   "will-enter must switch policy before AppKit updates the style mask"

@@ -33,6 +33,8 @@ read_source("src/NotesWriterSM.cpp" notes_writer_sm_cpp)
 read_source("src/NotesWriterSSC.cpp" notes_writer_ssc_cpp)
 read_source("src/SongManager.cpp" song_manager_cpp)
 read_source("src/Steps.cpp" steps_cpp)
+read_source("CMake/SMDefs.cmake" version_definitions_cmake)
+read_source("CMake/GenerateVerstub.cmake" version_generator_cmake)
 
 require_contains(
   "${song_cache_index_cpp}"
@@ -94,6 +96,22 @@ require_contains(
   "${song_manager_cpp}"
   "++sanity_index;"
   "group sanity-check progress advances")
+require_not_contains(
+  "${version_definitions_cmake}"
+  "-BETA"
+  "default build version labels must not contain BETA")
+require_not_contains(
+  "${version_generator_cmake}"
+  "-BETA"
+  "generated executable version labels must not contain BETA")
+require_contains(
+  "${version_definitions_cmake}"
+  "\${SM_VERSION_MAJOR}.\${SM_VERSION_MINOR}.\${SM_VERSION_PATCH}-git-\${SM_VERSION_GIT_HASH}"
+  "default build version labels retain the source revision")
+require_contains(
+  "${version_generator_cmake}"
+  "\${SM_VERSION_TRADITIONAL}-git-\${generated_git_hash}"
+  "generated executable version labels retain the source revision")
 
 file(GLOB language_files "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Languages/*.ini")
 foreach(language_file IN LISTS language_files)

@@ -12,6 +12,8 @@ extern const std::string KEYMAPS_PATH;
  * interference with the normal keymaps system. -Kyz */
 extern const std::string EDIT_MODE_KEYMAPS_PATH;
 extern const std::string PREFERENCES_INI_PATH;
+extern const std::string GLOBAL_OFFSET_PROFILES_INI_PATH;
+extern const std::string GLOBAL_OFFSET_PROFILES_BACKUP_INI_PATH;
 /** @brief The directory that contains the themes. */
 extern const std::string THEMES_DIR;
 /** @brief The directory that contains the different languages. */

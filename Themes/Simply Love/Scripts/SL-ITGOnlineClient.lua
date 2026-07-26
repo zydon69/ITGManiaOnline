@@ -144,6 +144,8 @@ ITGOnline.lastAcceptedScoreFingerprint = ITGOnline.lastAcceptedScoreFingerprint 
 ITGOnline.scoreInFlightFingerprint = ITGOnline.scoreInFlightFingerprint or nil
 ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or nil
 ITGOnline.lastDisplayedScoreSnapshotAt = ITGOnline.lastDisplayedScoreSnapshotAt or 0
+ITGOnline.liveScoreQueueTraceAccepted = ITGOnline.liveScoreQueueTraceAccepted or 0
+ITGOnline.liveScoreQueueTraceNextAt = ITGOnline.liveScoreQueueTraceNextAt or 0
 ITGOnline.failedScoreSnapshot = ITGOnline.failedScoreSnapshot or nil
 ITGOnline.failedScoreSnapshotRoundKey = ITGOnline.failedScoreSnapshotRoundKey or ""
 ITGOnline.lastScoreJudgmentsByRoundKey = ITGOnline.lastScoreJudgmentsByRoundKey or {}
@@ -5120,6 +5122,8 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.lastAcceptedScoreSongPosition = 0
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
+	self.liveScoreQueueTraceAccepted = 0
+	self.liveScoreQueueTraceNextAt = 0
 	self.failedScoreSnapshot = nil
 	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
@@ -9125,7 +9129,9 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 	end)
 	local playerKey = local_player_key(player)
 	online_flow_trace("companion_realtime_ticket_begin localPlayer=" .. playerKey)
-	self:RequestAsLocalPlayer(player, "POST", "/websocket/tickets", {}, function(ok, decoded, response)
+	self:RequestAsLocalPlayer(player, "POST", "/websocket/tickets", {
+		stream_profile = "control",
+	}, function(ok, decoded, response)
 		if not ok or not decoded or not decoded.ticket then
 			context.connecting = false
 			context.connected = false
@@ -9574,6 +9580,8 @@ function ITGOnline:Disconnect(options)
 	self.activeGameplayRoundKey = ""
 	self.lastDisplayedScoreSnapshot = nil
 	self.lastDisplayedScoreSnapshotAt = 0
+	self.liveScoreQueueTraceAccepted = 0
+	self.liveScoreQueueTraceNextAt = 0
 	self.failedScoreSnapshot = nil
 	self.failedScoreSnapshotRoundKey = ""
 	self.lastScoreJudgmentsByRoundKey = {}
@@ -12014,26 +12022,25 @@ function ITGOnline:QueueLiveScore(snapshot)
 		or self:RoomKey(self.currentRoomId)
 	self.pendingLiveScoreSnapshot = snapshot
 	if self.debugScoreTrace == true then
-		online_score_trace("live_score_queue room=" .. tostring(self.currentRoomId or "nil")
-			.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
-			.. " roundKey=" .. tostring(self.pendingLiveScoreRoundKey or "")
-			.. " score=" .. tostring(scorePercent)
-			.. " ex=" .. tostring(exScorePercent)
-			.. " hardex=" .. tostring(hardExScorePercent)
-			.. " displayed=" .. tostring(displayedPercent)
-			.. " mode=" .. tostring(scoreMode)
-			.. " combo=" .. tostring(combo)
-			.. " failed=" .. tostring(snapshot.Failed == true or snapshot.failed == true)
-			.. " frozen=" .. tostring(snapshot.Frozen == true or snapshot.frozen == true))
+		self.liveScoreQueueTraceAccepted = (tonumber(self.liveScoreQueueTraceAccepted) or 0) + 1
+		local traceNow = GetTimeSinceStart()
+		if traceNow >= (tonumber(self.liveScoreQueueTraceNextAt) or 0) then
+			online_score_trace("live_score_queue_activity room=" .. tostring(self.currentRoomId or "nil")
+				.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
+				.. " roundKey=" .. tostring(self.pendingLiveScoreRoundKey or "")
+				.. " accepted=" .. tostring(self.liveScoreQueueTraceAccepted)
+				.. " displayed=" .. tostring(displayedPercent)
+				.. " mode=" .. tostring(scoreMode)
+				.. " combo=" .. tostring(combo)
+				.. " failed=" .. tostring(snapshot.Failed == true or snapshot.failed == true))
+			self.liveScoreQueueTraceAccepted = 0
+			self.liveScoreQueueTraceNextAt = traceNow + 2
+		end
 	end
 	return true
 end
 
-function ITGOnline:RememberLiveScoreSnapshot(snapshot)
-	return self:QueueLiveScore(snapshot)
-end
-
-function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
+function ITGOnline:TickLiveScoreTransport()
 	if not self:HasActiveLiveScoreRoom() then
 		if self.pendingLiveScoreSnapshot ~= nil or tostring(self.pendingLiveScoreRoundKey or "") ~= "" or self.liveScoreInFlight == true then
 			self:StopLiveScoreFlush("tick_without_active_room")
@@ -12070,14 +12077,6 @@ function ITGOnline:QueueLiveScoreTickIfDue(snapshot)
 		end)
 	end
 
-	if type(snapshot) == "table" then
-		self:RememberLiveScoreSnapshot(snapshot)
-	elseif self.pendingLiveScoreSnapshot == nil and self.BuildCurrentScoreSnapshot then
-		local currentSnapshot = self:BuildCurrentScoreSnapshot()
-		if currentSnapshot then
-			self:RememberLiveScoreSnapshot(currentSnapshot)
-		end
-	end
 	return self:HasPendingLiveScore()
 end
 

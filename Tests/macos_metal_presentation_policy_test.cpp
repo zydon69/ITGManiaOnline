@@ -1,9 +1,7 @@
 #include "arch/LowLevelWindow/MacOSMetalPresentationPolicy.h"
 
-#include <cmath>
 #include <cstdlib>
 #include <iostream>
-#include <limits>
 #include <string>
 
 namespace {
@@ -13,10 +11,6 @@ void Require(bool condition, const std::string& message) {
     std::cerr << "macOS Metal presentation policy: " << message << std::endl;
     std::exit(1);
   }
-}
-
-bool Near(double lhs, double rhs) {
-  return std::abs(lhs - rhs) <= 0.0000001;
 }
 
 }  // namespace
@@ -36,17 +30,11 @@ int main() {
       windowed.displaySyncEnabled,
       "a composited CAMetalLayer must stay display-synchronized");
   Require(
-      windowed.scheduleMinimumPresentDuration,
-      "a composited present must retain a refresh-duration guard");
+      !windowed.scheduleMinimumPresentDuration,
+      "display-synchronized composited presents must not add a second cadence");
   Require(
-      Near(MinimumPresentDurationSeconds(windowed, 120.0), 1.0 / 120.0),
-      "the minimum duration must follow the physical refresh target");
-  Require(
-      Near(
-          MinimumPresentDurationSeconds(
-              windowed, std::numeric_limits<double>::quiet_NaN()),
-          1.0 / 60.0),
-      "an invalid refresh target must use the safe 60 Hz fallback");
+      MinimumPresentDurationSeconds(windowed, 120.0) == 0.0,
+      "display-synchronized composited presents must be submitted immediately");
 
   const Policy nativeFullscreen =
       PolicyForMode(ResolveMode(true, true, NativeWindowEvent::None));

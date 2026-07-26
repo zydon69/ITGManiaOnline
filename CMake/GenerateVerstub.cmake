@@ -18,7 +18,7 @@ if(WITH_FULL_RELEASE)
 elseif(WITH_NIGHTLY_RELEASE)
   set(generated_product_version "${SM_VERSION_TRADITIONAL}-NIGHTLY-git-${generated_git_hash}")
 else()
-  set(generated_product_version "${SM_VERSION_TRADITIONAL}-BETA-git-${generated_git_hash}")
+  set(generated_product_version "${SM_VERSION_TRADITIONAL}-git-${generated_git_hash}")
 endif()
 
 set(output_path "${SM_GENERATED_SRC_DIR}/verstub.cpp")
