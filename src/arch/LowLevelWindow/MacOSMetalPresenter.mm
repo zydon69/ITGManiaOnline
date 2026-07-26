@@ -64,16 +64,19 @@ constexpr int kMetalFrameLimiterWaitMs = 4;
 constexpr int kMetalReconfigureDrainWaitMs = 24;
 constexpr int kMetalShutdownDrainWaitMs = 250;
 constexpr int kMetalDrawablePrefetchMinRenderWaitUs = 500;
-constexpr int kMetalDrawablePrefetchMaxRenderWaitUs = 4000;
+constexpr int kMetalDrawablePrefetchMaxRenderWaitUs = 7500;
 constexpr uint64_t kMetalDisplayPacingRefreshUsec = 2000000;
 
 int MetalDrawablePrefetchRenderWaitUsec(double targetHz) {
   if (!std::isfinite(targetHz) || targetHz <= 1.0) {
     return kMetalDrawablePrefetchMaxRenderWaitUs;
   }
-  const double halfIntervalUsec = 500000.0 / targetHz;
+  // Leave one tenth of the physical interval for command encoding and submit.
+  // Waiting for only half an interval discarded drawables that arrived before
+  // the next output deadline and caused a visible repeated frame.
+  const double boundedIntervalUsec = 900000.0 / targetHz;
   return std::clamp(
-      static_cast<int>(std::llround(halfIntervalUsec)),
+      static_cast<int>(std::llround(boundedIntervalUsec)),
       kMetalDrawablePrefetchMinRenderWaitUs,
       kMetalDrawablePrefetchMaxRenderWaitUs);
 }
