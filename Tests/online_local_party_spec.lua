@@ -33,6 +33,14 @@ equal(versus.coordinatorSide, "P1", "two-player coordinator")
 equal(versus.twoPlayer, true, "two-player mode")
 equal(party.role_for_side(versus, "P1"), "coordinator", "P1 two-player role")
 equal(party.role_for_side(versus, "P2"), "companion", "P2 two-player role")
+equal(party.all_local_finals_accepted(versus, { P1 = true, P2 = false }), false,
+	"two-player evaluation must wait for P2's accepted final")
+equal(party.all_local_finals_accepted(versus, { P1 = true, P2 = true }), true,
+	"two-player evaluation releases after both local finals are accepted")
+equal(party.all_local_finals_accepted(soloP1, { P1 = true }), true,
+	"solo evaluation releases independently from remote machines")
+equal(party.all_local_finals_accepted(soloP1, { P1 = false }), false,
+	"solo evaluation must wait for its local final acknowledgement")
 equal(party.failed_player_route(versus, "P1"), "primary",
 	"P1 failure must use the primary score identity")
 equal(party.failed_player_route(versus, "P2"), "companion",
@@ -442,6 +450,15 @@ local playingTickEnd = assert(onlineHelpersSource:find("OnlineSongReloadComplete
 local playingTickSource = onlineHelpersSource:sub(playingTickStart, playingTickEnd - 1)
 assert(not playingTickSource:find("ITGOnline:FlushLiveScore", 1, true),
 	"the room countdown must not duplicate ScreenGameplay's primary live-score transport loop")
+local countdownPolicyStart = assert(onlineHelpersSource:find("function room_countdown_should_run", 1, true),
+	"online runtime must expose a dedicated countdown policy")
+local countdownPolicyEnd = assert(onlineHelpersSource:find("function start_connection_timers", countdownPolicyStart, true),
+	"countdown policy boundary must remain identifiable")
+local countdownPolicySource = onlineHelpersSource:sub(countdownPolicyStart, countdownPolicyEnd - 1)
+assert(countdownPolicySource:find('normalized_room_phase_for_runtime() ~= "starting"', 1, true),
+	"the pre-song countdown must stop as soon as gameplay starts")
+assert(not onlineHelpersSource:find("room_fast_runtime_should_run", 1, true),
+	"the old starting-or-playing countdown policy must not return")
 assert(onlineScorePushSource:find("ITGOnline:FlushLiveScore()", 1, true),
 	"ScreenGameplay must remain the sole owner of primary live-score transport")
 local helperReadyStart = assert(onlineHelpersSource:find("function maybe_set_lobby_ready", 1, true),

@@ -240,7 +240,6 @@ class RageSoundDriver : public RageDriver {
   uint64_t m_iNextUnderrunLogUsec = 0;
   uint64_t m_iLastMixerStarvationTraceUsec = 0;
   uint64_t m_iLastEmergencyCapTraceUsec = 0;
-  uint64_t m_iLastDecodeStallTraceUsec = 0;
 
   std::atomic<bool> m_bShutdownDecodeThread;
 

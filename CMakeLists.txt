@@ -46,6 +46,19 @@ if(BUILD_TESTING)
     NAME macos_metal_presentation_policy
     COMMAND macos_metal_presentation_policy_tests)
 
+  add_executable(
+    bitmap_text_attribute_range_tests
+    Tests/bitmap_text_attribute_range_test.cpp)
+  target_include_directories(
+    bitmap_text_attribute_range_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  set_property(
+    TARGET bitmap_text_attribute_range_tests PROPERTY CXX_STANDARD 17)
+  set_property(
+    TARGET bitmap_text_attribute_range_tests PROPERTY CXX_STANDARD_REQUIRED ON)
+  add_test(
+    NAME bitmap_text_attribute_range
+    COMMAND bitmap_text_attribute_range_tests)
+
   find_program(ITGMANIA_LUA_EXECUTABLE NAMES lua5.1 lua)
   if(ITGMANIA_LUA_EXECUTABLE)
     add_test(

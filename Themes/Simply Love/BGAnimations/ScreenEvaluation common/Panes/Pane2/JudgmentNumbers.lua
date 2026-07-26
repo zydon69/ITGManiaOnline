@@ -2,16 +2,11 @@ local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
 local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-local usesExPrimaryLayout = SL[pn].ActiveModifiers.ShowExScore or SL[pn].ActiveModifiers.ShowHardEXScore
 
--- Pane2 serves two different layouts.  EX/HardEX uses it as the primary score
--- pane, while ITG uses it as the secondary ITG+EX details pane.
-local P2Positions = usesExPrimaryLayout and {
-	TapNotes = -128,
-	Radar = -3,
-	Percent = 61,
-	SlashPossible = 61,
-} or {
+-- Pane geometry is a presentation contract, not a scoring-mode concern.
+-- JudgmentLabels.lua always uses this P2 layout; moving only the values for
+-- EX/HardEX caused the first judgment rows to detach from their labels.
+local P2Positions = {
 	TapNotes = 94,
 	Radar = 218,
 	Percent = 286,

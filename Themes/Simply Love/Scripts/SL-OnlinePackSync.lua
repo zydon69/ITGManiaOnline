@@ -925,6 +925,13 @@ end
 
 local function set_current_selection(song, steps, songInfo, source)
 	if not (GAMESTATE and song) then return end
+	if ITGOnline and ITGOnline.CaptureLocalChartIntentsForSong then
+		ITGOnline:CaptureLocalChartIntentsForSong(
+			song,
+			songInfo,
+			tostring(source or "pack_sync_set_current_selection") .. ":before_song_apply"
+		)
+	end
 	if GAMESTATE.SetCurrentSong then
 		local ok, err = pcall(function() GAMESTATE:SetCurrentSong(song) end)
 		if not ok then

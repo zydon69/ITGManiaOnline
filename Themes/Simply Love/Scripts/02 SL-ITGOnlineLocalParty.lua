@@ -70,6 +70,16 @@ function Party.role_for_side(plan, side)
 	return nil
 end
 
+function Party.all_local_finals_accepted(plan, acceptedBySide)
+	if type(plan) ~= "table" or type(acceptedBySide) ~= "table" then return false end
+	local requiredSides = type(plan.requiredSides) == "table" and plan.requiredSides or {}
+	if #requiredSides == 0 then return false end
+	for _, side in ipairs(requiredSides) do
+		if acceptedBySide[normalized_side(side)] ~= true then return false end
+	end
+	return true
+end
+
 function Party.failed_player_route(plan, side)
 	local role = Party.role_for_side(plan, side)
 	if role == "coordinator" then return "primary" end

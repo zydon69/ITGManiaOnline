@@ -1,4 +1,5 @@
 #include "BitmapText.h"
+#include "BitmapTextAttributeRange.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1079,47 +1080,28 @@ BitmapText::Attribute BitmapText::GetDefaultAttribute() const {
 
 void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
   const size_t printableGlyphs = m_aVertices.size() / 4;
-  if (iPos > printableGlyphs) {
+  std::vector<size_t> lineLengths;
+  lineLengths.reserve(m_wTextLines.size());
+  for (const auto& line : m_wTextLines) {
+    lineLengths.push_back(line.length());
+  }
+  const auto range = BitmapTextAttributeRange::Resolve(
+      lineLengths, printableGlyphs, iPos, attr.length);
+  if (!range.valid) {
     LOG->Warn(
         "BitmapText ignored attribute at out-of-range "
-        "position %zu for %zu glyphs.",
-        iPos, printableGlyphs);
+        "position %zu for %zu source characters.",
+        iPos, range.sourceCharacters);
     return;
   }
 
-  // Fixup position for new lines.
+  // Lua attribute positions and lengths address the source text, including
+  // newline characters. Vertices only contain printable glyphs. Convert both
+  // ends of the range before clamping so every preceding newline cannot
+  // accidentally remove one visible glyph from a later line.
   Attribute newAttr = attr;
-  auto lineIter = m_wTextLines.cbegin();
-
-  int iLines = 0;
-  size_t iAdjustedPos = iPos;
-
-  for (; lineIter != m_wTextLines.cend(); ++lineIter) {
-    size_t length = lineIter->length() +
-                    1;  // +1 to account for implicit newline at the end
-    if (length > iAdjustedPos) {
-      break;
-    }
-    iAdjustedPos -= length;
-    ++iLines;
-  }
-
-  if (newAttr.length > 0) {
-    if (static_cast<size_t>(newAttr.length) > printableGlyphs - iPos) {
-      newAttr.length = static_cast<int>(printableGlyphs - iPos);
-    }
-    // Fixup length for new lines.
-    size_t iAdjustedEndPos = iAdjustedPos + newAttr.length;
-    for (; lineIter != m_wTextLines.cend(); ++lineIter) {
-      size_t length = lineIter->length() +
-                      1;  // +1 to account for implicit newline at the end
-      if (length > iAdjustedEndPos || newAttr.length == 0) {
-        break;
-      }
-      iAdjustedEndPos -= length;
-      newAttr.length -= 1;
-    }
-  }
+  const size_t iStartPos = range.start;
+  newAttr.length = range.length;
 
   if (newAttr.length ==
       0) {  // Attribute doesn't cover any printable characters
@@ -1128,14 +1110,6 @@ void BitmapText::AddAttribute(size_t iPos, const Attribute& attr) {
 
   // Check if there are existing attributes overlapping this one. We might need
   // to remove or fix them up.
-  if (static_cast<size_t>(iLines) > iPos) {
-    LOG->Warn(
-        "BitmapText ignored attribute with invalid "
-        "line-adjusted position.");
-    return;
-  }
-
-  const size_t iStartPos = iPos - iLines;
   const size_t iEndPos =
       newAttr.length < 0 ? printableGlyphs : iStartPos + newAttr.length;
 

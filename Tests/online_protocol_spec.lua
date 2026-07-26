@@ -608,4 +608,101 @@ for _ = 1, 10000 do
 	end
 end
 
+local captureStart = assert(packSyncContent:find(
+	"ITGOnline:CaptureLocalChartIntentsForSong(", 1, true
+), "pack sync must capture per-player chart intent")
+local songApplyStart = assert(packSyncContent:find(
+	"GAMESTATE:SetCurrentSong(song)", captureStart, true
+), "pack sync must apply the selected song")
+assert(captureStart < songApplyStart,
+	"per-player chart intent must be captured before SetCurrentSong can invalidate it")
+assert(onlineClientContent:find("function ITGOnline:ResolveLocalChartIntent", 1, true)
+	and onlineClientContent:find('or intentSteps', 1, true),
+	"online chart resolution must preserve each local player's wheel choice")
+assert(onlineClientContent:find(
+	"local steps = GAMESTATE:GetCurrentSteps(selectionPlayer)", 1, true
+), "a new manager selection must use the live wheel chart instead of stale option state")
+assert(onlineClientContent:find("function ITGOnline:LocalPartyReadyForEvaluation", 1, true)
+	and onlineClientContent:find(
+		"hold_gameplay_release reason=local_party_final_scores_accepted", 1, true
+	),
+	"gameplay must release to evaluation after local, not global, final acceptance")
+assert(onlineClientContent:find("roomDeleted = roomDeleted == true", 1, true)
+	and onlineClientContent:find(
+		'PurgeStaleLobbyCandidate(roomId, "leave_room_response_deleted")', 1, true
+	),
+	"an authoritative deleted-room leave response must purge the lobby immediately")
+local resultsFastPathStart = assert(onlineClientContent:find(
+	"function ITGOnline:ApplyResultsReadyPayload", 1, true
+), "results-ready must expose a compact terminal-state applicator")
+local resultsFastPathEnd = assert(onlineClientContent:find(
+	"function ITGOnline:HandleRealtimeEvent", resultsFastPathStart, true
+), "results-ready fast-path boundary must remain identifiable")
+local resultsFastPathSource = onlineClientContent:sub(resultsFastPathStart, resultsFastPathEnd - 1)
+assert(resultsFastPathSource:find("ApplyPlayStateSnapshot", 1, true)
+	and resultsFastPathSource:find("FetchPlayState", 1, true),
+	"results-ready must apply its terminal projection and reconcile only play-state when absent")
+assert(not resultsFastPathSource:find("ApplyRoomSnapshot", 1, true)
+	and not resultsFastPathSource:find("FetchRoom", 1, true),
+	"results-ready must not rebuild or download a complete room during gameplay exit")
+local resultsBranch = assert(onlineClientContent:find(
+	'elseif name == "room.results_ready" then', resultsFastPathEnd, true
+), "results-ready must have a dedicated realtime branch")
+local genericRoomBranch = assert(onlineClientContent:find(
+	'elseif name and name:match("^room%.") then', resultsBranch, true
+), "generic room event branch must remain available")
+assert(resultsBranch < genericRoomBranch,
+	"results-ready must bypass generic full-room snapshot processing")
+
+local networkManagerHeaderPath = sourceRoot .. "/src/NetworkManager.h"
+local networkManagerHeaderFile = assert(io.open(networkManagerHeaderPath, "rb"), "missing NetworkManager header")
+local networkManagerHeader = networkManagerHeaderFile:read("*a")
+networkManagerHeaderFile:close()
+local networkManagerPath = sourceRoot .. "/src/NetworkManager.cpp"
+local networkManagerFile = assert(io.open(networkManagerPath, "rb"), "missing NetworkManager source")
+local networkManagerSource = networkManagerFile:read("*a")
+networkManagerFile:close()
+assert(networkManagerHeader:find("std::vector<std::thread> httpWorkers", 1, true)
+	and networkManagerSource:find("constexpr std::size_t kHttpWorkerCount = 4", 1, true),
+	"local two-player HTTP traffic must use a bounded concurrent worker pool")
+assert(networkManagerSource:find("ix::HttpClient requestClient;", 1, true)
+	and networkManagerSource:find("requestClient.setTLSOptions(this->tlsOptions)", 1, true)
+	and networkManagerSource:find(
+		"requestClient.request(req->url, req->verb, req->body, req)", 1, true
+	),
+	"each worker must execute its API request synchronously with isolated IXHttpClient state")
+assert(onlineClientContent:find(
+	"ITGOnline.realtimeGhostSeconds = ITGOnline.realtimeGhostSeconds or 15.0", 1, true
+) and not onlineClientContent:find(
+	"tonumber(self.realtimeGhostSeconds) or 75.0", 1, true
+), "all realtime ghost-detection fallbacks must use the server ping-based timeout")
+
+local leaderboardPath = sourceRoot
+	.. "/Themes/Simply Love/BGAnimations/ScreenGameplay overlay/OnlineLiveLeaderboard.lua"
+local leaderboardFile = assert(io.open(leaderboardPath, "rb"), "missing live leaderboard")
+local leaderboardContent = leaderboardFile:read("*a")
+leaderboardFile:close()
+assert(leaderboardContent:find("local function local_user_roles()", 1, true)
+	and leaderboardContent:find('Name="RightMarker"', 1, true)
+	and leaderboardContent:find('localRole == "P2" and "<" or ""', 1, true),
+	"the live leaderboard must identify P2 locally and draw its marker on the right")
+
+local paneNumbersPath = sourceRoot
+	.. "/Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane2/JudgmentNumbers.lua"
+local paneNumbersFile = assert(io.open(paneNumbersPath, "rb"), "missing pane 2 judgment values")
+local paneNumbersContent = paneNumbersFile:read("*a")
+paneNumbersFile:close()
+assert(not paneNumbersContent:find("usesExPrimaryLayout", 1, true)
+	and paneNumbersContent:find("TapNotes = 94", 1, true),
+	"EX and HardEX values must share the label-aligned P2 geometry")
+local playerOptionsPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-PlayerOptions.lua"
+local playerOptionsFile = assert(io.open(playerOptionsPath, "rb"), "missing player options")
+local playerOptionsContent = playerOptionsFile:read("*a")
+playerOptionsFile:close()
+assert(playerOptionsContent:find("ApplySimplyLoveScoreMode = function", 1, true)
+	and onlineClientContent:find(
+		"ApplySimplyLoveScoreMode(player, options.score_mode)", 1, true
+	),
+	"local options and manager-global options must share one complete score-mode applicator")
+
 print("online protocol behavioral tests passed")

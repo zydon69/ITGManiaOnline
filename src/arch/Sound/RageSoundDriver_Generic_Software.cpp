@@ -513,7 +513,7 @@ void RageSoundDriver::DecodeThread() {
   uint64_t emergency_entries = 0;
   uint64_t emergency_capped_recoveries = 0;
   uint64_t low_watermark_cycles = 0;
-  uint64_t decode_stall_cycles = 0;
+  uint64_t decode_backpressure_cycles = 0;
   uint64_t scheduler_loops = 0;
   uint64_t last_scheduler_stats_log_usec = 0;
 
@@ -662,21 +662,10 @@ void RageSoundDriver::DecodeThread() {
       } else {
         // If decode can't progress right now, back off progressively to avoid
         // a hot spin loop while still retrying quickly.
-        ++decode_stall_cycles;
+        ++decode_backpressure_cycles;
         idle_decode_spin_count = std::min(idle_decode_spin_count + 1, 8);
         const int backoffUsecs = 250 + idle_decode_spin_count * 250;
         iUsecs = std::max(iUsecs / 4, backoffUsecs);
-        if (traceEnabled) {
-          const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
-          if (m_iLastDecodeStallTraceUsec == 0 ||
-              nowUsec - m_iLastDecodeStallTraceUsec >= 500000) {
-            m_iLastDecodeStallTraceUsec = nowUsec;
-            LOG->Warn(
-                "UNDERRUN_TRACE: decode_stall active=1 needs_decode=1 "
-                "wrote_any=0 spin=%d sleep_us=%d sample_rate=%d",
-                idle_decode_spin_count, iUsecs, iSampleRate);
-          }
-        }
       }
     } else if (wrote_any_data) {
       critical_starvation_since_usec = 0;
@@ -705,11 +694,13 @@ void RageSoundDriver::DecodeThread() {
         LOG->Info(
             "UNDERRUN_TRACE: decode_scheduler_stats loops=%" PRIu64
             " emergency_entries=%" PRIu64 " emergency_capped=%" PRIu64
-            " low_watermark_cycles=%" PRIu64 " decode_stall_cycles=%" PRIu64
+            " low_watermark_cycles=%" PRIu64
+            " decode_backpressure_cycles=%" PRIu64
             " active=%d needs_decode=%d wrote_any=%d sleep_us=%d",
             scheduler_loops, emergency_entries, emergency_capped_recoveries,
-            low_watermark_cycles, decode_stall_cycles, has_active_sound ? 1 : 0,
-            still_needs_decode ? 1 : 0, wrote_any_data ? 1 : 0, iUsecs);
+            low_watermark_cycles, decode_backpressure_cycles,
+            has_active_sound ? 1 : 0, still_needs_decode ? 1 : 0,
+            wrote_any_data ? 1 : 0, iUsecs);
       }
     }
     usleep(iUsecs);

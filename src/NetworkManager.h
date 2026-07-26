@@ -195,7 +195,7 @@ class NetworkManager {
 
   std::atomic<bool> shutdownWorkers{false};
 
-  std::thread httpWorker;
+  std::vector<std::thread> httpWorkers;
   std::mutex httpWorkerMutex;
   std::condition_variable httpWorkerCv;
   std::queue<std::function<void()>> httpWorkerQueue;

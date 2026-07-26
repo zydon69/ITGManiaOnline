@@ -2,6 +2,7 @@ local max_rows = 8
 local panel_width = GetOnlineGameplayPanelWidth and GetOnlineGameplayPanelWidth("leaderboard") or 300
 local panel_padding = panel_width * 0.07
 local marker_x = (-panel_width / 2) + panel_padding
+local right_marker_x = (panel_width / 2) - math.max(4, panel_padding * 0.2)
 local label_x = (-panel_width / 2) + (panel_width * 0.15)
 local score_x = (panel_width / 2) - (panel_width * 0.12)
 local status_x = (panel_width / 2) - panel_padding
@@ -66,11 +67,19 @@ local function online_display_name(user, fallback)
 	return tostring(user.display_name or user.displayName or user.name or fallback or "Player")
 end
 
-local function local_user_id()
-	if ITGOnline and ITGOnline.user and ITGOnline.user.id then
-		return tostring(ITGOnline.user.id)
+local function local_user_roles()
+	local roles = {}
+	if not (ITGOnline and ITGOnline.UserForLocalPlayer) then return roles end
+	local players = ITGOnline.RequiredLocalPlayers
+		and ITGOnline:RequiredLocalPlayers() or { PLAYER_1 }
+	for _, player in ipairs(players) do
+		local side = tostring(ToEnumShortString and ToEnumShortString(player) or player)
+		side = side:find("P2", 1, true) and "P2" or "P1"
+		local user = ITGOnline:UserForLocalPlayer(player)
+		local userId = tostring(user and user.id or "")
+		if userId ~= "" then roles[userId] = side end
 	end
-	return ""
+	return roles
 end
 
 local function leaderboard_trace(message)
@@ -530,23 +539,24 @@ local function update_rows(frame, rows)
 	last_layout_signature = signature
 	if not show then return end
 
-	local self_id = local_user_id()
+	local localRoles = local_user_roles()
 	for i = 1, max_rows do
 		local row = frame:GetChild("Row" .. tostring(i))
 		local data = rows[i]
 		if row and data then
 			local label = row:GetChild("Label")
 			local status = row:GetChild("Status")
+			local localRole = localRoles[data.user_id]
 			local statusText = data.exited and "X" or (data.failed and "F" or (data.finished and "OK" or ""))
 			local rowColor = color("#ffffff")
 			if data.failed or data.exited then
 				rowColor = color("#ff3b30")
 			elseif data.finished then
 				rowColor = color("#66ff99")
-			elseif data.user_id == self_id then
+			elseif localRole ~= nil then
 				rowColor = color("#ffd166")
 			end
-			if data.user_id == self_id and ITGOnline and ITGOnline.debugScoreTrace == true then
+			if localRole ~= nil and ITGOnline and ITGOnline.debugScoreTrace == true then
 				local shownValue = tonumber(data.percent) or 0
 				local localShown = tonumber(ITGOnline.lastDisplayedScoreSnapshot and ITGOnline.lastDisplayedScoreSnapshot.displayedPercent) or -1
 				local delta = (localShown >= 0) and (shownValue - localShown) or 0
@@ -569,8 +579,13 @@ local function update_rows(frame, rows)
 			end
 			local marker = row:GetChild("Marker")
 			if marker then
-				marker:settext(data.user_id == self_id and ">" or "")
+				marker:settext(localRole == "P1" and ">" or "")
 				marker:diffuse(rowColor)
+			end
+			local rightMarker = row:GetChild("RightMarker")
+			if rightMarker then
+				rightMarker:settext(localRole == "P2" and "<" or "")
+				rightMarker:diffuse(rowColor)
 			end
 			local score = row:GetChild("Score")
 			if score then
@@ -603,6 +618,7 @@ local af = Def.ActorFrame{
 			.. " local_x=" .. tostring(self:GetX())
 			.. " local_y=" .. tostring(self:GetY())
 			.. " marker_x=" .. tostring(marker_x)
+			.. " right_marker_x=" .. tostring(right_marker_x)
 			.. " label_x=" .. tostring(label_x)
 			.. " score_x=" .. tostring(score_x)
 			.. " status_x=" .. tostring(status_x)
@@ -681,6 +697,12 @@ for i = 1, max_rows do
 			Name="Marker",
 			InitCommand=function(self)
 				self:x(marker_x):horizalign(center):zoom(row_zoom):shadowlength(1):diffusealpha(0.95)
+			end,
+		},
+		LoadFont("Common Normal")..{
+			Name="RightMarker",
+			InitCommand=function(self)
+				self:x(right_marker_x):horizalign(center):zoom(row_zoom):shadowlength(1):diffusealpha(0.95)
 			end,
 		},
 		LoadFont("Common Normal")..{

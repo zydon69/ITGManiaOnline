@@ -1181,6 +1181,13 @@ ApplyOnlineSongSelection = function(songInfo)
 	end
 
 	local applyOk = safe_online_call("apply online song selection", function()
+		if ITGOnline and ITGOnline.CaptureLocalChartIntentsForSong then
+			ITGOnline:CaptureLocalChartIntentsForSong(
+				song,
+				songInfo,
+				"legacy_apply_song_selection:before_song_apply"
+			)
+		end
 		GAMESTATE:SetCurrentSong(song)
 		for player in ivalues(GAMESTATE:GetEnabledPlayers()) do
 			local playerSteps = matchedSteps
@@ -2643,11 +2650,8 @@ function room_runtime_should_run()
 	return phase == "starting" or phase == "playing"
 end
 
-function room_fast_runtime_should_run()
-	if not room_runtime_should_run() then
-		return false
-	end
-
+function room_countdown_should_run()
+	if normalized_room_phase_for_runtime() ~= "starting" then return false end
 	local screenName = current_online_screen_name()
 	return not is_evaluation_screen(screenName) and screenName ~= "ScreenOnlineLobbies"
 end
@@ -2680,7 +2684,7 @@ function start_room_timers(actor, reason)
 	end
 
 	local phase = normalized_room_phase_for_runtime()
-	if not room_fast_runtime_should_run() then
+	if not room_countdown_should_run() then
 		if actor.roomTimersActive then
 			stop_room_timers(actor)
 		end
@@ -2778,9 +2782,11 @@ CreateOnlineHandler = function()
 					self.connecting = false
 					self.inLobby = false
 					self.errorMsg = nil
-						self.reconnectDelay = 1
-						self.deadmanTimeoutSeconds = 75
-						self.lastLobbyStatePayload = nil
+					self.reconnectDelay = 1
+					self.deadmanTimeoutSeconds = tonumber(
+						ITGOnline and ITGOnline.realtimeGhostSeconds
+					) or 15
+					self.lastLobbyStatePayload = nil
 					self.roomTimersActive = false
 					self.onlineOperationTokens = {}
 					self.onlineOperations = {}
@@ -3072,13 +3078,13 @@ CreateOnlineHandler = function()
 						local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
 						online_flow_trace_throttled("realtime_deadman_tick", 10.0,
 							"realtime_deadman_tick idle=" .. tostring(idle)
-							.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 75)
+							.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15)
 							.. " connected=" .. tostring(self.connected == true)
 							.. " socket=" .. tostring(self.socket ~= nil))
-						if idle > (self.deadmanTimeoutSeconds or 75) then
+						if idle > (self.deadmanTimeoutSeconds or 15) then
 							if online_trace then
 								online_trace("FLOW realtime_deadman_timeout idle=" .. tostring(idle)
-									.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 75))
+									.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15))
 							end
 							if ITGOnline and ITGOnline.ForceRealtimeReconnect then
 								ITGOnline:ForceRealtimeReconnect("handler_deadman_timeout")
@@ -3154,7 +3160,7 @@ CreateOnlineHandler = function()
 									.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
 								return
 							end
-							if not room_fast_runtime_should_run() then
+							if not room_countdown_should_run() then
 								local phase = normalized_room_phase_for_runtime()
 								online_flow_trace("online_playing_countdown_stop reason=inactive_runtime"
 									.. " phase=" .. tostring(phase)

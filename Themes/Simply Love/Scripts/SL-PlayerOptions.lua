@@ -281,9 +281,11 @@ local GetPlayableTrails = function(course)
 	return trails
 end
 
-local ApplyScoreMode = function(player, mode)
+ApplySimplyLoveScoreMode = function(player, mode)
 	local mods, sl_pn = PlayerMods(player)
 	if not mods then return {}, {} end
+	mode = tostring(mode or "itg"):lower()
+	if mode ~= "ex" and mode ~= "hardex" then mode = "itg" end
 	local is_ex = mode == "ex"
 	local is_hardex = mode == "hardex"
 
@@ -296,6 +298,8 @@ local ApplyScoreMode = function(player, mode)
 
 	return mods, sl_pn
 end
+
+local ApplyScoreMode = ApplySimplyLoveScoreMode
 
 local SafeAssetList = function(context, fn, fallback)
 	local ok, values = SafeCall(context, fn)

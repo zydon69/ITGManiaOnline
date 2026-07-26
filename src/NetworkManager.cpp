@@ -105,6 +105,10 @@ constexpr std::size_t kMaxCredentialPartLength = 256;
 constexpr std::size_t kMaxMainThreadTaskQueue = 4096;
 constexpr std::size_t kMaxTerminalMainThreadTaskQueue = 8192;
 constexpr std::size_t kMaxHttpWorkerQueue = 256;
+// API calls for two local online players must not share a single blocking
+// connection lane. One stalled connect previously held every score, heartbeat,
+// and reconciliation request behind it until the timeout expired.
+constexpr std::size_t kHttpWorkerCount = 4;
 constexpr std::size_t kMaxDownloadWorkerQueue = 8;
 constexpr std::size_t kMaxWebSocketWorkerQueue = 64;
 constexpr int64_t kDefaultMaxHttpResponseBytes = 8LL * 1024LL * 1024LL;
@@ -1174,7 +1178,10 @@ NetworkManager::NetworkManager() : httpClient(true), downloadClient(true) {
 
   this->ClearDownloads();
 
-  this->httpWorker = std::thread(&NetworkManager::RunHttpWorker, this);
+  this->httpWorkers.reserve(kHttpWorkerCount);
+  for (std::size_t i = 0; i < kHttpWorkerCount; ++i) {
+    this->httpWorkers.emplace_back(&NetworkManager::RunHttpWorker, this);
+  }
   this->downloadWorker = std::thread(&NetworkManager::RunDownloadWorker, this);
   this->webSocketWorker =
       std::thread(&NetworkManager::RunWebSocketWorker, this);
@@ -1334,12 +1341,14 @@ void NetworkManager::StopWorkers() {
   ClearQueuedTasks(this->downloadWorkerMutex, this->downloadWorkerQueue);
   ClearQueuedTasks(this->webSocketWorkerMutex, this->webSocketWorkerQueue);
 
-  this->httpWorkerCv.notify_one();
+  this->httpWorkerCv.notify_all();
   this->downloadWorkerCv.notify_one();
   this->webSocketWorkerCv.notify_one();
 
-  if (this->httpWorker.joinable()) {
-    this->httpWorker.join();
+  for (auto& worker : this->httpWorkers) {
+    if (worker.joinable()) {
+      worker.join();
+    }
   }
   if (this->downloadWorker.joinable()) {
     this->downloadWorker.join();
@@ -1752,12 +1761,9 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
         return;
       }
 
-      auto& workerClient =
-          useDownloadClient ? this->downloadClient : this->httpClient;
-
-      workerClient.performRequest(
-          req, [this, args, downloadFile, downloadError, downloadFilename,
-                tempDownloadFilename](const ix::HttpResponsePtr& response) {
+      auto responseHandler =
+          [this, args, downloadFile, downloadError, downloadFilename,
+           tempDownloadFilename](const ix::HttpResponsePtr& response) {
             if (!args.downloadFile.empty()) {
               std::string error = !downloadError->empty()
                                       ? *downloadError
@@ -1855,7 +1861,22 @@ HttpRequestFuturePtr NetworkManager::HttpRequest(const HttpRequestArgs& args) {
                     args.downloadFile.c_str());
               }
             }
-          });
+          };
+
+      if (useDownloadClient) {
+        // Downloads remain serialized so archive replacement and cleanup keep
+        // their existing deterministic order.
+        this->downloadClient.performRequest(req, std::move(responseHandler));
+      } else {
+        // IXHttpClient owns mutable socket state and is not safe to share across
+        // concurrent workers. Give every request its own client while the
+        // bounded worker pool controls total concurrency.
+        ix::HttpClient requestClient;
+        requestClient.setTLSOptions(this->tlsOptions);
+        const auto response =
+            requestClient.request(req->url, req->verb, req->body, req);
+        responseHandler(response);
+      }
     });
   }
 

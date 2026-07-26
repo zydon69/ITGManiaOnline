@@ -85,6 +85,7 @@ ITGOnline.currentRoomBlockedOpenCount = ITGOnline.currentRoomBlockedOpenCount or
 ITGOnline.currentRoomBlockedLastNoticeKey = ITGOnline.currentRoomBlockedLastNoticeKey or ""
 ITGOnline.currentSongPayload = ITGOnline.currentSongPayload or nil
 ITGOnline.pendingOnlineOptionStateByPlayer = ITGOnline.pendingOnlineOptionStateByPlayer or {}
+ITGOnline.localChartIntentByPlayer = ITGOnline.localChartIntentByPlayer or {}
 ITGOnline.currentRoomRoundKey = ITGOnline.currentRoomRoundKey or ""
 ITGOnline.lastResultSongPayload = ITGOnline.lastResultSongPayload or nil
 ITGOnline.songPayloadBySelectionId = ITGOnline.songPayloadBySelectionId or {}
@@ -112,8 +113,11 @@ ITGOnline.realtimeClockPingSamples = ITGOnline.realtimeClockPingSamples or {}
 ITGOnline.realtimeClockPingOrder = ITGOnline.realtimeClockPingOrder or {}
 ITGOnline.lastRealtimeHealthState = ITGOnline.lastRealtimeHealthState or ""
 ITGOnline.lastRealtimeStateReconcileAt = ITGOnline.lastRealtimeStateReconcileAt or 0
-ITGOnline.realtimeStaleSeconds = ITGOnline.realtimeStaleSeconds or 45.0
-ITGOnline.realtimeGhostSeconds = ITGOnline.realtimeGhostSeconds or 75.0
+-- The server emits a control ping every five seconds. Three missed pings are
+-- sufficient to replace a half-open socket; waiting 75 seconds allowed the
+-- server's acknowledged-event delivery to degrade long before recovery began.
+ITGOnline.realtimeStaleSeconds = ITGOnline.realtimeStaleSeconds or 8.0
+ITGOnline.realtimeGhostSeconds = ITGOnline.realtimeGhostSeconds or 15.0
 ITGOnline.criticalRoomActionResyncMinIntervalSeconds = ITGOnline.criticalRoomActionResyncMinIntervalSeconds or 0.75
 ITGOnline.lastCriticalRoomActionResyncAt = ITGOnline.lastCriticalRoomActionResyncAt or 0
 ITGOnline.lastSyncRequestedAt = ITGOnline.lastSyncRequestedAt or 0
@@ -1709,6 +1713,24 @@ function ITGOnline:RememberOnlineOptionSteps(player, steps, source)
 		.. " localPlayer=" .. tostring(optionPlayerKey))
 end
 
+local function online_option_state_matches_current_selection(state)
+	if type(state) ~= "table" then return false end
+	if not (ITGOnline and ITGOnline.CurrentOptionsSelectionKey) then return false end
+
+	local rememberedSelectionKey = tostring(state.selectionKey or "")
+	local currentSelectionKey = tostring(ITGOnline:CurrentOptionsSelectionKey(ITGOnline.currentRoom) or "")
+	if rememberedSelectionKey == "" or currentSelectionKey == ""
+		or rememberedSelectionKey ~= currentSelectionKey then
+		return false
+	end
+
+	local rememberedSongHash = normalized_hash(state.songHash)
+	local selectedSong = ITGOnline.currentRoom and ITGOnline.currentRoom.selected_song or {}
+	local selectedSongHash = normalized_hash(selectedSong.song_hash or selectedSong.songHash)
+	return rememberedSongHash == "" or selectedSongHash == ""
+		or rememberedSongHash == selectedSongHash
+end
+
 local function selected_steps(player)
 	player = player or first_enabled_player()
 	if not GAMESTATE then return nil end
@@ -1718,16 +1740,22 @@ local function selected_steps(player)
 
 	local playerState = ITGOnline and ITGOnline.pendingOnlineOptionStateByPlayer
 		and ITGOnline.pendingOnlineOptionStateByPlayer[local_player_key(player)] or nil
-	local rememberedSteps = playerState and playerState.steps or nil
+	local playerStateMatches = online_option_state_matches_current_selection(playerState)
+	local rememberedSteps = playerStateMatches and playerState.steps or nil
 	if not rememberedSteps
 		and not (ITGOnline and ITGOnline.IsLocalTwoPlayerSession
-			and ITGOnline:IsLocalTwoPlayerSession()) then
+			and ITGOnline:IsLocalTwoPlayerSession())
+		and online_option_state_matches_current_selection({
+			selectionKey = ITGOnline and ITGOnline.pendingOnlineOptionSelectionKey or "",
+			songHash = ITGOnline and ITGOnline.pendingOnlineOptionSongHash or "",
+		})
+	then
 		rememberedSteps = ITGOnline and ITGOnline.pendingOnlineOptionSteps or nil
 	end
 	if steps_belongs_to_current_song(rememberedSteps) then
 		if online_flow_trace then
 			local age = (GetTimeSinceStart and GetTimeSinceStart() or 0)
-				- (tonumber(playerState and playerState.at or ITGOnline.pendingOnlineOptionStepsAt) or 0)
+				- (tonumber(playerStateMatches and playerState.at or ITGOnline.pendingOnlineOptionStepsAt) or 0)
 			local chartHash = ITGOnline.ChartHashForSteps and ITGOnline:ChartHashForSteps(rememberedSteps) or ""
 			local difficulty = rememberedSteps.GetDifficulty and enum_short(rememberedSteps:GetDifficulty()) or ""
 			local meter = rememberedSteps.GetMeter and tonumber(rememberedSteps:GetMeter()) or nil
@@ -1736,7 +1764,7 @@ local function selected_steps(player)
 					.. tostring(local_player_key(player)) .. ":" .. tostring(chartHash),
 				10.0,
 				"option_stepchart_using_remembered"
-				.. " source=" .. tostring(playerState and playerState.source
+				.. " source=" .. tostring(playerStateMatches and playerState.source
 					or ITGOnline.pendingOnlineOptionStepsSource or "unknown")
 				.. " age=" .. string.format("%.3f", age)
 				.. " player=" .. tostring(local_player_key(player))
@@ -2948,8 +2976,8 @@ function ITGOnline:RealtimeHealthSnapshot()
 	local age = self.RealtimeLastMessageAge and self:RealtimeLastMessageAge() or 999
 	local connected = self.RealtimeIsConnected and self:RealtimeIsConnected() or false
 	local connecting = self.realtimeConnecting == true
-	local staleAt = tonumber(self.realtimeStaleSeconds) or 45.0
-	local ghostAt = tonumber(self.realtimeGhostSeconds) or 75.0
+	local staleAt = tonumber(self.realtimeStaleSeconds) or 8.0
+	local ghostAt = tonumber(self.realtimeGhostSeconds) or 15.0
 	local state = "offline"
 	local label = online_client_text("RealtimeHttpOnly", "HTTP only")
 	local color = {0.55, 0.55, 0.55, 0.90}
@@ -3154,7 +3182,7 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 	if self.realtimeConnected and not self.realtimeConnecting then
 		local age = self:RealtimeLastMessageAge()
-		local ghostAt = tonumber(self.realtimeGhostSeconds) or 75.0
+		local ghostAt = tonumber(self.realtimeGhostSeconds) or 15.0
 		if age > ghostAt then
 			online_flow_trace("realtime_ghost_detected source=" .. tostring(source or "unknown")
 				.. " age=" .. string.format("%.3f", age)
@@ -5141,6 +5169,13 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.onlineOptionsPresentedKey = ""
 	self.onlineOptionsPresentedAt = 0
 	self.readyRequestBlockedErrors = {}
+	self.pendingOnlineOptionStateByPlayer = {}
+	self.pendingOnlineOptionSteps = nil
+	self.pendingOnlineOptionStepsPlayer = nil
+	self.pendingOnlineOptionStepsAt = 0
+	self.pendingOnlineOptionStepsSource = ""
+	self.pendingOnlineOptionSongHash = ""
+	self.pendingOnlineOptionSelectionKey = ""
 	self.lastFinalScoreKey = ""
 	self.lastFinalScoreInFlightKey = ""
 	self.scoreClientActionIdsByKey = {}
@@ -5320,6 +5355,8 @@ end
 function ITGOnline:ApplyGlobalOptionsToLocalState(room, source)
 	local options = self:NormalizeGlobalOptions(room and room.global_options)
 	apply_music_rate(options.music_rate)
+	local key = tostring(options.score_mode) .. "|" .. string.format("%.3f", options.music_rate)
+	local optionsChanged = self.lastAppliedGlobalOptionsKey ~= key
 
 	if GAMESTATE and GAMESTATE.GetEnabledPlayers then
 		local ok, players = safe_call("global_options_enabled_players", function()
@@ -5327,15 +5364,47 @@ function ITGOnline:ApplyGlobalOptionsToLocalState(room, source)
 		end)
 		for player in ivalues(ok and type(players) == "table" and players or {}) do
 			local pn = type(ToEnumShortString) == "function" and ToEnumShortString(player) or nil
-			if pn and SL and SL[pn] and SL[pn].ActiveModifiers then
-				SL[pn].ActiveModifiers.ShowExScore = options.score_mode == "ex"
-				SL[pn].ActiveModifiers.ShowHardEXScore = options.score_mode == "hardex"
+			if type(ApplySimplyLoveScoreMode) == "function" then
+				local mods, playerState = ApplySimplyLoveScoreMode(player, options.score_mode)
+				if optionsChanged then
+					online_flow_trace("global_score_mode_player_applied"
+						.. " source=" .. tostring(source or "unknown")
+						.. " localPlayer=" .. tostring(pn or player)
+						.. " score_mode=" .. tostring(options.score_mode)
+						.. " ex=" .. tostring(mods.ShowExScore == true)
+						.. " hardex=" .. tostring(mods.ShowHardEXScore == true)
+						.. " faPlusWindow=" .. tostring(mods.ShowFaPlusWindow == true)
+						.. " faPlusPane=" .. tostring(mods.ShowFaPlusPane == true)
+						.. " smallerWhite=" .. tostring(mods.SmallerWhite == true)
+						.. " evalPanePrimary=" .. tostring(playerState.EvalPanePrimary or "nil"))
+				end
+			elseif pn and SL and SL[pn] and SL[pn].ActiveModifiers then
+				-- Theme scripts are loaded before online room snapshots.  Keep this
+				-- branch fail-closed for custom loaders, but never leave a partially
+				-- applied scoring mode behind.
+				local mods = SL[pn].ActiveModifiers
+				local isEx = options.score_mode == "ex"
+				local isHardEx = options.score_mode == "hardex"
+				mods.ShowExScore = isEx
+				mods.ShowHardEXScore = isHardEx
+				mods.ShowFaPlusWindow = isEx or isHardEx
+				mods.ShowFaPlusPane = isEx or isHardEx or mods.ShowFaPlusPane == true
+				mods.SmallerWhite = isHardEx
+				SL[pn].EvalPanePrimary =
+					((mods.ShowFaPlusWindow or mods.ShowExScore or mods.ShowHardEXScore)
+						and mods.ShowFaPlusPane) and 2 or 1
+				if optionsChanged then
+					online_flow_trace("global_score_mode_player_applied"
+						.. " source=" .. tostring(source or "unknown")
+						.. " localPlayer=" .. tostring(pn)
+						.. " score_mode=" .. tostring(options.score_mode)
+						.. " owner=fallback")
+				end
 			end
 		end
 	end
 
-	local key = tostring(options.score_mode) .. "|" .. string.format("%.3f", options.music_rate)
-	if self.lastAppliedGlobalOptionsKey ~= key then
+	if optionsChanged then
 		self.lastAppliedGlobalOptionsKey = key
 		online_flow_trace("global_options_applied source=" .. tostring(source or "unknown")
 			.. " score_mode=" .. tostring(options.score_mode)
@@ -7145,6 +7214,18 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	if not self:IsOnlineGameplayScreen(screenName) then return false end
 	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("evaluation_guard") or (self.PlayStateKey and self:PlayStateKey() or "")
+	if self.LocalPartyReadyForEvaluation
+		and self:LocalPartyReadyForEvaluation(self.currentRoom, roundKey)
+	then
+		self.onlineGameplayEvaluationMarkKey = roundKey
+		self.onlineGameplayEndedKey = roundKey
+		online_flow_trace_throttled("evaluation_guard_local_party_ready", 1.0,
+			"hold_gameplay_release reason=local_party_final_scores_accepted"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " roundKey=" .. tostring(roundKey or ""))
+		return false
+	end
 	if phase == "results"
 		and not self:CurrentUserHasFinalResult(self.currentRoom)
 		and tostring(self.lastFinalScoreKey or "") ~= tostring(roundKey or "") then
@@ -7385,41 +7466,21 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil"))
 		return false
 	end
-	local summary = ITGOnline:PlayStateSummary()
-	if summary
-		and summary.allFailedTerminal == true
-		and summary.finalResultsReady ~= true
-		and phase == "playing"
-	then
-		online_flow_trace_throttled("keep_alive_after_fail_all_failed_pending_finals", 1.0,
-			"keep_alive_after_fail decision=true reason=all_failed_pending_client_finals"
-			.. " players=" .. tostring(summary.players)
-			.. " terminal=" .. tostring(summary.terminal)
-			.. " failedTerminal=" .. tostring(summary.failedTerminal)
-			.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
-		return true
-	end
-	if not summary or tonumber(summary.players or 0) <= 1 then
-		online_flow_trace_throttled("keep_alive_after_fail_solo", 2.0,
-			"keep_alive_after_fail decision=false reason=not_multiplayer"
-			.. " players=" .. tostring(summary and summary.players or "nil")
-			.. " phase=" .. tostring(phase))
-		return false
-	end
-	local keepAlive = summary.allTerminal ~= true
-	if summary.allFailedTerminal == true and summary.finalResultsReady ~= true and phase == "playing" then
-		keepAlive = true
-	end
-	online_flow_trace_throttled("keep_alive_after_fail_decision", 1.0,
+	local roundKey = ITGOnline.CanonicalGameplayRoundKey
+		and ITGOnline:CanonicalGameplayRoundKey("keep_alive_after_local_fail")
+		or ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
+		or ""
+	local localPartyReady = ITGOnline.LocalPartyReadyForEvaluation
+		and ITGOnline:LocalPartyReadyForEvaluation(ITGOnline.currentRoom, roundKey)
+		or false
+	local keepAlive = not localPartyReady
+	online_flow_trace_throttled("keep_alive_after_fail_local_party_decision", 1.0,
 		"keep_alive_after_fail decision=" .. tostring(keepAlive == true)
+		.. " reason=" .. tostring(keepAlive and "local_final_scores_pending"
+			or "local_final_scores_accepted")
 		.. " phase=" .. tostring(phase)
-		.. " terminal=" .. tostring(summary.terminal)
-		.. " failedTerminal=" .. tostring(summary.failedTerminal)
-		.. " players=" .. tostring(summary.players)
-		.. " allTerminal=" .. tostring(summary.allTerminal == true)
-		.. " allFailedTerminal=" .. tostring(summary.allFailedTerminal == true)
-		.. " finalResultsReady=" .. tostring(summary.finalResultsReady == true)
-		.. " failedFinalsPending=" .. tostring(summary.failedFinalsPending))
+		.. " roundKey=" .. tostring(roundKey or "")
+		.. " localPartyReady=" .. tostring(localPartyReady == true))
 	return keepAlive
 end
 
@@ -10375,6 +10436,13 @@ function ITGOnline:ApplyMatchedSongSelection(match, source)
 		return false
 	end
 
+	if self.CaptureLocalChartIntentsForSong then
+		self:CaptureLocalChartIntentsForSong(
+			match.song,
+			match.payload or self.currentRoom and self.currentRoom.selected_song or {},
+			tostring(source or "apply_matched_song_selection") .. ":before_song_apply"
+		)
+	end
 	if GAMESTATE and GAMESTATE.SetCurrentSong then
 		safe_call("apply_matched_song_song", function()
 			GAMESTATE:SetCurrentSong(match.song)
@@ -10385,9 +10453,17 @@ function ITGOnline:ApplyMatchedSongSelection(match, source)
 			return GAMESTATE:GetEnabledPlayers()
 		end)
 		for player in ivalues(ok and type(players) == "table" and players or {}) do
-			safe_call("apply_matched_song_steps", function()
-				GAMESTATE:SetCurrentSteps(player, match.steps)
-			end)
+			local playerSteps = self:ResolveLocalGameplayStepsForSelectedSong(
+				match.payload or self.currentRoom and self.currentRoom.selected_song or {},
+				match.steps,
+				tostring(source or "apply_matched_song_selection"),
+				player
+			)
+			if playerSteps then
+				safe_call("apply_matched_song_steps", function()
+					GAMESTATE:SetCurrentSteps(player, playerSteps)
+				end)
+			end
 		end
 	end
 
@@ -10609,6 +10685,115 @@ local function find_steps_from_local_preference(song, player)
 	return nil, "preferred_difficulty_no_match"
 end
 
+function ITGOnline:CurrentLocalChartIntentSelectionKey(songInfo)
+	local selectionKey = self.CurrentOptionsSelectionKey
+		and tostring(self:CurrentOptionsSelectionKey(self.currentRoom) or "") or ""
+	if selectionKey ~= "" then return selectionKey end
+
+	songInfo = type(songInfo) == "table" and songInfo or {}
+	return table.concat({
+		tostring(self.currentRoomId or ""),
+		normalized_hash(songInfo.song_hash or songInfo.songHash),
+		tostring(songInfo.selected_at or songInfo.selectedAt or ""),
+	}, "|")
+end
+
+function ITGOnline:CaptureLocalChartIntentsForSong(song, songInfo, source)
+	if not (GAMESTATE and song and GAMESTATE.GetCurrentSong
+		and GAMESTATE.GetCurrentSteps and GAMESTATE.GetEnabledPlayers) then
+		return false
+	end
+
+	local currentSong = GAMESTATE:GetCurrentSong()
+	if not currentSong then return false end
+	local expectedSongHash = normalized_hash(type(songInfo) == "table"
+		and (songInfo.song_hash or songInfo.songHash) or "")
+	local currentSongHash = currentSong == song and expectedSongHash or
+		normalized_hash(self.SongHashFor and self:SongHashFor(currentSong) or "")
+	local targetSongHash = expectedSongHash ~= "" and expectedSongHash or
+		normalized_hash(self.SongHashFor and self:SongHashFor(song) or "")
+	local sameSong = currentSong == song
+		or (currentSongHash ~= "" and targetSongHash ~= "" and currentSongHash == targetSongHash)
+	if not sameSong then
+		self:TraceOnlineState("local_chart_intent_capture_skipped", {
+			source = source,
+			reason = "current_song_differs",
+			currentSongHash = currentSongHash,
+			targetSongHash = targetSongHash,
+		})
+		return false
+	end
+
+	local selectionKey = self:CurrentLocalChartIntentSelectionKey(songInfo)
+	self.localChartIntentByPlayer = self.localChartIntentByPlayer or {}
+	local captured = false
+	for player in ivalues(GAMESTATE:GetEnabledPlayers() or {}) do
+		local steps = GAMESTATE:GetCurrentSteps(player)
+		if steps and steps_belongs_to_song(currentSong, steps) then
+			local playerKey = local_player_key(player)
+			local summary = online_steps_trace_summary(self, steps)
+			self.localChartIntentByPlayer[playerKey] = {
+				steps = steps,
+				songHash = targetSongHash,
+				selectionKey = selectionKey,
+				chartHash = summary.chartHash,
+				chartKey = summary.chartKey,
+				chartType = summary.chartType,
+				difficulty = summary.difficulty,
+				meter = tonumber(summary.meter),
+				noteCount = tonumber(summary.noteCount),
+				source = tostring(source or "unknown"),
+				at = GetTimeSinceStart and GetTimeSinceStart() or 0,
+			}
+			captured = true
+			self:TraceOnlineState("local_chart_intent_captured", {
+				source = source,
+				localPlayer = playerKey,
+				selectionKey = selectionKey,
+				songHash = targetSongHash,
+				chartHash = summary.chartHash,
+				chartKey = summary.chartKey,
+				difficulty = summary.difficulty,
+				meter = summary.meter,
+			})
+		end
+	end
+	return captured
+end
+
+function ITGOnline:ResolveLocalChartIntent(song, songInfo, player)
+	local playerKey = local_player_key(player)
+	local intent = self.localChartIntentByPlayer
+		and self.localChartIntentByPlayer[playerKey] or nil
+	if type(intent) ~= "table" then return nil, "no_local_chart_intent" end
+
+	local selectionKey = self:CurrentLocalChartIntentSelectionKey(songInfo)
+	if tostring(intent.selectionKey or "") == ""
+		or tostring(intent.selectionKey or "") ~= selectionKey then
+		return nil, "local_chart_intent_selection_mismatch"
+	end
+
+	local selectedSongHash = normalized_hash(type(songInfo) == "table"
+		and (songInfo.song_hash or songInfo.songHash) or "")
+	if selectedSongHash ~= "" and normalized_hash(intent.songHash) ~= ""
+		and normalized_hash(intent.songHash) ~= selectedSongHash then
+		return nil, "local_chart_intent_song_mismatch"
+	end
+
+	if intent.steps and steps_belongs_to_song(song, intent.steps) then
+		return intent.steps, "local_chart_intent_direct"
+	end
+
+	local remapped, remapReason = find_steps_from_options(self, song, {
+		chart_hash = intent.chartHash,
+		chart_key = intent.chartKey,
+		chart_type = intent.chartType,
+		difficulty = intent.difficulty,
+		meter = intent.meter,
+	})
+	return remapped, remapped and "local_chart_intent_remapped" or remapReason
+end
+
 function ITGOnline:RememberExpectedOnlineGameplaySteps(steps, source, player)
 	player = player or first_enabled_player()
 	local summary = online_steps_trace_summary(self, steps)
@@ -10638,8 +10823,25 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 	if not shouldUseMemberOptions then
 		if phase == "config" or screen == "ScreenPlayerOptions" then
 			local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
-			local localSteps, localReason = find_steps_from_local_preference(song, player)
-			local resolvedSteps = localSteps or fallbackSteps
+			local playerState = self.pendingOnlineOptionStateByPlayer
+				and self.pendingOnlineOptionStateByPlayer[playerKey] or nil
+			local pending = online_option_state_matches_current_selection(playerState)
+				and playerState.steps or nil
+			local pendingBelongs = steps_belongs_to_song(song, pending)
+			local intentSteps, intentReason = self:ResolveLocalChartIntent(song, songInfo, player)
+			local currentSteps = GAMESTATE and GAMESTATE.GetCurrentSteps
+				and GAMESTATE:GetCurrentSteps(player) or nil
+			local currentBelongs = steps_belongs_to_song(song, currentSteps)
+			local preferredSteps, preferredReason = find_steps_from_local_preference(song, player)
+			local resolvedSteps = pendingBelongs and pending
+				or intentSteps
+				or currentBelongs and currentSteps
+				or preferredSteps
+				or fallbackSteps
+			local localReason = pendingBelongs and "pending_online_option_steps"
+				or intentSteps and intentReason
+				or currentBelongs and "current_player_steps"
+				or preferredReason
 			local fallbackSummary = online_steps_trace_summary(self, fallbackSteps)
 			local resolvedSummary = online_steps_trace_summary(self, resolvedSteps)
 			self:TraceOnlineState("option_steps_local_default_resolved", {
@@ -10647,13 +10849,16 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 				phase = phase,
 				screen = screen,
 				resolveReason = localReason,
+				pendingBelongs = pendingBelongs == true,
+				intentReason = intentReason,
+				currentBelongs = currentBelongs == true,
 				fallbackChartHash = fallbackSummary.chartHash,
 				fallbackDifficulty = fallbackSummary.difficulty,
 				fallbackMeter = fallbackSummary.meter,
 				resolvedChartHash = resolvedSummary.chartHash,
 				resolvedDifficulty = resolvedSummary.difficulty,
 				resolvedMeter = resolvedSummary.meter,
-				managerChartUsedAsFallback = localSteps == nil,
+				managerChartUsedAsFallback = resolvedSteps == fallbackSteps,
 				localPlayer = playerKey,
 			})
 			return resolvedSteps
@@ -10673,9 +10878,14 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 	local options = self:LocalMemberOptionSummary(room, player)
 	local playerState = self.pendingOnlineOptionStateByPlayer
 		and self.pendingOnlineOptionStateByPlayer[playerKey] or nil
-	local pending = playerState and playerState.steps
+	local pending = online_option_state_matches_current_selection(playerState)
+		and playerState.steps or nil
 	if not pending and not self:IsLocalTwoPlayerSession() then
-		pending = self.pendingOnlineOptionSteps
+		local legacyStateMatches = online_option_state_matches_current_selection({
+			selectionKey = self.pendingOnlineOptionSelectionKey,
+			songHash = self.pendingOnlineOptionSongHash,
+		})
+		pending = legacyStateMatches and self.pendingOnlineOptionSteps or nil
 	end
 	local pendingBelongs = steps_belongs_to_current_song(pending)
 	local selectedSteps = nil
@@ -10869,7 +11079,11 @@ function ITGOnline:SelectSong(callback, options)
 	end
 
 	local song = GAMESTATE:GetCurrentSong()
-	local steps = selected_steps()
+	-- A new manager selection must come from the wheel's live P1 chart.  Options
+	-- remembered for the previous round may point to the same song and are not a
+	-- valid source for a new room selection.
+	local selectionPlayer = first_enabled_player()
+	local steps = GAMESTATE:GetCurrentSteps(selectionPlayer)
 	local playable, validationMessage, validationReason = self:ValidateSongForOnlineSelection(song, steps)
 	if not playable then
 		online_flow_trace("song_selection_rejected reason=" .. tostring(validationReason)
@@ -12433,6 +12647,59 @@ function ITGOnline:LocalPlayerHasFinalResult(room, player)
 	end
 
 	return false
+end
+
+function ITGOnline:LocalPartyReadyForEvaluation(room, roundKey)
+	room = room or self.currentRoom
+	roundKey = tostring(roundKey or (self.CanonicalGameplayRoundKey
+		and self:CanonicalGameplayRoundKey("local_party_evaluation_ready")
+		or ""))
+	if not (self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)) then
+		return false
+	end
+
+	local acceptedBySide = {}
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
+		local playerKey = local_player_key(player)
+		local accepted = self:LocalPlayerHasFinalResult(room, player)
+		if self:IsPrimaryLocalPlayer(player) then
+			accepted = accepted
+				or tostring(self.lastFinalScoreKey or "") == roundKey
+		else
+			local companionState = self:CompanionScoreState(roundKey)
+			accepted = accepted or companionState.finalAccepted == true
+		end
+		acceptedBySide[playerKey] = accepted == true
+	end
+
+	local ready = true
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.all_local_finals_accepted then
+		ready = ITGOnlineLocalParty.all_local_finals_accepted(
+			self:LocalPartyPlan(),
+			acceptedBySide
+		)
+	else
+		local requiredCount = 0
+		for _, player in ipairs(self:RequiredLocalPlayers()) do
+			requiredCount = requiredCount + 1
+			if acceptedBySide[local_player_key(player)] ~= true then
+				ready = false
+			end
+		end
+		ready = requiredCount > 0 and ready
+	end
+
+	online_flow_trace_throttled(
+		"local_party_evaluation_ready:" .. roundKey,
+		1.0,
+		"local_party_evaluation_ready"
+		.. " room=" .. tostring(self.currentRoomId or "nil")
+		.. " roundKey=" .. roundKey
+		.. " P1=" .. tostring(acceptedBySide.P1 == true)
+		.. " P2=" .. tostring(acceptedBySide.P2 == true)
+		.. " ready=" .. tostring(ready == true)
+	)
+	return ready
 end
 
 function ITGOnline:CurrentUserHasFinalResult(room)
@@ -18490,6 +18757,14 @@ function ITGOnline:ClearCurrentRoomState(source)
 	self.companionReadyInFlight = {}
 	self.expectedOnlineGameplaySteps = nil
 	self.expectedOnlineGameplayStepsByPlayer = {}
+	self.pendingOnlineOptionStateByPlayer = {}
+	self.pendingOnlineOptionSteps = nil
+	self.pendingOnlineOptionStepsPlayer = nil
+	self.pendingOnlineOptionStepsAt = 0
+	self.pendingOnlineOptionStepsSource = ""
+	self.pendingOnlineOptionSongHash = ""
+	self.pendingOnlineOptionSelectionKey = ""
+	self.localChartIntentByPlayer = {}
 	self.localPartyRoomSyncInFlightKey = ""
 	self.localPartyRoomSyncFailureKey = ""
 	self.localPartyPendingCompanionRoomId = nil
@@ -18596,9 +18871,14 @@ function ITGOnline:LeavePrimaryRoom(callback)
 		client_action_id = self:NewClientActionId("room-leave"),
 	}, function(ok, decoded, response)
 		local gone = response and (response.statusCode == 404 or response.statusCode == 410)
+		local roomDeleted = type(decoded) == "table" and decoded.room_deleted == true
+		local roomDeletedReason = type(decoded) == "table"
+			and tostring(decoded.room_deleted_reason or "") or ""
 		online_flow_trace("leave_room_response room=" .. tostring(roomId)
 			.. " ok=" .. tostring(ok == true)
 			.. " gone=" .. tostring(gone == true)
+			.. " roomDeleted=" .. tostring(roomDeleted == true)
+			.. " roomDeletedReason=" .. tostring(roomDeletedReason ~= "" and roomDeletedReason or "nil")
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " currentRoomId=" .. tostring(self.currentRoomId or "nil"))
 		self:TraceOnlineState("leave_room_response", {
@@ -18606,6 +18886,8 @@ function ITGOnline:LeavePrimaryRoom(callback)
 			targetRoom = roomId,
 			ok = ok == true,
 			gone = gone == true,
+			roomDeleted = roomDeleted == true,
+			roomDeletedReason = roomDeletedReason,
 			status = response and response.statusCode or "nil",
 			error = decoded and decoded.error_code or response and response.errorMessage or "nil",
 			leaving = self:IsLeavingRoom(roomId) == true,
@@ -18613,14 +18895,20 @@ function ITGOnline:LeavePrimaryRoom(callback)
 
 		if ok or gone then
 			if self.currentRoomId ~= nil and online_room_ids_match(self.currentRoomId, roomId) then
-				online_flow_trace("leave_room_clear_current room=" .. tostring(roomId))
-				self:ClearCurrentRoomState("leave_room_confirmed")
+				self:ApplyAuthoritativeRoomExit(
+					roomId,
+					roomDeletedReason ~= "" and roomDeletedReason or "left_room",
+					"leave_room_response"
+				)
 			else
 				online_flow_trace("leave_room_mark_not_leaving room=" .. tostring(roomId)
 					.. " reason=current_room_changed")
 				self:MarkLeavingRoom(roomId, false)
 			end
-			if gone then self:RememberDeletedRoom(roomId, 60) end
+			if gone or roomDeleted then
+				self:RememberDeletedRoom(roomId, 60)
+				self:PurgeStaleLobbyCandidate(roomId, "leave_room_response_deleted")
+			end
 			self:ClearLobbyRefreshSuppression("leave_room_confirmed")
 			self:QueueLobbyRefresh({ ignoreSuppression = true, reason = "leave_room_confirmed" })
 		else
@@ -19100,6 +19388,142 @@ online_flow_trace("room_deleted_event_end roomId=" .. tostring(roomId)
 	.. " source=" .. tostring(source or "unknown")
 	.. " activeCleared=" .. tostring(activeRoomDeleted and not ignoredAfterLeave))
 return activeRoomDeleted and not ignoredAfterLeave
+end
+
+function ITGOnline:ApplyResultsReadyPayload(payload, eventId)
+	payload = type(payload) == "table" and payload or {}
+	local roomPayload = type(payload.room) == "table" and payload.room or {}
+	local roomId = online_canonical_id(
+		payload.room_id
+			or payload.roomId
+			or roomPayload.id
+			or self.currentRoomId
+	)
+	if not roomId or not self.currentRoom
+		or not online_room_ids_match(roomId, self.currentRoomId) then
+		online_flow_trace("results_ready_fast_path_rejected reason=room_context"
+			.. " payloadRoom=" .. tostring(roomId or "nil")
+			.. " currentRoom=" .. tostring(self.currentRoomId or "nil")
+			.. " hasRoom=" .. tostring(self.currentRoom ~= nil))
+		return false
+	end
+
+	local previousEventId = online_canonical_id(
+		self.lastRoomEventIdByRoomId[tostring(roomId)]
+	) or "0"
+	if eventId and eventId ~= "0"
+		and online_decimal_id_greater(previousEventId, eventId) then
+		online_flow_trace("results_ready_fast_path_ignored reason=event_regression"
+			.. " room=" .. tostring(roomId)
+			.. " eventId=" .. tostring(eventId)
+			.. " previousEventId=" .. tostring(previousEventId))
+		return true
+	end
+
+	local incomingRoomVersion = tonumber(
+		payload.room_version
+			or payload.roomVersion
+			or roomPayload.room_version
+			or roomPayload.roomVersion
+	) or 0
+	local previousRoomVersion = tonumber(
+		self.lastRoomVersionByRoomId[tostring(roomId)]
+			or self.currentRoom.room_version
+			or self.currentRoom.roomVersion
+	) or 0
+	if incomingRoomVersion > 0 and previousRoomVersion > 0
+		and incomingRoomVersion < previousRoomVersion then
+		online_flow_trace("results_ready_fast_path_ignored reason=room_version_regression"
+			.. " room=" .. tostring(roomId)
+			.. " incoming=" .. tostring(incomingRoomVersion)
+			.. " previous=" .. tostring(previousRoomVersion))
+		return true
+	end
+
+	local incomingPhase = self:KnownRoomPhaseOrNil(
+		payload.room_phase or payload.roomPhase or roomPayload.phase
+	)
+	if incomingPhase ~= "results" then
+		online_flow_trace("results_ready_fast_path_rejected reason=invalid_phase"
+			.. " room=" .. tostring(roomId)
+			.. " phase=" .. tostring(incomingPhase or "nil"))
+		return false
+	end
+
+	self:ApplyRoomPhase(incomingPhase, "results_ready_fast_path")
+	if self:NormalizeRoomPhase(self.currentRoom.phase) ~= "results" then
+		-- A newer lobby/config snapshot already owns the room. The event is
+		-- obsolete and can be acknowledged without resurrecting the old round.
+		online_flow_trace("results_ready_fast_path_ignored reason=phase_regression"
+			.. " room=" .. tostring(roomId)
+			.. " currentPhase=" .. tostring(self.currentRoom.phase or "nil"))
+		return true
+	end
+
+	if incomingRoomVersion > previousRoomVersion then
+		self.lastRoomVersionByRoomId[tostring(roomId)] = incomingRoomVersion
+		self.currentRoom.room_version = incomingRoomVersion
+	end
+	if eventId and eventId ~= "0" then
+		self.lastRoomEventIdByRoomId[tostring(roomId)] = eventId
+	end
+
+	local playState = type(payload.play_state) == "table" and payload.play_state
+		or type(payload.playState) == "table" and payload.playState
+		or type(roomPayload.play_state) == "table" and roomPayload.play_state
+		or type(roomPayload.playState) == "table" and roomPayload.playState
+		or nil
+	local playStateVersion = tonumber(
+		payload.play_state_version_ms
+			or payload.playStateVersionMs
+			or playState and playState.version_ms
+	) or 0
+
+	if playState then
+		self:ApplyPlayStateSnapshot(
+			playState,
+			"results_ready_fast_path",
+			playStateVersion,
+			{
+				suppressLobbyBroadcast = true,
+				suppressUnchangedPlayStateBroadcast = true,
+			}
+		)
+	end
+
+	local summary = self:PlayStateSummary(self.currentRoom)
+	if not summary or summary.finalResultsReady ~= true then
+		online_flow_trace("results_ready_fast_path_reconcile reason=missing_final_results"
+			.. " room=" .. tostring(roomId)
+			.. " hasPayloadPlayState=" .. tostring(playState ~= nil)
+			.. " players=" .. tostring(summary and summary.players or "nil")
+			.. " finalResults=" .. tostring(summary and summary.finalResults or "nil"))
+		if self.FetchPlayState then self:FetchPlayState() end
+		return true
+	end
+
+	local finalResults = self.currentRoom.play_state
+		and self.currentRoom.play_state.final_results or {}
+	self.currentRoom.live_scores = finalResults
+	if playStateVersion > 0 then
+		self.currentRoom.leaderboard_version_ms = playStateVersion
+		self.currentRoom.live_score_version_ms = playStateVersion
+	end
+	self:BroadcastLeaderboardFromRoom(
+		self.currentRoom,
+		"results_ready_fast_path"
+	)
+	if self.EnforceRoomPhaseScreen then
+		self:EnforceRoomPhaseScreen()
+	end
+	online_flow_trace("results_ready_fast_path_applied"
+		.. " room=" .. tostring(roomId)
+		.. " eventId=" .. tostring(eventId or "nil")
+		.. " roomVersion=" .. tostring(incomingRoomVersion)
+		.. " playStateVersion=" .. tostring(playStateVersion)
+		.. " players=" .. tostring(summary.players)
+		.. " finalResults=" .. tostring(summary.finalResults))
+	return true
 end
 
 function ITGOnline:HandleRealtimeEvent(event)
@@ -19715,6 +20139,13 @@ elseif name == "room.score_updated" then
 			end
 		end
 	end
+	elseif name == "room.results_ready" then
+		local resultsRoomId = payload.room_id
+			or payload.roomId
+			or (payload.room and payload.room.id)
+			or (event.target and event.target.id)
+		if not room_event_is_relevant(resultsRoomId) then return end
+		return self:ApplyResultsReadyPayload(payload, eventId)
 	elseif name == "room.deleted" then
 		local roomId = payload.room_id
 			or (event.target and event.target.id)
