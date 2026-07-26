@@ -35,6 +35,7 @@ local authRetryIdempotentPostPaths = {
 	"^/rooms/%d+/song%-selection/cancel$",
 	"^/rooms/%d+/song%-preview/clear$",
 	"^/rooms/%d+/pack%-sync%-status$",
+	"^/rooms/%d+/pack%-downloads/authorize$",
 	"^/rooms/%d+/ready$",
 	"^/rooms/%d+/loaded$",
 	"^/rooms/%d+/start%-ack$",

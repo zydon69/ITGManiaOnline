@@ -16810,7 +16810,6 @@ end
 
 function ITGOnline:ResetPostRoomExitLobbyRefreshState(reason)
 	local source = tostring(reason or "unknown")
-	self.lobbyRefreshInFlight = false
 	self.lobbyRefreshQueued = false
 	self.lobbyRefreshQueuedReason = ""
 	self.lobbyRefreshQueuedAt = 0
@@ -16825,7 +16824,8 @@ function ITGOnline:ResetPostRoomExitLobbyRefreshState(reason)
 	online_flow_trace("post_room_exit_lobby_refresh_state_reset reason=" .. source
 		.. " screen=" .. tostring(self.currentScreenName or "nil")
 		.. " currentRoomId=" .. tostring(self.currentRoomId or "nil")
-		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil"))
+		.. " pendingJoinRoomId=" .. tostring(self.pendingJoinRoomId or "nil")
+		.. " preservedInFlight=" .. tostring(self.lobbyRefreshInFlight == true))
 end
 
 function ITGOnline:QueuePostRoomExitLobbyRefresh(reason, delay)

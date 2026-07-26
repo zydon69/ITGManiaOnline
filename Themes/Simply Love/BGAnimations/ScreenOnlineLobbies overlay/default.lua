@@ -3179,7 +3179,7 @@ local function handle_pack_choice_menu_input(event)
 		local candidate = pack_choice_candidates[pack_choice_index]
 		if candidate and ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.DownloadPackByCandidate then
 			if ITGOnline and ITGOnline.TraceOnlineState then
-				ITGOnline:TraceOnlineState("ui_pack_choice_download_start", {
+				ITGOnline:TraceOnlineState("ui_pack_choice_download_authorization_requested", {
 					source = "ScreenOnlineLobbies",
 					candidateIndex = pack_choice_index,
 					candidateCount = #pack_choice_candidates,
@@ -3203,7 +3203,6 @@ local function handle_pack_choice_menu_input(event)
 			local downloadKey = pack_choice_download_key
 			local songInfo = pack_choice_song_info or joined_missing_song_info or joined_song_preview
 			close_pack_choice_menu()
-			refresh_joined_room_snapshot("pack_choice_download_start", t)
 			ITGOnline.PackSync:DownloadPackByCandidate(songInfo, candidate, function(ok, message)
 				if ITGOnline and ITGOnline.TraceOnlineState then
 					ITGOnline:TraceOnlineState("ui_pack_choice_download_response", {

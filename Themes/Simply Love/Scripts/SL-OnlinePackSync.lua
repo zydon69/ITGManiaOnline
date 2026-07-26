@@ -31,7 +31,7 @@ local function pack_text(key, fallback, ...)
 	return value
 end
 
-PackSync.scriptVersion = "2026-06-21-pack-status-download-sequence-v2"
+PackSync.scriptVersion = "2026-07-26-server-authorized-pack-download-v1"
 PackSync.statusChangedAt = PackSync.statusChangedAt or 0
 PackSync.currentStatusMessage = PackSync.currentStatusMessage or nil
 PackSync.currentStatusProgress = tonumber(PackSync.currentStatusProgress) or 0
@@ -1271,6 +1271,237 @@ end
 -- Server status synchronization
 -- -----------------------------------------------------------------------
 
+function PackSync:RequestDownloadAuthorization(songInfo, message, downloadGeneration, callback)
+	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
+		safe_invoke_callback(callback, false, nil, {
+			errorCode = "client_not_active_room_member",
+			errorMessage = pack_text("NoActiveOnlineLobby", "No active online lobby."),
+		})
+		return
+	end
+
+	local requestRoomId = tostring(ITGOnline.currentRoomId or "")
+	local downloadId = early_trim(self.activeDownloadId)
+	local selectionId = current_room_selection_id()
+	if downloadId == "" or requestRoomId == "" then
+		safe_invoke_callback(callback, false, nil, {
+			errorCode = "client_download_authorization_identity_missing",
+			errorMessage = pack_text("MissingDownloadIdentity", "The immutable download identifier is missing."),
+		})
+		return
+	end
+
+	self:SyncSequenceFromRoom(current_room_selected_at())
+	self.downloadStatusSequence = math.max(
+		tonumber(self.downloadStatusSequence) or 0,
+		tonumber(self.sequence) or 0
+	) + 1
+	self.sequence = self.downloadStatusSequence
+	local requestSequence = self.downloadStatusSequence
+	local payload = {
+		client_action_id = ITGOnline:NewClientActionId("pack-download-authorize"),
+		download_id = downloadId,
+		sequence = requestSequence,
+		message = status_message(message),
+	}
+	if selectionId ~= "" then payload.selection_id = selectionId end
+
+	trace_online_state("download_authorization_requested", {
+		roomId = requestRoomId,
+		downloadId = downloadId,
+		selectionId = selectionId,
+		sequence = requestSequence,
+		generation = downloadGeneration,
+	})
+
+	local function finish(ok, decoded, response)
+		safe_invoke_callback(callback, ok, decoded, response)
+	end
+
+	ITGOnline:Request("POST", "/rooms/" .. requestRoomId .. "/pack-downloads/authorize", payload,
+		function(ok, decoded, response)
+			if not self:IsDownloadGenerationCurrent(downloadGeneration)
+				or early_trim(self.activeDownloadId) ~= downloadId
+			then
+				trace("Download authorization ignored reason=stale_generation"
+					.. " requestedGeneration=" .. tostring(downloadGeneration)
+					.. " currentGeneration=" .. tostring(self.downloadGeneration)
+					.. " downloadId=" .. tostring(downloadId))
+				finish(false, decoded, {
+					errorCode = "client_stale_download_authorization",
+					errorMessage = pack_text("StalePackStatusIgnored", "An outdated online status response was ignored."),
+				})
+				return
+			end
+
+			local authorization = type(decoded) == "table" and decoded.authorization or nil
+			local authorizationMatches = ok
+				and type(authorization) == "table"
+				and authorization.authorized == true
+				and early_trim(authorization.download_id) == downloadId
+				and early_trim(authorization.selection_id) == selectionId
+				and tonumber(authorization.sequence) == tonumber(requestSequence)
+
+			trace_online_state("download_authorization_response", {
+				roomId = requestRoomId,
+				downloadId = downloadId,
+				selectionId = selectionId,
+				sequence = requestSequence,
+				generation = downloadGeneration,
+				ok = ok == true,
+				authorizationMatches = authorizationMatches == true,
+				statusCode = response and response.statusCode or "nil",
+				errorCode = decoded and decoded.error_code or "nil",
+				action = decoded and decoded.action or "nil",
+			})
+
+			if not authorizationMatches then
+				if decoded and decoded.action == "leave_room"
+					and ITGOnline.ApplyAuthoritativeRoomExit
+				then
+					ITGOnline:ApplyAuthoritativeRoomExit(
+						decoded.room_id or requestRoomId,
+						decoded.reason or decoded.error_code or "pack_sync_timeout",
+						"pack_download_authorization"
+					)
+				elseif decoded and decoded.action == "refresh_room" and ITGOnline.EnsureCurrentRoom then
+					ITGOnline:EnsureCurrentRoom()
+				end
+				response = response or {}
+				response.errorCode = response.errorCode
+					or decoded and decoded.error_code
+					or "pack_download_authorization_rejected"
+				response.errorMessage = response.errorMessage
+					or decoded and decoded.message
+					or pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download.")
+				finish(false, decoded, response)
+				return
+			end
+
+			if decoded.room and ITGOnline.ApplyRoomSnapshot then
+				ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_download_authorized")
+				if MESSAGEMAN then
+					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
+				end
+				self:SyncSequenceFromRoomPayload(
+					decoded.room,
+					current_room_selected_at(),
+					"pack_download_authorized"
+				)
+			end
+
+			local authorizeCompanion = ITGOnline.IsLocalTwoPlayerSession
+				and ITGOnline:IsLocalTwoPlayerSession()
+				and ITGOnline.LocalPartyRoomComplete
+				and ITGOnline:LocalPartyRoomComplete(decoded.room or ITGOnline.currentRoom)
+				and ITGOnline.RequestAsLocalPlayer
+				and ITGOnline.UserForLocalPlayer
+			if not authorizeCompanion then
+				self:ApplyLocalStatus(self.status.DownloadRequested, message, 0)
+				finish(true, decoded, response)
+				return
+			end
+
+			local companionUser = ITGOnline:UserForLocalPlayer(PLAYER_2)
+			local companionUserId = tostring(companionUser and companionUser.id or "")
+			local companionSequence = requestSequence
+			local roomMembers = decoded.room and decoded.room.members or {}
+			for _, member in pairs(type(roomMembers) == "table" and roomMembers or {}) do
+				local memberUser = type(member) == "table" and (member.user or member) or {}
+				local memberUserId = tostring(memberUser.id or member.user_id or member.userId or "")
+				if companionUserId ~= "" and memberUserId == companionUserId then
+					companionSequence = math.max(
+						companionSequence,
+						tonumber(member.pack_sync_sequence) or 0
+					)
+					break
+				end
+			end
+			companionSequence = companionSequence + 1
+			local companionPayload = {
+				client_action_id = ITGOnline:NewClientActionId("p2-pack-download-authorize"),
+				download_id = downloadId,
+				sequence = companionSequence,
+				message = status_message(message),
+			}
+			if selectionId ~= "" then companionPayload.selection_id = selectionId end
+
+			ITGOnline:RequestAsLocalPlayer(
+				PLAYER_2,
+				"POST",
+				"/rooms/" .. requestRoomId .. "/pack-downloads/authorize",
+				companionPayload,
+				function(companionOk, companionDecoded, companionResponse)
+					local companionAuthorization = type(companionDecoded) == "table"
+						and companionDecoded.authorization or nil
+					local companionMatches = companionOk
+						and type(companionAuthorization) == "table"
+						and companionAuthorization.authorized == true
+						and early_trim(companionAuthorization.download_id) == downloadId
+						and early_trim(companionAuthorization.selection_id) == selectionId
+						and tonumber(companionAuthorization.sequence) == tonumber(companionSequence)
+
+					trace_online_state("download_companion_authorization_response", {
+						roomId = requestRoomId,
+						downloadId = downloadId,
+						selectionId = selectionId,
+						sequence = companionSequence,
+						generation = downloadGeneration,
+						ok = companionOk == true,
+						authorizationMatches = companionMatches == true,
+						statusCode = companionResponse and companionResponse.statusCode or "nil",
+						errorCode = companionDecoded and companionDecoded.error_code or "nil",
+						action = companionDecoded and companionDecoded.action or "nil",
+					})
+
+					if not companionMatches then
+						if ITGOnline.EnsureCurrentRoom then ITGOnline:EnsureCurrentRoom() end
+						if MESSAGEMAN then
+							MESSAGEMAN:Broadcast("ITGOnlineLocalPartyPackSyncFailed", {
+								localPlayer = "P2",
+								status = self.status.DownloadRequested,
+								errorCode = companionDecoded and companionDecoded.error_code or nil,
+							})
+						end
+						companionResponse = companionResponse or {}
+						companionResponse.errorCode = companionResponse.errorCode
+							or companionDecoded and companionDecoded.error_code
+							or "companion_pack_download_authorization_rejected"
+						companionResponse.errorMessage = companionResponse.errorMessage
+							or companionDecoded and companionDecoded.message
+							or pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download.")
+						companionResponse.primaryDownloadAuthorized = true
+						finish(false, companionDecoded, companionResponse)
+						return
+					end
+
+					if companionDecoded.room and ITGOnline.ApplyRoomSnapshot then
+						ITGOnline:ApplyRoomSnapshot(
+							companionDecoded.room,
+							"pack_download_companion_authorized"
+						)
+						if MESSAGEMAN then
+							MESSAGEMAN:Broadcast(
+								"OnlineLobbyState",
+								ITGOnline:LobbyStatePayload(companionDecoded.room)
+							)
+						end
+					end
+					self.downloadStatusSequence = math.max(
+						tonumber(self.downloadStatusSequence) or 0,
+						companionSequence
+					)
+					self.sequence = math.max(
+						tonumber(self.sequence) or 0,
+						self.downloadStatusSequence
+					)
+					self:ApplyLocalStatus(self.status.DownloadRequested, message, 0)
+					finish(true, companionDecoded, companionResponse)
+				end
+			)
+		end)
+end
+
 function PackSync:UpdateStatus(status, message, progress, callback, options)
 	status = tostring(status or self.status.Unknown)
 	message = status_message(message)
@@ -1279,6 +1510,14 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		callback = nil
 	end
 	options = type(options) == "table" and options or {}
+	if status == self.status.DownloadRequested then
+		trace("Status post blocked reason=download_authorization_endpoint_required")
+		safe_invoke_callback(callback, false, nil, {
+			errorCode = "pack_download_authorization_required",
+			errorMessage = pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download."),
+		})
+		return
+	end
 	if not (ITGOnline and ITGOnline.Request and current_user_is_active_room_member()) then
 		trace("Status skipped reason=not_active_room_member status=" .. tostring(status))
 		safe_invoke_callback(callback, false, nil, {
@@ -1820,7 +2059,10 @@ function PackSync:WatchdogTick()
 	self.downloadLastByteCount = nil
 	self.activeBrowseOnlyDownload = false
 	self:NextDownloadGeneration("watchdog_timeout")
-	self:UpdateStatus(self.status.DownloadFailed, message)
+	local timeoutStatus = status == self.status.SearchingLocalCharts
+		and self.status.NoCompatibleChartFound
+		or self.status.DownloadFailed
+	self:UpdateStatus(timeoutStatus, message)
 	if SM then SM(message, 4) end
 end
 
@@ -3435,6 +3677,85 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 			return
 		end
 	local downloadMessage = "Telechargement de " .. tostring(packName)
+	if options.serverAuthorized ~= true then
+		local requestedDownloadId = early_trim(self.activeDownloadId)
+		local requestedDownloadKey = tostring(self.downloadInFlightKey or "")
+		self.currentSongInfo = songInfo or self.currentSongInfo
+		self.activeBrowseOnlyDownload = browseOnly
+		trace("Download awaiting server authorization pack=" .. tostring(packName)
+			.. " id=" .. tostring(packId)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " downloadId=" .. tostring(requestedDownloadId)
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"))
+		self:RequestDownloadAuthorization(
+			songInfo,
+			downloadMessage,
+			downloadGeneration,
+			function(authorized, decoded, authorizationResponse)
+				if not authorized then
+					local authorizationMessage = authorizationResponse and authorizationResponse.errorMessage
+						or decoded and decoded.message
+						or pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download.")
+					trace("Download blocked by server authorization pack=" .. tostring(packName)
+						.. " id=" .. tostring(packId)
+						.. " generation=" .. tostring(downloadGeneration)
+						.. " downloadId=" .. tostring(requestedDownloadId)
+						.. " error=" .. tostring(decoded and decoded.error_code
+							or authorizationResponse and authorizationResponse.errorCode or "nil"))
+					if authorizationResponse and authorizationResponse.primaryDownloadAuthorized == true
+						and current_user_is_active_room_member()
+					then
+						self:UpdateStatus(self.status.DownloadFailed, authorizationMessage)
+					end
+					if self:IsDownloadGenerationCurrent(downloadGeneration) then
+						self.downloadInFlightKey = nil
+						self.activeBrowseOnlyDownload = false
+						self:ClearActiveDownloadId("download_authorization_rejected")
+					end
+					if callback then callback(false, authorizationMessage) end
+					return
+				end
+
+				if not self:IsDownloadGenerationCurrent(downloadGeneration)
+					or early_trim(self.activeDownloadId) ~= requestedDownloadId
+					or tostring(self.downloadInFlightKey or "") ~= requestedDownloadKey
+				then
+					trace("Authorized download not started reason=context_changed"
+						.. " pack=" .. tostring(packName)
+						.. " generation=" .. tostring(downloadGeneration)
+						.. " currentGeneration=" .. tostring(self.downloadGeneration)
+						.. " downloadId=" .. tostring(requestedDownloadId))
+					if callback then
+						callback(false, pack_text("PackStatusContextChanged", "The lobby or selection changed before the status was published."))
+					end
+					return
+				end
+
+				local authorizedOptions = {}
+				for key, value in pairs(options) do authorizedOptions[key] = value end
+				authorizedOptions.serverAuthorized = true
+				authorizedOptions.authorizationDownloadId = requestedDownloadId
+				authorizedOptions.downloadGeneration = downloadGeneration
+				authorizedOptions.allowExistingDownloadKey = requestedDownloadKey
+				self:DownloadPackByCandidate(songInfo, pack, callback, authorizedOptions)
+			end
+		)
+		return
+	end
+
+	if early_trim(options.authorizationDownloadId) == ""
+		or early_trim(options.authorizationDownloadId) ~= early_trim(self.activeDownloadId)
+	then
+		trace("Download blocked reason=missing_or_stale_server_authorization"
+			.. " pack=" .. tostring(packName)
+			.. " generation=" .. tostring(downloadGeneration)
+			.. " authorizedDownloadId=" .. tostring(options.authorizationDownloadId or "")
+			.. " activeDownloadId=" .. tostring(self.activeDownloadId or ""))
+		if callback then
+			callback(false, pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download."))
+		end
+		return
+	end
 	trace("Download started pack=" .. tostring(packName) .. " id=" .. tostring(packId)
 		.. " generation=" .. tostring(downloadGeneration)
 		.. " browseOnly=" .. tostring(browseOnly == true)
@@ -3918,7 +4239,10 @@ function PackSync:DownloadSelectedPack(songInfo, callback)
 		self.downloadLastByteAt = nil
 		self.downloadLastByteCount = nil
 		self:ClearActiveDownloadId("selected_download_failed")
-		self:UpdateStatus(self.status.DownloadFailed, message)
+		-- Catalogue discovery happens before the server authorizes a transfer.
+		-- Keep the member in the missing-song deadline state; DownloadFailed is
+		-- reserved for a transfer that already owns a server ledger entry.
+		self:UpdateStatus(self.status.NoCompatibleChartFound, message)
 		if callback then callback(false, message) end
 	end
 

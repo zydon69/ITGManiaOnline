@@ -16,6 +16,9 @@ equal(protocol.is_auth_retry_idempotent("GET", "/rooms/1", nil), true, "safe rea
 equal(protocol.is_auth_retry_idempotent("POST", "/rooms/1/song-selection", {
 	client_action_id = "selection:abc-123",
 }), true, "declared selection retry")
+equal(protocol.is_auth_retry_idempotent("POST", "/rooms/1/pack-downloads/authorize", {
+	client_action_id = "pack-download-authorize:abc-123",
+}), true, "declared pack download authorization retry")
 equal(protocol.is_auth_retry_idempotent("POST", "/rooms/1/score", {
 	client_action_id = "score:abc-123",
 }), true, "declared final score retry")
@@ -366,6 +369,16 @@ assert(onlineClientContent:find("readyStates = room.ready_states or {}", 1, true
 	"lobby payloads must preserve authoritative ready-state rows")
 assert(onlineClientContent:find('preferred=lobby reason=completed_round_reset_while_evaluating', 1, true),
 	"a server-side evaluation timeout must force the client back to the online lobby")
+local postRoomExitRefreshReset = assert(
+	onlineClientContent:match(
+		"function ITGOnline:ResetPostRoomExitLobbyRefreshState%b()%s*(.-)%s*function ITGOnline:QueuePostRoomExitLobbyRefresh"
+	),
+	"missing post-room-exit lobby refresh reset"
+)
+assert(not postRoomExitRefreshReset:find("self.lobbyRefreshInFlight = false", 1, true),
+	"room exit must not forget an HTTP lobby refresh that is still in flight")
+assert(postRoomExitRefreshReset:find("preservedInFlight=", 1, true),
+	"room-exit refresh diagnostics must expose the preserved in-flight request")
 assert(onlineClientContent:find('if phase == "lobby" and not (self.currentRoom and self.currentRoom.selected_song) then', 1, true),
 	"a missed evaluation-timeout event must recover from the authoritative lobby snapshot")
 local roomTransitionKey = assert(
@@ -440,6 +453,41 @@ assert(packSyncContent:find('if catalogOk and type(catalogMessage) == "table" an
 	"selected-pack downloads must consume successful candidate discovery")
 assert(not packSyncContent:find("callback(false, catalogMessage)", 1, true),
 	"pack-choice results must never be reported as failures")
+local downloadAuthorizationHandler = assert(
+	packSyncContent:match("function PackSync:RequestDownloadAuthorization%b()%s*(.-)%s*function PackSync:UpdateStatus"),
+	"missing server-side pack download authorization handler"
+)
+assert(downloadAuthorizationHandler:find("/pack%-downloads/authorize"),
+	"pack downloads must request explicit server authorization")
+assert(downloadAuthorizationHandler:find("authorizationMatches", 1, true)
+	and downloadAuthorizationHandler:find("authorization.authorized == true", 1, true),
+	"the client must validate the complete server authorization identity")
+assert(downloadAuthorizationHandler:find("ITGOnline:ApplyAuthoritativeRoomExit", 1, true),
+	"an authorization-time ejection must immediately clear the local room")
+local packStatusHandler = assert(
+	packSyncContent:match("function PackSync:UpdateStatus%b()%s*(.-)%s*function PackSync:ApplyLocalStatus"),
+	"missing pack status handler"
+)
+assert(packStatusHandler:find("download_authorization_endpoint_required", 1, true),
+	"the generic status path must refuse to publish download_requested")
+local candidateDownloadHandler = assert(
+	packSyncContent:match("function PackSync:DownloadPackByCandidate%b()%s*(.-)%s*function PackSync:DownloadSelectedPack"),
+	"missing candidate download handler"
+)
+local authorizationGate = assert(
+	candidateDownloadHandler:find("if options.serverAuthorized ~= true then", 1, true),
+	"candidate downloads must stop at a server authorization gate"
+)
+local transferStart = assert(
+	candidateDownloadHandler:find("NETWORK:HttpRequest", authorizationGate + 1, true),
+	"missing authorized pack transfer"
+)
+assert(candidateDownloadHandler:find("return", authorizationGate + 1, true) < transferStart,
+	"the unauthorized branch must return before opening the pack transfer")
+assert(candidateDownloadHandler:find("missing_or_stale_server_authorization", 1, true),
+	"the transfer path must reject a missing or stale authorization identity")
+assert(packSyncContent:find("self.status.NoCompatibleChartFound, message", 1, true),
+	"catalogue failure before authorization must not forge a download failure")
 
 local lobbyOverlayPath = sourceRoot .. "/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
 local lobbyOverlayFile = assert(io.open(lobbyOverlayPath, "rb"), "missing online lobby overlay: " .. lobbyOverlayPath)
@@ -448,6 +496,11 @@ lobbyOverlayFile:close()
 assert(lobbyOverlayContent:find("autoStartSingleCandidate = true", 1, true)
 	and packSyncContent:find("options.autoStartSingleCandidate == true and #candidates == 1", 1, true),
 	"browsing downloads must auto-start when the catalog has exactly one candidate")
+assert(lobbyOverlayContent:find("ui_pack_choice_download_authorization_requested", 1, true)
+	and not lobbyOverlayContent:find("ui_pack_choice_download_start", 1, true),
+	"the pack-choice UI must describe an authorization intent, not a download already started")
+assert(not lobbyOverlayContent:find('refresh_joined_room_snapshot("pack_choice_download_start"', 1, true),
+	"pack authorization must not race a parallel room refresh")
 assert(lobbyOverlayContent:find(
 	'ITGOnlineLobbyPresentation.text("LeaveLobby", "Leave lobby")',
 	1,
