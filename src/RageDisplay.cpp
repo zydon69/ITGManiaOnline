@@ -47,13 +47,15 @@
 RageTimer g_LastCheckTimer;
 int g_iNumVerts;
 int g_iFPS, g_iVPF, g_iCFPS;
+static bool g_bStatsHaveSample = false;
 
 int RageDisplay::GetFPS() const { return g_iFPS; }
 int RageDisplay::GetVPF() const { return g_iVPF; }
 int RageDisplay::GetCumFPS() const { return g_iCFPS; }
 
-static int g_iFramesRenderedSinceLastCheck, g_iFramesRenderedSinceLastReset,
-    g_iVertsRenderedSinceLastCheck, g_iNumChecksSinceLastReset;
+static int g_iFramesAttemptedSinceLastCheck, g_iFramesRenderedSinceLastCheck,
+    g_iFramesRenderedSinceLastReset, g_iVertsRenderedSinceLastCheck;
+static RageTimer g_StatsResetTimer;
 static RageTimer g_LastFrameEndedAt(RageZeroTimer);
 
 struct Centering {
@@ -164,6 +166,8 @@ static bool FramePacingSwapLikelyBlocked(
 static uint64_t g_iFramePacerNextPresentUsec = 0;
 static uint64_t g_iFramePacerFrames = 0;
 static uint64_t g_iFramePacerLastPresentTraceUsec = 0;
+static uint64_t g_iFramePacerLastResyncTraceUsec = 0;
+static uint64_t g_iFramePacerSuppressedResyncTraces = 0;
 static uint64_t g_iFramePacerLastPlannedWaitUsec = 0;
 static uint64_t g_iFramePacerLastSleepUsec = 0;
 static uint64_t g_iFramePacerLastActualSleepUsec = 0;
@@ -194,6 +198,7 @@ static uint64_t g_iFramePacerLastDisplayLinkLastOutputUsec = 0;
 static uint64_t g_iFramePacerLastDisplayLinkSelectedOutputUsec = 0;
 static int64_t g_iFramePacerLastDisplayLinkOutputToTargetUsec = 0;
 static int64_t g_iFramePacerLastDisplayLinkSelectedOutputToTargetUsec = 0;
+static int64_t g_iFramePacerLastDisplayLinkSelectedOutputProjectionSteps = 0;
 static int64_t g_iFramePacerLastDisplayLinkOutputLateUsec = 0;
 static bool g_bFramePacerLastDisplayLinkUsed = false;
 static bool g_bFramePacerLastDisplayLinkTimedOut = false;
@@ -201,8 +206,6 @@ static bool g_bFramePacerLastDisplayLinkFinalWaitCapped = false;
 static bool g_bFramePacerLastDisplayLinkOutputPhaseAccepted = false;
 static bool g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled = false;
 static bool g_bFramePacerLastDisplayLinkOutputAlignedPresent = false;
-static bool g_bFramePacerLastDisplayLinkOutputCapRejected = false;
-static int g_iFramePacerLastDisplayLinkOutputAlignedPresentMode = 1;
 static bool g_bFramePacerLastDisplayLinkPhaseAligned = false;
 static int64_t g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
 static const char* g_szFramePacerLastDisplayLinkSelectedOutputSource = "none";
@@ -694,6 +697,35 @@ static uint64_t FramePacingResyncThresholdUsec(uint64_t intervalUsec) {
   return intervalUsec * 4;
 }
 
+static void TraceFramePacingResync(
+    const char* reason, int64_t phaseErrorUsec, float targetHz,
+    uint64_t intervalUsec, uint64_t budgetUsec) {
+  if (!PerfDiagnosticsEnabled()) {
+    return;
+  }
+
+  const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+  constexpr uint64_t kMinimumTraceIntervalUsec = 1000000;
+  if (g_iFramePacerLastResyncTraceUsec != 0 &&
+      nowUsec - g_iFramePacerLastResyncTraceUsec <
+          kMinimumTraceIntervalUsec) {
+    ++g_iFramePacerSuppressedResyncTraces;
+    return;
+  }
+
+  LOG->Trace(
+      "FRAME_PACING: resync phase=before_swap reason=%s "
+      "phase_error_us=%lld target_hz=%.3f interval_us=%llu "
+      "budget_us=%llu suppressed_since_last=%llu",
+      reason != nullptr ? reason : "unknown",
+      static_cast<long long>(phaseErrorUsec), targetHz,
+      static_cast<unsigned long long>(intervalUsec),
+      static_cast<unsigned long long>(budgetUsec),
+      static_cast<unsigned long long>(g_iFramePacerSuppressedResyncTraces));
+  g_iFramePacerLastResyncTraceUsec = nowUsec;
+  g_iFramePacerSuppressedResyncTraces = 0;
+}
+
 static bool FramePacingSwapLikelyBlocked(
     uint64_t swapBuffersUsec, uint64_t intervalUsec) {
   if (swapBuffersUsec == 0 || intervalUsec == 0) {
@@ -782,13 +814,12 @@ struct FramePacingWaitStats {
   uint64_t display_link_selected_output_usec = 0;
   int64_t display_link_output_to_target_usec = 0;
   int64_t display_link_selected_output_to_target_usec = 0;
+  int64_t display_link_selected_output_projection_steps = 0;
   int64_t display_link_output_late_usec = 0;
   bool display_link_final_wait_capped = false;
   bool display_link_output_phase_accepted = false;
-  int display_link_output_aligned_present_mode = 1;
   bool display_link_output_aligned_present_enabled = false;
   bool display_link_output_aligned_present = false;
-  bool display_link_output_cap_rejected = false;
   const char* display_link_selected_output_source = "none";
   const char* display_link_status = "unavailable";
 #endif
@@ -906,20 +937,18 @@ static FramePacingWaitStats WaitUntilFramePacingWakeUsec(
           displayLinkStats.output_to_target_usec;
       stats.display_link_selected_output_to_target_usec =
           displayLinkStats.selected_output_to_target_usec;
+      stats.display_link_selected_output_projection_steps =
+          displayLinkStats.selected_output_projection_steps;
       stats.display_link_output_late_usec =
           displayLinkStats.output_late_usec;
       stats.display_link_final_wait_capped =
           displayLinkStats.final_wait_capped;
       stats.display_link_output_phase_accepted =
           displayLinkStats.output_phase_accepted;
-      stats.display_link_output_aligned_present_mode =
-          displayLinkStats.output_aligned_present_mode;
       stats.display_link_output_aligned_present_enabled =
           displayLinkStats.output_aligned_present_enabled;
       stats.display_link_output_aligned_present =
           displayLinkStats.output_aligned_present;
-      stats.display_link_output_cap_rejected =
-          displayLinkStats.output_aligned_cap_rejected;
       stats.display_link_selected_output_source =
           displayLinkStats.selected_output_source;
       stats.display_link_status = displayLinkStats.status;
@@ -1495,6 +1524,8 @@ static void UpdateFramePacingMacOSAdaptiveLead(
 static void ResetFramePacer() {
   g_iFramePacerNextPresentUsec = 0;
   g_iFramePacerFrames = 0;
+  g_iFramePacerLastResyncTraceUsec = 0;
+  g_iFramePacerSuppressedResyncTraces = 0;
   g_iFramePacerLastPlannedWaitUsec = 0;
   g_iFramePacerLastSleepUsec = 0;
   g_iFramePacerLastActualSleepUsec = 0;
@@ -1525,6 +1556,7 @@ static void ResetFramePacer() {
   g_iFramePacerLastDisplayLinkSelectedOutputUsec = 0;
   g_iFramePacerLastDisplayLinkOutputToTargetUsec = 0;
   g_iFramePacerLastDisplayLinkSelectedOutputToTargetUsec = 0;
+  g_iFramePacerLastDisplayLinkSelectedOutputProjectionSteps = 0;
   g_iFramePacerLastDisplayLinkOutputLateUsec = 0;
   g_bFramePacerLastDisplayLinkUsed = false;
   g_bFramePacerLastDisplayLinkTimedOut = false;
@@ -1532,8 +1564,6 @@ static void ResetFramePacer() {
   g_bFramePacerLastDisplayLinkOutputPhaseAccepted = false;
   g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled = false;
   g_bFramePacerLastDisplayLinkOutputAlignedPresent = false;
-  g_bFramePacerLastDisplayLinkOutputCapRejected = false;
-  g_iFramePacerLastDisplayLinkOutputAlignedPresentMode = 1;
   g_bFramePacerLastDisplayLinkPhaseAligned = false;
   g_iFramePacerLastDisplayLinkPhaseAlignUsec = 0;
   g_szFramePacerLastDisplayLinkSelectedOutputSource = "none";
@@ -1689,19 +1719,29 @@ std::string RageDisplay::SetVideoMode(
   return SETVIDEOMODE_FAILED.GetValue() + " " + join(";", vs);
 }
 
-void RageDisplay::ProcessStatsOnFlip() {
-  g_iFramesRenderedSinceLastCheck++;
-  g_iFramesRenderedSinceLastReset++;
+void RageDisplay::ProcessStatsOnFlip(bool framePresented) {
+  g_iFramesAttemptedSinceLastCheck++;
+  if (framePresented) {
+    g_iFramesRenderedSinceLastCheck++;
+    g_iFramesRenderedSinceLastReset++;
+  }
 
   if (g_LastCheckTimer.Ago() >= 1.0f)  // update stats every 1 sec.
   {
     float fActualTime = g_LastCheckTimer.GetDeltaTime();
-    g_iNumChecksSinceLastReset++;
+    g_bStatsHaveSample = true;
     g_iFPS = std::lrint(g_iFramesRenderedSinceLastCheck / fActualTime);
-    g_iCFPS = g_iFramesRenderedSinceLastReset / g_iNumChecksSinceLastReset;
-    g_iCFPS = std::lrint(g_iCFPS / fActualTime);
-    g_iVPF = g_iVertsRenderedSinceLastCheck / g_iFramesRenderedSinceLastCheck;
-    g_iFramesRenderedSinceLastCheck = g_iVertsRenderedSinceLastCheck = 0;
+    const float cumulativeTime = g_StatsResetTimer.Ago();
+    g_iCFPS =
+        cumulativeTime > 0.0f
+            ? std::lrint(g_iFramesRenderedSinceLastReset / cumulativeTime)
+            : 0;
+    g_iVPF =
+        g_iFramesAttemptedSinceLastCheck > 0
+            ? g_iVertsRenderedSinceLastCheck / g_iFramesAttemptedSinceLastCheck
+            : 0;
+    g_iFramesAttemptedSinceLastCheck = g_iFramesRenderedSinceLastCheck =
+        g_iVertsRenderedSinceLastCheck = 0;
     if (LOG_FPS) {
       std::string sStats = GetStats();
       Replace(sStats, "\n", ", ");
@@ -1712,24 +1752,27 @@ void RageDisplay::ProcessStatsOnFlip() {
 
 void RageDisplay::ResetStats() {
   g_iFPS = g_iVPF = 0;
-  g_iFramesRenderedSinceLastCheck = g_iFramesRenderedSinceLastReset = 0;
-  g_iNumChecksSinceLastReset = 0;
+  g_bStatsHaveSample = false;
+  g_iFramesAttemptedSinceLastCheck = g_iFramesRenderedSinceLastCheck =
+      g_iFramesRenderedSinceLastReset = 0;
   g_iVertsRenderedSinceLastCheck = 0;
   g_LastCheckTimer.GetDeltaTime();
+  g_StatsResetTimer.Touch();
 }
 
 std::string RageDisplay::GetStats() const {
   std::string s;
-  // If FPS == 0, we don't have stats yet.
-  if (!GetFPS()) {
+  if (!g_bStatsHaveSample) {
     s = "-- FPS\n-- av FPS\n-- VPF";
   } else {
     s = ssprintf("%i FPS\n%i av FPS\n%i VPF", GetFPS(), GetCumFPS(), GetVPF());
   }
 
-  //	#if defined(_WIN32)
   s += "\n" + this->GetApiDescription();
-  //	#endif
+  const std::string presentationStats = this->GetPresentationStats();
+  if (!presentationStats.empty()) {
+    s += "\n" + presentationStats;
+  }
 
   return s;
 }
@@ -2495,27 +2538,17 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
     g_iFramePacerLastBeforeSwapPhaseErrorUsec = lateUsec;
     if (lateUsec >
         static_cast<int64_t>(FramePacingResyncThresholdUsec(intervalUsec))) {
-      if (PerfDiagnosticsEnabled()) {
-        LOG->Trace(
-            "FRAME_PACING: resync phase=before_swap reason=very_late_no_wait "
-            "late_us=%lld target_hz=%.3f interval_us=%llu",
-            static_cast<long long>(lateUsec), targetHz,
-            static_cast<unsigned long long>(intervalUsec));
-      }
+      TraceFramePacingResync(
+          "very_late_no_wait", lateUsec, targetHz, intervalUsec,
+          FramePacingResyncThresholdUsec(intervalUsec));
       g_szFramePacerLastBeforeSwapResyncReason = "very_late_no_wait";
     } else if (
         lateUsec >
         static_cast<int64_t>(FramePacingPhaseResyncThresholdUsec(
             intervalUsec))) {
-      if (PerfDiagnosticsEnabled()) {
-        LOG->Trace(
-            "FRAME_PACING: resync phase=before_swap reason=phase_late_no_wait "
-            "late_us=%lld target_hz=%.3f interval_us=%llu threshold_us=%llu",
-            static_cast<long long>(lateUsec), targetHz,
-            static_cast<unsigned long long>(intervalUsec),
-            static_cast<unsigned long long>(
-                FramePacingPhaseResyncThresholdUsec(intervalUsec)));
-      }
+      TraceFramePacingResync(
+          "phase_late_no_wait", lateUsec, targetHz, intervalUsec,
+          FramePacingPhaseResyncThresholdUsec(intervalUsec));
       g_szFramePacerLastBeforeSwapResyncReason = "phase_late_no_wait";
     } else {
       const int64_t leadUsec =
@@ -2523,14 +2556,9 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
           static_cast<int64_t>(nowUsec);
       const uint64_t maxLeadUsec = intervalUsec + waitMarginUsec;
       if (leadUsec > static_cast<int64_t>(maxLeadUsec)) {
-        if (PerfDiagnosticsEnabled()) {
-          LOG->Trace(
-              "FRAME_PACING: resync phase=before_swap reason=phase_ahead "
-              "lead_us=%lld target_hz=%.3f interval_us=%llu max_lead_us=%llu",
-              static_cast<long long>(leadUsec), targetHz,
-              static_cast<unsigned long long>(intervalUsec),
-              static_cast<unsigned long long>(maxLeadUsec));
-        }
+        TraceFramePacingResync(
+            "phase_ahead", -leadUsec, targetHz, intervalUsec,
+            maxLeadUsec);
         g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
         lateUsec = -static_cast<int64_t>(intervalUsec);
         g_iFramePacerLastBeforeSwapPhaseErrorUsec = -leadUsec;
@@ -2546,21 +2574,11 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
         static_cast<int64_t>(wakeUsec) - static_cast<int64_t>(nowUsec);
     const uint64_t maxPlannedWaitUsec =
         intervalUsec + std::max<uint64_t>(500, intervalUsec / 8);
-	    if (plannedWaitUsec >
-	        static_cast<int64_t>(maxPlannedWaitUsec)) {
-      if (PerfDiagnosticsEnabled()) {
-        LOG->Trace(
-            "FRAME_PACING: resync phase=before_swap "
-            "reason=planned_wait_over_budget planned_wait_us=%lld "
-            "target_hz=%.3f interval_us=%llu margin_us=%llu "
-            "wait_margin_us=%llu "
-            "max_planned_wait_us=%llu",
-            static_cast<long long>(plannedWaitUsec), targetHz,
-            static_cast<unsigned long long>(intervalUsec),
-          static_cast<unsigned long long>(marginUsec),
-          static_cast<unsigned long long>(waitMarginUsec),
-          static_cast<unsigned long long>(maxPlannedWaitUsec));
-      }
+    if (plannedWaitUsec >
+        static_cast<int64_t>(maxPlannedWaitUsec)) {
+      TraceFramePacingResync(
+          "planned_wait_over_budget", plannedWaitUsec, targetHz,
+          intervalUsec, maxPlannedWaitUsec);
       g_iFramePacerNextPresentUsec = nowUsec + intervalUsec;
       wakeUsec = g_iFramePacerNextPresentUsec > waitMarginUsec
                      ? g_iFramePacerNextPresentUsec - waitMarginUsec
@@ -2569,11 +2587,11 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
           static_cast<int64_t>(wakeUsec) - static_cast<int64_t>(nowUsec);
       g_iFramePacerLastBeforeSwapPhaseErrorUsec =
           -static_cast<int64_t>(intervalUsec);
-	      g_szFramePacerLastBeforeSwapResyncReason =
-	          "planned_wait_over_budget";
-	    }
+      g_szFramePacerLastBeforeSwapResyncReason =
+          "planned_wait_over_budget";
+    }
 
-	    FramePacingWaitStats waitStats;
+    FramePacingWaitStats waitStats;
     if (plannedWaitUsec > 0) {
       waitStats = WaitUntilFramePacingWakeUsec(
           wakeUsec, g_iFramePacerNextPresentUsec, intervalUsec, fineWaitUsec,
@@ -2636,6 +2654,8 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
         waitStats.display_link_output_to_target_usec;
     g_iFramePacerLastDisplayLinkSelectedOutputToTargetUsec =
         waitStats.display_link_selected_output_to_target_usec;
+    g_iFramePacerLastDisplayLinkSelectedOutputProjectionSteps =
+        waitStats.display_link_selected_output_projection_steps;
     g_iFramePacerLastDisplayLinkOutputLateUsec =
         waitStats.display_link_output_late_usec;
     g_bFramePacerLastDisplayLinkUsed = waitStats.display_link_used;
@@ -2645,14 +2665,10 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
         waitStats.display_link_final_wait_capped;
     g_bFramePacerLastDisplayLinkOutputPhaseAccepted =
         waitStats.display_link_output_phase_accepted;
-    g_iFramePacerLastDisplayLinkOutputAlignedPresentMode =
-        waitStats.display_link_output_aligned_present_mode;
     g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled =
         waitStats.display_link_output_aligned_present_enabled;
     g_bFramePacerLastDisplayLinkOutputAlignedPresent =
         waitStats.display_link_output_aligned_present;
-    g_bFramePacerLastDisplayLinkOutputCapRejected =
-        waitStats.display_link_output_cap_rejected;
     g_szFramePacerLastDisplayLinkSelectedOutputSource =
         waitStats.display_link_selected_output_source != nullptr
             ? waitStats.display_link_selected_output_source
@@ -2696,9 +2712,16 @@ void RageDisplay::FrameLimitBeforeVsync(int iFPS) {
   }
 
   if (!HOOKS->AppHasFocus()) {
+    // This is only a cooperative yield, not a second frame limiter.  A fixed
+    // 10 ms sleep is longer than a complete 120 Hz frame (8.33 ms) and can
+    // therefore force a focused-rate game down toward 70-100 FPS whenever the
+    // window focus signal is stale.  Keep the yield comfortably inside the
+    // requested frame interval.
+    const int safeTargetFps = std::max(1, iFPS);
+    const int inactiveYieldMicroseconds =
+        std::clamp(1000000 / safeTargetFps / 4, 1000, 10000);
     iDelayMicroseconds = std::max(
-        iDelayMicroseconds,
-        10000);  // give some time to other processes and threads
+        iDelayMicroseconds, inactiveYieldMicroseconds);
   }
 
   if (iDelayMicroseconds > 0) {
@@ -2851,17 +2874,17 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           "macos_severe_swap=%d "
           "macos_risky_swap_threshold_us=%llu "
           "macos_severe_swap_threshold_us=%llu "
-	          "macos_wait_overshoot_pressure=%d "
-	          "macos_wait_overshoot_active=%d "
-	          "macos_wait_cap_us=%llu "
-		          "macos_lead_stable_frames=%d "
-		          "macos_safe_mode=%d "
-	          "macos_early_swap_backpressure=%d "
-	          "macos_pre_swap_load_pressure=%d "
-	          "macos_pre_swap_load_frames=%d "
-	          "macos_pre_swap_load_us=%llu "
-	          "macos_pre_swap_load_threshold_us=%llu"
-	          " display_link_used=%d display_link_status=%s "
+          "macos_wait_overshoot_pressure=%d "
+          "macos_wait_overshoot_active=%d "
+          "macos_wait_cap_us=%llu "
+          "macos_lead_stable_frames=%d "
+          "macos_safe_mode=%d "
+          "macos_early_swap_backpressure=%d "
+          "macos_pre_swap_load_pressure=%d "
+          "macos_pre_swap_load_frames=%d "
+          "macos_pre_swap_load_us=%llu "
+          "macos_pre_swap_load_threshold_us=%llu"
+          " display_link_used=%d display_link_status=%s "
           "display_link_timed_out=%d display_link_period_us=%llu "
           "display_link_ticks=%llu display_link_ticks_wait=%llu "
           "display_link_wait_us=%llu display_link_final_wait_us=%llu "
@@ -2878,12 +2901,11 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           "display_link_latest_us=%llu display_link_last_output_us=%llu "
           "display_link_selected_output_us=%llu "
           "display_link_selected_output_source=%s "
+          "display_link_selected_output_projection_steps=%lld "
           "display_link_final_wait_capped=%d "
           "display_link_output_phase_accepted=%d "
-          "display_link_output_aligned_present_mode=%d "
           "display_link_output_aligned_present_enabled=%d "
           "display_link_output_aligned_present=%d "
-          "display_link_output_cap_rejected=%d "
           "display_link_phase_aligned=%d "
           "display_link_phase_align_us=%lld "
           "display_link_output_to_target_us=%lld "
@@ -2958,19 +2980,19 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           static_cast<unsigned long long>(
               FramePacingMacOSSevereSwapThresholdUsec(intervalUsec)),
           g_iFramePacerMacOSWaitOvershootPressure,
-	          g_bFramePacerLastMacOSWaitOvershootPressure ? 1 : 0,
-	          static_cast<unsigned long long>(
-	              g_iFramePacerLastMacOSWaitCapUsec),
-	          g_iFramePacerMacOSLeadStableFrames,
-	          g_bFramePacerMacOSSafeMode ? 1 : 0,
-	          g_bFramePacerLastMacOSEarlySwapBackpressure ? 1 : 0,
-	          g_bFramePacerLastMacOSPreSwapLoadPressure ? 1 : 0,
-	          g_iFramePacerMacOSPreSwapLoadPressureFrames,
-	          static_cast<unsigned long long>(
-	              g_iFramePacerLastMacOSPreSwapLoadUsec),
-	          static_cast<unsigned long long>(
-	              g_iFramePacerLastMacOSPreSwapLoadThresholdUsec),
-	          g_bFramePacerLastDisplayLinkUsed ? 1 : 0,
+          g_bFramePacerLastMacOSWaitOvershootPressure ? 1 : 0,
+          static_cast<unsigned long long>(
+              g_iFramePacerLastMacOSWaitCapUsec),
+          g_iFramePacerMacOSLeadStableFrames,
+          g_bFramePacerMacOSSafeMode ? 1 : 0,
+          g_bFramePacerLastMacOSEarlySwapBackpressure ? 1 : 0,
+          g_bFramePacerLastMacOSPreSwapLoadPressure ? 1 : 0,
+          g_iFramePacerMacOSPreSwapLoadPressureFrames,
+          static_cast<unsigned long long>(
+              g_iFramePacerLastMacOSPreSwapLoadUsec),
+          static_cast<unsigned long long>(
+              g_iFramePacerLastMacOSPreSwapLoadThresholdUsec),
+          g_bFramePacerLastDisplayLinkUsed ? 1 : 0,
           g_szFramePacerLastDisplayLinkStatus,
           g_bFramePacerLastDisplayLinkTimedOut ? 1 : 0,
           static_cast<unsigned long long>(
@@ -3010,12 +3032,12 @@ void RageDisplay::FrameLimitAfterVsync(float swapBuffersMs) {
           static_cast<unsigned long long>(
               g_iFramePacerLastDisplayLinkSelectedOutputUsec),
           g_szFramePacerLastDisplayLinkSelectedOutputSource,
+          static_cast<long long>(
+              g_iFramePacerLastDisplayLinkSelectedOutputProjectionSteps),
           g_bFramePacerLastDisplayLinkFinalWaitCapped ? 1 : 0,
           g_bFramePacerLastDisplayLinkOutputPhaseAccepted ? 1 : 0,
-          g_iFramePacerLastDisplayLinkOutputAlignedPresentMode,
           g_bFramePacerLastDisplayLinkOutputAlignedPresentEnabled ? 1 : 0,
           g_bFramePacerLastDisplayLinkOutputAlignedPresent ? 1 : 0,
-          g_bFramePacerLastDisplayLinkOutputCapRejected ? 1 : 0,
           g_bFramePacerLastDisplayLinkPhaseAligned ? 1 : 0,
           static_cast<long long>(
               g_iFramePacerLastDisplayLinkPhaseAlignUsec),

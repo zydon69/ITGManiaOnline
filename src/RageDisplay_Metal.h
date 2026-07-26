@@ -29,6 +29,8 @@ class RageDisplay_Metal : public RageDisplay {
       const VideoModeParams& p, bool bAllowUnacceleratedRenderer) override;
 
   std::string GetApiDescription() const override { return "Metal"; }
+  std::string GetPresentationStats() const override;
+  PresentationCounters GetPresentationCounters() const override;
   void GetDisplaySpecs(DisplaySpecs& out) const override;
   const RagePixelFormatDesc* GetPixelFormatDesc(RagePixelFormat pf)
       const override;
@@ -176,7 +178,7 @@ class RageDisplay_Metal : public RageDisplay {
   void ClearActiveBatches();
   void MoveActiveBatchesTo(std::vector<DrawBatch>* destination);
   void RestorePendingMainBatches();
-  void FlushBatches();
+  MacOSMetalPresentResult SubmitActiveBatches();
   void BuildMetalBatches(
       const std::vector<DrawBatch>& batches, size_t batchCount,
       std::vector<MacOSMetalDrawBatch>* metalBatches) const;

@@ -337,6 +337,7 @@ void MessageManager::Broadcast(Message& msg) const {
   }
 
   size_t deliveredSubscribers = 0;
+  size_t inactiveSubscribers = 0;
   size_t unsubscribedDuringDispatch = 0;
 
   for (IMessageSubscriber* subscriber : subscribers) {
@@ -355,6 +356,11 @@ void MessageManager::Broadcast(Message& msg) const {
       continue;
     }
 
+    if (!subscriber->IsMessageDeliveryEnabled()) {
+      ++inactiveSubscribers;
+      continue;
+    }
+
     subscriber->HandleMessage(msg);
     ++deliveredSubscribers;
   }
@@ -362,10 +368,12 @@ void MessageManager::Broadcast(Message& msg) const {
   if (traceOnlineMessage) {
     LOG->Trace(
         "ITG Online MessageTrace: broadcast_complete name=%s "
-        "subscribers=%zu delivered=%zu skipped_unsubscribed=%zu",
+        "subscribers=%zu delivered=%zu skipped_inactive=%zu "
+        "skipped_unsubscribed=%zu",
         msg.GetName().c_str(),
         subscribers.size(),
         deliveredSubscribers,
+        inactiveSubscribers,
         unsubscribedDuringDispatch);
   }
 }
@@ -389,7 +397,8 @@ bool MessageManager::IsSubscribedToMessage(
 void IMessageSubscriber::ClearMessages(const std::string sMessage) {}
 
 MessageSubscriber::MessageSubscriber(const MessageSubscriber& cpy)
-    : IMessageSubscriber(cpy) {
+    : IMessageSubscriber(cpy),
+      m_bMessageDeliveryEnabled(cpy.IsMessageDeliveryEnabled()) {
   for (const std::string& msg : cpy.m_vsSubscribedTo) {
     this->SubscribeToMessage(msg);
   }
@@ -401,6 +410,7 @@ MessageSubscriber& MessageSubscriber::operator=(const MessageSubscriber& cpy) {
   }
 
   UnsubscribeAll();
+  SetMessageDeliveryEnabled(cpy.IsMessageDeliveryEnabled());
 
   for (const std::string& msg : cpy.m_vsSubscribedTo) {
     this->SubscribeToMessage(msg);

@@ -224,6 +224,12 @@ class RageDisplay {
   friend class RageTexture;
 
  public:
+  struct PresentationCounters {
+    uint64_t attempted_frames = 0;
+    uint64_t presented_frames = 0;
+    uint64_t dropped_frames = 0;
+  };
+
   struct RagePixelFormatDesc {
     int bpp;
     unsigned int masks[4];
@@ -239,6 +245,10 @@ class RageDisplay {
       const VideoModeParams& p, bool bAllowUnacceleratedRenderer) = 0;
 
   virtual std::string GetApiDescription() const = 0;
+  virtual std::string GetPresentationStats() const { return std::string(); }
+  virtual PresentationCounters GetPresentationCounters() const {
+    return PresentationCounters();
+  }
   virtual void GetDisplaySpecs(DisplaySpecs& out) const = 0;
 
   // Don't override this.  Override TryVideoMode() instead.
@@ -419,7 +429,7 @@ class RageDisplay {
   int GetVPF() const;
   int GetCumFPS() const;  // average FPS since last reset
   virtual void ResetStats();
-  virtual void ProcessStatsOnFlip();
+  virtual void ProcessStatsOnFlip(bool framePresented = true);
   virtual std::string GetStats() const;
   void StatsAddVerts(int iNumVertsRendered);
 

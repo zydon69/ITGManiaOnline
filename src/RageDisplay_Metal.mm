@@ -790,6 +790,20 @@ void RageDisplay_Metal::GetDisplaySpecs(DisplaySpecs& out) const {
   }
 }
 
+std::string RageDisplay_Metal::GetPresentationStats() const {
+  return MacOSMetalPresenterGetRuntimeStatsLine();
+}
+
+RageDisplay::PresentationCounters
+RageDisplay_Metal::GetPresentationCounters() const {
+  PresentationCounters counters;
+  counters.attempted_frames = m_iMetalFrames;
+  counters.dropped_frames = std::min(m_iSkippedPresentFrames, m_iMetalFrames);
+  counters.presented_frames =
+      counters.attempted_frames - counters.dropped_frames;
+  return counters;
+}
+
 const RageDisplay::RagePixelFormatDesc* RageDisplay_Metal::GetPixelFormatDesc(
     RagePixelFormat pf) const {
   if (pf < 0 || pf >= NUM_RagePixelFormat) {
@@ -1181,7 +1195,7 @@ void RageDisplay_Metal::SetRenderTarget(
     }
     MoveActiveBatchesTo(&m_PendingMainDrawBatches);
   } else {
-    FlushBatches();
+    SubmitActiveBatches();
   }
 
   if (iHandle == 0) {
@@ -1229,7 +1243,7 @@ void RageDisplay_Metal::DeleteTexture(uintptr_t iTexHandle) {
     return;
   }
   if (m_iCurrentRenderTargetHandle == iTexHandle) {
-    FlushBatches();
+    SubmitActiveBatches();
     m_iCurrentRenderTargetHandle = 0;
   }
   if (IsTexturePendingDelete(iTexHandle)) {
@@ -1743,12 +1757,12 @@ void RageDisplay_Metal::RestorePendingMainBatches() {
   m_PendingMainDrawBatches.clear();
 }
 
-void RageDisplay_Metal::FlushBatches() {
+MacOSMetalPresentResult RageDisplay_Metal::SubmitActiveBatches() {
   if (!m_bReady || m_Presenter == nullptr) {
     ResetVertexWriter(&m_MainVertexWriter, true);
     ResetVertexWriter(&m_RenderTargetVertexWriter, true);
     ClearActiveBatches();
-    return;
+    return MacOSMetalPresentResult::Failed;
   }
 
   const size_t activeBatchCount =
@@ -1823,7 +1837,7 @@ void RageDisplay_Metal::FlushBatches() {
       }
       ClearActiveBatches();
       m_MetalDrawBatches.clear();
-      return;
+      return MacOSMetalPresentResult::Failed;
     }
     const bool preserveColor = target.preserveNextRender && target.hasRendered;
     const int viewportWidth =
@@ -1858,7 +1872,8 @@ void RageDisplay_Metal::FlushBatches() {
     ClearActiveBatches();
     m_MetalDrawBatches.clear();
     m_bClearDepthNextFrame = false;
-    return;
+    return rendered ? MacOSMetalPresentResult::Presented
+                    : MacOSMetalPresentResult::Failed;
   }
 
   const double targetHz = MetalDisplayPacingTargetHz(
@@ -1908,12 +1923,15 @@ void RageDisplay_Metal::FlushBatches() {
           static_cast<unsigned long long>(m_iSkippedPresentFrames));
     }
   }
+  return presentResult;
 }
 
 void RageDisplay_Metal::EndFrame() {
+  MacOSMetalPresentResult framePresentResult =
+      MacOSMetalPresentResult::Failed;
   if (m_bReady && m_Presenter) {
     if (m_iCurrentRenderTargetHandle != 0) {
-      FlushBatches();
+      SubmitActiveBatches();
       m_iCurrentRenderTargetHandle = 0;
     }
     RestorePendingMainBatches();
@@ -1991,7 +2009,7 @@ void RageDisplay_Metal::EndFrame() {
           finiteVertexCount > 0 ? maxY : 0.0f,
           finiteVertexCount > 0 ? maxZ : 0.0f);
     }
-    FlushBatches();
+    framePresentResult = SubmitActiveBatches();
   }
   if (m_Window) {
     m_Window->Update();
@@ -2005,7 +2023,8 @@ void RageDisplay_Metal::EndFrame() {
     }
   }
   ReleasePendingTextureDeletes();
-  ProcessStatsOnFlip();
+  ProcessStatsOnFlip(
+      framePresentResult == MacOSMetalPresentResult::Presented);
 }
 
 void RageDisplay_Metal::ResolutionChanged() {

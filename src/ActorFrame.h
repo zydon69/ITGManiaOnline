@@ -107,6 +107,7 @@ class ActorFrame : public Actor {
   void SetZWrite(bool b) override;
   void FinishTweening() override;
   void HurryTweening(float factor) override;
+  void SetMessageDeliveryEnabled(bool enabled) override;
 
   void SetUpdateRate(float rate) override {
     if (std::isfinite(rate) && rate > 0.0f) {

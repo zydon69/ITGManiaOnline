@@ -1199,14 +1199,15 @@ RageDisplay_Legacy::~RageDisplay_Legacy() {
 }
 
 std::string RageDisplay_Legacy::GetApiDescription() const {
-  std::string description = "OpenGL";
+  return "OpenGL";
+}
+
+std::string RageDisplay_Legacy::GetPresentationStats() const {
 #ifdef __APPLE__
-  const std::string metalStats = MacOSMetalPresenterGetRuntimeStatsLine();
-  if (!metalStats.empty()) {
-    description += "\n" + metalStats;
-  }
+  return MacOSMetalPresenterGetRuntimeStatsLine();
+#else
+  return std::string();
 #endif
-  return description;
 }
 
 void RageDisplay_Legacy::GetDisplaySpecs(DisplaySpecs& out) const {

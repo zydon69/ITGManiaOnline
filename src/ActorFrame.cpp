@@ -294,6 +294,16 @@ void ActorFrame::AddChild(Actor* pActor) {
   MarkChildrenMutated();
 
   pActor->SetParent(this);
+  pActor->SetMessageDeliveryEnabled(IsMessageDeliveryEnabled());
+}
+
+void ActorFrame::SetMessageDeliveryEnabled(bool enabled) {
+  MessageSubscriber::SetMessageDeliveryEnabled(enabled);
+  for (Actor* child : m_SubActors) {
+    if (child != nullptr) {
+      child->SetMessageDeliveryEnabled(enabled);
+    }
+  }
 }
 
 void ActorFrame::RemoveChild(Actor* pActor) {

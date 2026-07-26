@@ -30,6 +30,10 @@ require_contains(
   "src/ScreenStatsOverlay.cpp"
   "if (UpdateTime > 0.1f)"
   "Stats skip severity must evaluate the absolute severe threshold")
+require_contains(
+  "src/ScreenStatsOverlay.cpp"
+  "Presentation drop: new="
+  "Stats must expose renderer presentation drops even when engine updates stay fast")
 require_not_contains(
   "src/ScreenStatsOverlay.cpp"
   "while (Thresholds[skip]"

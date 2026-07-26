@@ -1,5 +1,6 @@
 #import "LowLevelWindow_MacOSX.h"
 #import "DisplaySpec.h"
+#import "DisplayLinkPacingPolicy.h"
 #import "MacOSMetalPresenter.h"
 #import "MacOSFramePacing.h"
 #import "PerfDiagnostics.h"
@@ -20,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
+#include <limits>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -152,10 +154,6 @@ float MacOSFramePacingDisplayLinkFinalYieldMs() {
 
 float MacOSFramePacingDisplayLinkFinalSpinMs() {
   return kMacOSFramePacingDisplayLinkFinalSpinMs;
-}
-
-int MacOSFramePacingOutputAlignedPresentMode() {
-  return 1;
 }
 }  // namespace
 
@@ -448,9 +446,6 @@ uint64_t CappedDisplayLinkDesiredPresentUsec(
 
 bool DisplayLinkUseOutputAlignedPresent(
     uint64_t periodUsec, uint64_t intervalUsec) {
-  if (MacOSFramePacingOutputAlignedPresentMode() == 0) {
-    return false;
-  }
   if (periodUsec == 0 || intervalUsec == 0) {
     return false;
   }
@@ -461,104 +456,14 @@ bool DisplayLinkUseOutputAlignedPresent(
          intervalUsec <= periodUsec + toleranceUsec;
 }
 
-uint64_t AbsDeltaUsec(uint64_t a, uint64_t b) {
-  return a > b ? a - b : b - a;
-}
-
-struct DisplayLinkOutputPhase {
-  uint64_t output_usec = 0;
-  int64_t output_to_target_usec = 0;
-  const char* source = "none";
-  bool valid = false;
-  bool phase_accepted = false;
-};
-
-bool DisplayLinkOutputAlignedPresentWouldCap(
-    const DisplayLinkOutputPhase& outputPhase, uint64_t presentLeadUsec,
-    uint64_t latestPresentUsec, uint64_t phaseToleranceUsec,
-    uint64_t displayLinkTickCount, int outputAlignedPresentMode) {
-  if (!outputPhase.valid || !outputPhase.phase_accepted ||
-      outputPhase.output_usec <= presentLeadUsec) {
-    return false;
+uint64_t EarliestFutureDisplayLinkOutputUsec(
+    uint64_t nowUsec, uint64_t presentLeadUsec) {
+  const uint64_t maximum = std::numeric_limits<uint64_t>::max();
+  if (nowUsec >= maximum - presentLeadUsec) {
+    return maximum;
   }
-
-  const uint64_t desiredPresentUsec =
-      outputPhase.output_usec - presentLeadUsec;
-  if (desiredPresentUsec <= latestPresentUsec) {
-    return false;
-  }
-
-  if (outputAlignedPresentMode != 3) {
-    return false;
-  }
-
-  constexpr uint64_t kWarmupDisplayLinkTicks = 45;
-  if (displayLinkTickCount <= kWarmupDisplayLinkTicks) {
-    return false;
-  }
-
-  const uint64_t aheadUsec =
-      outputPhase.output_to_target_usec > 0
-          ? static_cast<uint64_t>(outputPhase.output_to_target_usec)
-          : 0;
-  const uint64_t strictAheadThresholdUsec =
-      std::max<uint64_t>(1500, (phaseToleranceUsec * 3) / 4);
-  return aheadUsec >= strictAheadThresholdUsec;
-}
-
-void ConsiderDisplayLinkOutputCandidate(
-    uint64_t candidateUsec, const char* source, uint64_t targetPresentUsec,
-    uint64_t phaseToleranceUsec, DisplayLinkOutputPhase* best) {
-  if (candidateUsec == 0 || best == nullptr) {
-    return;
-  }
-
-  const uint64_t candidateDelta =
-      AbsDeltaUsec(candidateUsec, targetPresentUsec);
-  const uint64_t bestDelta =
-      best->valid ? AbsDeltaUsec(best->output_usec, targetPresentUsec)
-                  : UINT64_MAX;
-  const bool candidateIsFutureOrTarget =
-      candidateUsec >= targetPresentUsec;
-  const bool bestIsFutureOrTarget =
-      best->valid && best->output_usec >= targetPresentUsec;
-  if (!best->valid || candidateDelta < bestDelta ||
-      (candidateDelta == bestDelta &&
-       candidateIsFutureOrTarget && !bestIsFutureOrTarget)) {
-    best->output_usec = candidateUsec;
-    best->output_to_target_usec =
-        static_cast<int64_t>(candidateUsec) -
-        static_cast<int64_t>(targetPresentUsec);
-    best->source = source;
-    best->valid = true;
-    best->phase_accepted = candidateDelta <= phaseToleranceUsec;
-  }
-}
-
-DisplayLinkOutputPhase SelectDisplayLinkOutputForTarget(
-    uint64_t lastOutputUsec, uint64_t targetPresentUsec,
-    uint64_t periodUsec, uint64_t phaseToleranceUsec,
-    bool allowNextOutput) {
-  DisplayLinkOutputPhase best;
-  if (lastOutputUsec == 0) {
-    return best;
-  }
-
-  if (periodUsec != 0 && lastOutputUsec > periodUsec) {
-    ConsiderDisplayLinkOutputCandidate(
-        lastOutputUsec - periodUsec, "previous", targetPresentUsec,
-        phaseToleranceUsec, &best);
-  }
-  ConsiderDisplayLinkOutputCandidate(
-      lastOutputUsec, "current", targetPresentUsec, phaseToleranceUsec,
-      &best);
-  if (allowNextOutput && periodUsec != 0 &&
-      lastOutputUsec <= UINT64_MAX - periodUsec) {
-    ConsiderDisplayLinkOutputCandidate(
-        lastOutputUsec + periodUsec, "next", targetPresentUsec,
-        phaseToleranceUsec, &best);
-  }
-  return best;
+  const uint64_t earliestUsec = nowUsec + presentLeadUsec;
+  return earliestUsec < maximum ? earliestUsec + 1 : maximum;
 }
 
 class MacOSDisplayLinkPacer {
@@ -614,8 +519,6 @@ class MacOSDisplayLinkPacer {
             initialPeriodUsec, intervalUsec, presentLeadOverrideUsec);
     const uint64_t initialLateToleranceUsec =
         DisplayLinkLateToleranceUsec(initialPeriodUsec, intervalUsec);
-    const int outputAlignedPresentMode =
-        MacOSFramePacingOutputAlignedPresentMode();
     const bool initialOutputAlignedPresent =
         DisplayLinkUseOutputAlignedPresent(initialPeriodUsec, intervalUsec);
     const uint64_t latestAllowedUsec =
@@ -634,29 +537,19 @@ class MacOSDisplayLinkPacer {
       const uint64_t currentPresentLeadUsec =
           DisplayLinkPresentLeadUsec(
               currentPeriodUsec, intervalUsec, presentLeadOverrideUsec);
-      const uint64_t currentLateToleranceUsec =
-          DisplayLinkLateToleranceUsec(currentPeriodUsec, intervalUsec);
-      const uint64_t currentLatestPresentUsec =
-          (targetPresentUsec > currentPresentLeadUsec
-               ? targetPresentUsec - currentPresentLeadUsec
-               : targetPresentUsec) +
-          currentLateToleranceUsec;
       const bool outputAlignedPresent =
           DisplayLinkUseOutputAlignedPresent(currentPeriodUsec, intervalUsec);
-      const DisplayLinkOutputPhase outputPhase =
-          SelectDisplayLinkOutputForTarget(
+      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
+      const uint64_t earliestOutputUsec =
+          EarliestFutureDisplayLinkOutputUsec(
+              nowUsec, currentPresentLeadUsec);
+      const DisplayLinkPacing::OutputPhase outputPhase =
+          DisplayLinkPacing::SelectFutureOutputForTarget(
               m_LastOutputRageUsec, targetPresentUsec,
               currentPeriodUsec, phaseToleranceUsec,
-              outputAlignedPresentMode < 2);
-      const bool outputAlignedCapRejected =
-          outputAlignedPresentMode == 3 &&
-          DisplayLinkOutputAlignedPresentWouldCap(
-              outputPhase, currentPresentLeadUsec,
-              currentLatestPresentUsec, phaseToleranceUsec,
-              m_TickCount, outputAlignedPresentMode);
+              earliestOutputUsec);
 
-      if (outputAlignedPresent && outputPhase.phase_accepted &&
-          !outputAlignedCapRejected) {
+      if (outputAlignedPresent && outputPhase.phase_accepted) {
         status = "output_aligned";
         break;
       }
@@ -664,7 +557,6 @@ class MacOSDisplayLinkPacer {
         break;
       }
 
-      const uint64_t nowUsec = RageTimer::GetTimeSinceStartMicroseconds();
       if (!initialOutputAlignedPresent && nowUsec >= latestAllowedUsec) {
         status = "target_cap";
         break;
@@ -704,21 +596,17 @@ class MacOSDisplayLinkPacer {
              ? targetPresentUsec - presentLeadUsec
              : targetPresentUsec) +
         lateToleranceUsec;
-    const DisplayLinkOutputPhase outputPhase =
-        SelectDisplayLinkOutputForTarget(
+    const uint64_t selectionUsec =
+        RageTimer::GetTimeSinceStartMicroseconds();
+    const uint64_t earliestOutputUsec =
+        EarliestFutureDisplayLinkOutputUsec(selectionUsec, presentLeadUsec);
+    const DisplayLinkPacing::OutputPhase outputPhase =
+        DisplayLinkPacing::SelectFutureOutputForTarget(
             lastOutputUsec, targetPresentUsec, periodUsec,
-            phaseToleranceUsec, outputAlignedPresentMode < 2);
+            phaseToleranceUsec, earliestOutputUsec);
     const bool outputAlignedPresent =
         DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
-        outputPhase.phase_accepted &&
-        !(outputAlignedPresentMode == 3 &&
-          DisplayLinkOutputAlignedPresentWouldCap(
-              outputPhase, presentLeadUsec, latestPresentUsec,
-              phaseToleranceUsec, tickCount, outputAlignedPresentMode));
-    const bool outputAlignedCapRejected =
-        DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec) &&
-        outputPhase.phase_accepted && !outputAlignedPresent &&
-        outputAlignedPresentMode == 3;
+        outputPhase.phase_accepted;
     const bool selectedOutputPhaseAccepted =
         outputPhase.phase_accepted;
     uint64_t desiredPresentUsec =
@@ -731,10 +619,10 @@ class MacOSDisplayLinkPacer {
     bool finalWaitCapped = false;
     desiredPresentUsec = CappedDisplayLinkDesiredPresentUsec(
         desiredPresentUsec, latestPresentUsec, &finalWaitCapped);
-    if (!timedOut && outputAlignedPresent) {
+    if (!timedOut && outputAlignedPresent && !finalWaitCapped) {
       status = "output_aligned";
-    } else if (!timedOut && outputAlignedCapRejected) {
-      status = "output_cap_rejected";
+    } else if (!timedOut && outputAlignedPresent && finalWaitCapped) {
+      status = "output_capped";
     } else if (!timedOut && !selectedOutputPhaseAccepted &&
         std::strcmp(status, "target_cap") != 0) {
       status = "phase_miss";
@@ -781,6 +669,8 @@ class MacOSDisplayLinkPacer {
                     static_cast<int64_t>(targetPresentUsec);
       stats->selected_output_to_target_usec =
           outputPhase.valid ? outputPhase.output_to_target_usec : 0;
+      stats->selected_output_projection_steps =
+          outputPhase.valid ? outputPhase.projection_steps : 0;
       stats->output_late_usec =
           outputPhase.output_usec == 0
               ? 0
@@ -788,12 +678,11 @@ class MacOSDisplayLinkPacer {
                     static_cast<int64_t>(outputPhase.output_usec);
       stats->final_wait_capped = finalWaitCapped;
       stats->output_phase_accepted = selectedOutputPhaseAccepted;
-      stats->output_aligned_present_mode = outputAlignedPresentMode;
       stats->output_aligned_present = outputAlignedPresent;
-      stats->output_aligned_cap_rejected = outputAlignedCapRejected;
       stats->output_aligned_present_enabled =
-          outputAlignedPresentMode != 0;
-      stats->selected_output_source = outputPhase.source;
+          DisplayLinkUseOutputAlignedPresent(periodUsec, intervalUsec);
+      stats->selected_output_source =
+          DisplayLinkPacing::OutputSourceName(outputPhase.source);
       stats->status = status;
     }
     return true;

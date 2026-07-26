@@ -27,9 +27,17 @@ endfunction()
 
 read_source("src/RageDisplay_Metal.mm" metal_display)
 read_source("src/RageDisplay_Metal.h" metal_display_header)
+read_source("src/RageDisplay.cpp" rage_display)
+read_source("src/ScreenManager.cpp" screen_manager)
 read_source(
   "src/arch/LowLevelWindow/LowLevelWindow_MacOSX.mm"
   macos_window)
+read_source(
+  "src/arch/LowLevelWindow/DisplayLinkPacingPolicy.cpp"
+  display_link_policy)
+read_source(
+  "Tests/display_link_pacing_policy_test.cpp"
+  display_link_policy_test)
 read_source(
   "src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
   metal_presenter)
@@ -206,6 +214,38 @@ require_contains(
   "${metal_presenter}"
   "MacOSMetalPresentResult::Skipped"
   "dropped presentation frames are distinct from hard failures")
+require_contains(
+  "${display_link_policy}"
+  "earliestOutputUsec > lastOutputUsec"
+  "stale display-link phases are projected to a future output deadline")
+require_contains(
+  "${display_link_policy_test}"
+  "a stale observed phase must never produce a past deadline"
+  "future display-link deadline selection has executable regression coverage")
+require_contains(
+  "${metal_display}"
+  "framePresentResult == MacOSMetalPresentResult::Presented"
+  "legacy FPS counters only count successful native Metal submissions")
+require_contains(
+  "${rage_display}"
+  "g_iFramesAttemptedSinceLastCheck > 0"
+  "zero frame attempts cannot divide the VPF statistic by zero")
+require_contains(
+  "${rage_display}"
+  "g_iFramesRenderedSinceLastReset / cumulativeTime"
+  "cumulative FPS uses elapsed time instead of sample-count averaging")
+require_contains(
+  "${rage_display}"
+  "std::clamp(1000000 / safeTargetFps / 4, 1000, 10000)"
+  "inactive-window yielding must scale below the requested frame interval")
+require_contains(
+  "${metal_display}"
+  "MacOSMetalPresenterGetRuntimeStatsLine()"
+  "native Metal exposes presentation telemetry through the display contract")
+require_contains(
+  "${screen_manager}"
+  "PERF_SNAPSHOT: screen_transition"
+  "screen transitions snapshot presentation telemetry for log correlation")
 require_absent(
   "${metal_display}"
   "m_MaterialDiffuse.a < 0.999f"

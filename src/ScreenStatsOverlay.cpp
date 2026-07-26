@@ -128,6 +128,10 @@ void ScreenStatsOverlay::Update(float fDeltaTime) {
     // Reset skip timer when we toggle Stats on so we don't show a large skip
     // from the span when stats were turned off.
     m_timerSkip.Touch();
+    if (DISPLAY != nullptr) {
+      m_iLastDroppedPresentationFrames =
+          DISPLAY->GetPresentationCounters().dropped_frames;
+    }
   }
   m_bShowStatsWasOn = show_stats;
 
@@ -232,6 +236,34 @@ void ScreenStatsOverlay::UpdateSkips() {
   const float UpdateTime = m_timerSkip.GetDeltaTime();
   if (!std::isfinite(UpdateTime) || DISPLAY == nullptr) {
     return;
+  }
+
+  const RageDisplay::PresentationCounters presentation =
+      DISPLAY->GetPresentationCounters();
+  if (presentation.dropped_frames < m_iLastDroppedPresentationFrames) {
+    m_iLastDroppedPresentationFrames = presentation.dropped_frames;
+  }
+  const uint64_t newlyDroppedFrames =
+      presentation.dropped_frames - m_iLastDroppedPresentationFrames;
+  m_iLastDroppedPresentationFrames = presentation.dropped_frames;
+  if (newlyDroppedFrames > 0) {
+    const std::string time(
+        MicrosecondsToMMSSMsMs(RageTimer::GetTimeSinceStartMicroseconds()));
+    AddTimestampLine(
+        ssprintf(
+            "%s: %llu present drop%s", time.c_str(),
+            static_cast<unsigned long long>(newlyDroppedFrames),
+            newlyDroppedFrames == 1 ? "" : "s"),
+        RageColor(1.0f, 0.4f, 0.4f, 1));
+    if (PREFSMAN != nullptr && PREFSMAN->m_bLogSkips && LOG != nullptr) {
+      LOG->Trace(
+          "Presentation drop: new=%llu total=%llu attempted=%llu "
+          "presented=%llu",
+          static_cast<unsigned long long>(newlyDroppedFrames),
+          static_cast<unsigned long long>(presentation.dropped_frames),
+          static_cast<unsigned long long>(presentation.attempted_frames),
+          static_cast<unsigned long long>(presentation.presented_frames));
+    }
   }
 
   /* FPS is 0 for a little while after we load a screen; don't report

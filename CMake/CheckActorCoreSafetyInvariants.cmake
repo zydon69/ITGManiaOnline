@@ -44,6 +44,14 @@ require_contains(
   "${frame_source}"
   "Publish each completed child immediately"
   "child node loading preserves InitCommand sibling visibility")
+require_contains(
+  "${frame_source}"
+  "pActor->SetMessageDeliveryEnabled(IsMessageDeliveryEnabled());"
+  "children inherit their actor frame's message delivery state")
+require_contains(
+  "${frame_source}"
+  "MessageSubscriber::SetMessageDeliveryEnabled(enabled);"
+  "actor frames propagate message delivery state through their tree")
 require_not_contains(
   "${frame_source}"
   "DeleteAllChildren();\n  for (std::unique_ptr<Actor>& child : loadedChildren)"

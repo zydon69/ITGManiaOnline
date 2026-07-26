@@ -1,6 +1,7 @@
 #ifndef MessageManager_H
 #define MessageManager_H
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -160,6 +161,7 @@ class IMessageSubscriber {
  public:
   virtual ~IMessageSubscriber() {}
   virtual void HandleMessage(const Message& msg) = 0;
+  virtual bool IsMessageDeliveryEnabled() const { return true; }
   void ClearMessages(const std::string sMessage = "");
 
  private:
@@ -168,7 +170,7 @@ class IMessageSubscriber {
 
 class MessageSubscriber : public IMessageSubscriber {
  public:
-  MessageSubscriber() : m_vsSubscribedTo() {}
+  MessageSubscriber() : m_vsSubscribedTo(), m_bMessageDeliveryEnabled(true) {}
   MessageSubscriber(const MessageSubscriber& cpy);
   MessageSubscriber& operator=(const MessageSubscriber& cpy);
 
@@ -181,8 +183,16 @@ class MessageSubscriber : public IMessageSubscriber {
 
   void UnsubscribeAll();
 
+  virtual void SetMessageDeliveryEnabled(bool enabled) {
+    m_bMessageDeliveryEnabled.store(enabled, std::memory_order_relaxed);
+  }
+  bool IsMessageDeliveryEnabled() const override {
+    return m_bMessageDeliveryEnabled.load(std::memory_order_relaxed);
+  }
+
  private:
   std::vector<std::string> m_vsSubscribedTo;
+  std::atomic<bool> m_bMessageDeliveryEnabled;
 };
 
 /** @brief Deliver messages to any part of the program as needed. */

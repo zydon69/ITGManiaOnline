@@ -118,7 +118,10 @@ local function ini_section(source, sectionName)
 			currentSection = heading
 		elseif currentSection == sectionName then
 			local key, value = line:match("^([^;#][^=]*)=(.*)$")
-			if key then entries[key] = value end
+			if key then
+				if value:match('^".*"$') then value = value:sub(2, -2) end
+				entries[key] = value
+			end
 		end
 	end
 	return entries
@@ -321,14 +324,13 @@ local onlinePackSyncSource = read_source("Themes/Simply Love/Scripts/SL-OnlinePa
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
 local themeMetricsSource = read_source("Themes/Simply Love/metrics.ini")
 local onlineLobbyMetrics = ini_section(themeMetricsSource, "ScreenOnlineLobbies")
-assert(tostring(onlineLobbyMetrics.PrepareScreens or ""):find("ScreenSelectMusic", 1, true),
-	"online lobby initialization must preload the expensive music screen")
-assert(tostring(onlineLobbyMetrics.PersistScreens or ""):find("ScreenSelectMusic", 1, true),
-	"the online music screen must be reused between rounds")
-assert(tostring(onlineLobbyMetrics.PersistScreens or ""):find("ScreenPlayerOptions", 1, true),
-	"the online options screen must be reused after its first load")
+equal(onlineLobbyMetrics.PrepareScreens,
+	"ScreenSelectMusic,ScreenPlayerOptions,ScreenPlayerOptions2,ScreenPlayerOptions3",
+	"online selection and option screens must preload without persisting transient state")
+equal(onlineLobbyMetrics.PersistScreens, "",
+	"stateful online screens must be reconstructed between rounds")
 assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),
-	"online gameplay must not discard prepared selection and options screens")
+	"online transitions must keep the shared screen group until the round ends")
 assert(not clientSource:find("function ITGOnline:MaybeAutoReadyManager", 1, true),
 	"the manager must not run a second readiness orchestrator")
 assert(not onlineHelpersSource:find("OnlineManagerAutoReadyRetryRequested", 1, true),

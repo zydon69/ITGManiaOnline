@@ -30,5 +30,21 @@ require_contains(
   "src/ScreenAttract.cpp"
   "IsScreenUsable(startScreenName)"
   "Attract start-screen transitions must validate their target")
+require_contains(
+  "src/ScreenManager.cpp"
+  "pNewScreen->SetMessageDeliveryEnabled(false);"
+  "Prepared screens must not receive global messages before activation")
+require_contains(
+  "src/ScreenManager.cpp"
+  "ls.m_pScreen->SetMessageDeliveryEnabled(true);"
+  "Prepared screens must resume global messages when activated")
+require_contains(
+  "src/MessageManager.cpp"
+  "if (!subscriber->IsMessageDeliveryEnabled())"
+  "Message dispatch must skip inactive prepared-screen subscribers")
+require_contains(
+  "src/MessageManager.h"
+  "std::atomic<bool> m_bMessageDeliveryEnabled;"
+  "Prepared-screen message gating must be race-free during concurrent loading")
 
 message(STATUS "Screen core safety invariants passed")

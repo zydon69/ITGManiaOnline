@@ -314,6 +314,14 @@ void ResetFramePacingForScreenTransition(
 
   const std::string reason =
       ssprintf("%s:%s->%s", action.c_str(), previous.c_str(), next.c_str());
+  if (PerfDiagnosticsEnabled()) {
+    std::string stats = DISPLAY->GetStats();
+    Replace(stats, "\n", ", ");
+    LOG->Trace(
+        "PERF_SNAPSHOT: screen_transition action=%s previous=%s next=%s "
+        "display={%s}",
+        action.c_str(), previous.c_str(), next.c_str(), stats.c_str());
+  }
   DISPLAY->ResetFramePacing(reason.c_str());
 }
 
@@ -346,6 +354,11 @@ void PushLoadedScreen(const LoadedScreen& ls) {
   LOG->MapLog(
       "ScreenManager::TopScreen", "Top Screen: %s",
       ls.m_pScreen->GetName().c_str());
+
+  // Prepared and persisted screens remain subscribed so their expensive actor
+  // trees can be reused.  Reactivate message delivery only when the screen is
+  // actually joining the visible stack.
+  ls.m_pScreen->SetMessageDeliveryEnabled(true);
 
   // Be sure to push the screen first, so GetTopScreen returns the screen
   // during BeginScreen.
@@ -619,6 +632,7 @@ ScreenMessage ScreenManager::PopTopScreenInternal(bool bSendLoseFocus) {
     ls.m_pScreen->HandleScreenMessage(SM_LoseFocus);
   }
   ls.m_pScreen->EndScreen();
+  ls.m_pScreen->SetMessageDeliveryEnabled(false);
   ZERO(ls.m_input_redirected);
 
   if (g_setPersistantScreens.find(ls.m_pScreen->GetName()) !=
@@ -919,6 +933,10 @@ void ScreenManager::PrepareScreen(const std::string& sScreenName) {
   if (pNewScreen == nullptr) {
     return;
   }
+
+  // Construction subscribes actors to global messages.  A prepared screen is
+  // not active yet and must not process room/game state while it is invisible.
+  pNewScreen->SetMessageDeliveryEnabled(false);
 
   {
     LoadedScreen ls;

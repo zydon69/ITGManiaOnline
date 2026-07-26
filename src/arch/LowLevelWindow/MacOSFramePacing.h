@@ -31,13 +31,12 @@ struct MacOSFramePacingDisplayLinkStats {
   uint64_t selected_output_usec = 0;
   int64_t output_to_target_usec = 0;
   int64_t selected_output_to_target_usec = 0;
+  int64_t selected_output_projection_steps = 0;
   int64_t output_late_usec = 0;
   bool final_wait_capped = false;
   bool output_phase_accepted = false;
-  int output_aligned_present_mode = 1;
   bool output_aligned_present_enabled = false;
   bool output_aligned_present = false;
-  bool output_aligned_cap_rejected = false;
   const char* selected_output_source = "none";
   const char* status = "unavailable";
 };

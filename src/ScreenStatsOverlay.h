@@ -5,6 +5,7 @@
 #define ScreenStatsOverlay_H
 
 #include <array>
+#include <cstdint>
 #include <string>
 
 #include "BitmapText.h"
@@ -32,6 +33,7 @@ class ScreenStatsOverlay : public Screen {
   std::array<BitmapText, NUM_SKIPS_TO_SHOW> m_textSkips;
   RageTimer m_timerSkip;
   int m_LastSkip{0};
+  uint64_t m_iLastDroppedPresentationFrames{0};
 
   bool m_bStatsTextLoaded{false};
   bool m_bShowSkips{false};

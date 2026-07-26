@@ -55,6 +55,13 @@ BAD_LOG_PATTERNS = [
     ]
 ]
 
+EXPECTED_FALLBACK_PATTERNS = [
+    re.compile(
+        r"AudioUnit device latency unavailable; using buffer/stream fallback:",
+        re.IGNORECASE,
+    ),
+]
+
 RENDERER_PREFS = {
     "opengl": {
         "VideoRenderers": "opengl",
@@ -157,6 +164,9 @@ def launch_renderer(
         line
         for line in combined.splitlines()
         if any(pattern.search(line) for pattern in BAD_LOG_PATTERNS)
+        and not any(
+            pattern.search(line) for pattern in EXPECTED_FALLBACK_PATTERNS
+        )
         and "MemoryCardManager error.ogg" not in line
         and " error=0" not in line
     ]
