@@ -1290,6 +1290,22 @@ local function room_transition_key(room)
 	if roomVersion or playStateVersion then
 		local selectedSong = type(room.selected_song) == "table"
 			and room.selected_song or {}
+		local memberPackSyncStates = {}
+		for _, member in pairs(type(room.members) == "table" and room.members or {}) do
+			if type(member) == "table" then
+				memberPackSyncStates[#memberPackSyncStates + 1] = canonical_snapshot_value({
+					user_id = member.user_id or member.userId or member.id,
+					status = member.pack_sync_status or member.packSyncStatus,
+					message = member.pack_sync_message or member.packSyncMessage,
+					progress = member.pack_sync_download_progress or member.packSyncDownloadProgress,
+					download_id = member.pack_sync_download_id or member.packSyncDownloadId,
+					selection_id = member.pack_sync_selection_id or member.packSyncSelectionId,
+					sequence = member.pack_sync_sequence or member.packSyncSequence,
+					missing_song_at = member.missing_song_at or member.missingSongAt,
+				}, {})
+			end
+		end
+		table.sort(memberPackSyncStates)
 		return table.concat({
 			roomId,
 			"rv:" .. tostring(roomVersion or 0),
@@ -1299,6 +1315,7 @@ local function room_transition_key(room)
 				room.current_selection_id or room.currentSelectionId
 					or selectedSong.selection_id or selectedSong.selectionId or ""
 			),
+			"pack:" .. table.concat(memberPackSyncStates, ","),
 		}, "|")
 	end
 	return roomId .. "|" .. canonical_snapshot_value(room, {})

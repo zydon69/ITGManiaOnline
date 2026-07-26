@@ -368,6 +368,14 @@ assert(onlineClientContent:find('preferred=lobby reason=completed_round_reset_wh
 	"a server-side evaluation timeout must force the client back to the online lobby")
 assert(onlineClientContent:find('if phase == "lobby" and not (self.currentRoom and self.currentRoom.selected_song) then', 1, true),
 	"a missed evaluation-timeout event must recover from the authoritative lobby snapshot")
+local roomTransitionKey = assert(
+	onlineClientContent:match("local function room_transition_key%b()%s*(.-)%s*local function online_room_transition_trace"),
+	"missing room transition identity"
+)
+assert(roomTransitionKey:find("memberPackSyncStates", 1, true)
+	and roomTransitionKey:find("pack_sync_download_progress", 1, true)
+	and roomTransitionKey:find('"pack:" .. table.concat(memberPackSyncStates, ",")', 1, true),
+	"room snapshot deduplication must retain member pack-sync projection changes")
 local songBrowsingTimeoutHandler = assert(
 	onlineClientContent:match('if name == "room%.song_browsing_timeout" then(.-)%s*if eventId'),
 	"the client must handle the authoritative idle song-browser timeout"
