@@ -230,12 +230,12 @@ require_contains(
   "regular macOS windows have an explicit presentation policy")
 require_contains(
   "${metal_presentation_policy}"
-  "policy.displaySyncEnabled = true"
-  "WindowServer-composited Metal layers remain display-synchronized")
+  "policy.displaySyncEnabled = false"
+  "composited Metal layers use engine-owned pacing")
 require_contains(
   "${metal_presentation_policy}"
-  "policy.displaySyncEnabled = true;\n      // displaySyncEnabled already queues each drawable for the next display\n      // refresh."
-  "composited presentation uses WindowServer synchronization without a second timer")
+  "policy.cadenceOwner = CadenceOwner::Engine;\n      policy.displaySyncEnabled = false;"
+  "composited presentation keeps a single engine cadence")
 require_contains(
   "${metal_presentation_policy}"
   "policy.scheduleMinimumPresentDuration = false;\n      break;"

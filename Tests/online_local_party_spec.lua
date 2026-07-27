@@ -669,10 +669,10 @@ assert(metalPresenterSource:find(
 assert(metalPresentationPolicySource:find(
 	"case Mode::CompositedWindow:", 1, true
 ) and metalPresentationPolicySource:find(
-	"policy.displaySyncEnabled = true;", 1, true
+	"policy.displaySyncEnabled = false;", 1, true
 ) and metalPresentationPolicySource:find(
 	"policy.scheduleMinimumPresentDuration = false;", 1, true
-), "WindowServer-composited presentation must not add a second cadence")
+), "engine-paced composited presentation must not add a second cadence")
 assert(metalPresenterSource:find("afterMinimumDuration:", 1, true)
 	and metalPresenterSource:find("ScheduleMetalDrawable(", 1, true),
 	"Metal presentation must schedule drawables through the selected policy")

@@ -7233,11 +7233,11 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 		self.onlineGameplayEvaluationMarkKey = roundKey
 		self.onlineGameplayEndedKey = roundKey
 		online_flow_trace_throttled("evaluation_guard_local_party_ready", 1.0,
-			"hold_gameplay_release reason=local_party_final_scores_accepted"
+			"hold_gameplay_wait reason=local_party_final_scores_accepted"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
 			.. " phase=" .. tostring(phase)
-			.. " roundKey=" .. tostring(roundKey or ""))
-		return false
+			.. " roundKey=" .. tostring(roundKey or "")
+			.. " rule=await_global_results")
 	end
 	if phase == "results"
 		and not self:CurrentUserHasFinalResult(self.currentRoom)
@@ -7472,7 +7472,7 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 		return false
 	end
 	local phase = ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase)
-	if phase ~= "playing" and phase ~= "starting" then
+	if phase ~= "playing" and phase ~= "starting" and phase ~= "results" then
 		online_flow_trace_throttled("keep_alive_after_fail_phase", 2.0,
 			"keep_alive_after_fail decision=false reason=phase"
 			.. " phase=" .. tostring(phase)
@@ -7483,17 +7483,17 @@ ITGOnlineShouldKeepGameplayAliveAfterLocalFail = function()
 		and ITGOnline:CanonicalGameplayRoundKey("keep_alive_after_local_fail")
 		or ITGOnline.PlayStateKey and ITGOnline:PlayStateKey()
 		or ""
-	local localPartyReady = ITGOnline.LocalPartyReadyForEvaluation
-		and ITGOnline:LocalPartyReadyForEvaluation(ITGOnline.currentRoom, roundKey)
+	local releaseForGlobalResults = ITGOnline.ShouldReleaseGameplayForEvaluation
+		and ITGOnline:ShouldReleaseGameplayForEvaluation()
 		or false
-	local keepAlive = not localPartyReady
-	online_flow_trace_throttled("keep_alive_after_fail_local_party_decision", 1.0,
+	local keepAlive = not releaseForGlobalResults
+	online_flow_trace_throttled("keep_alive_after_fail_global_results_decision", 1.0,
 		"keep_alive_after_fail decision=" .. tostring(keepAlive == true)
-		.. " reason=" .. tostring(keepAlive and "local_final_scores_pending"
-			or "local_final_scores_accepted")
+		.. " reason=" .. tostring(keepAlive and "await_global_results"
+			or "global_results_ready")
 		.. " phase=" .. tostring(phase)
 		.. " roundKey=" .. tostring(roundKey or "")
-		.. " localPartyReady=" .. tostring(localPartyReady == true))
+		.. " globalResultsReady=" .. tostring(releaseForGlobalResults == true))
 	return keepAlive
 end
 
@@ -11381,6 +11381,49 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 		payload.score_mode = normalized.score_mode
 		payload.music_rate = normalized.music_rate
 	end
+
+	-- A global-options POST returns a full room snapshot and can take hundreds
+	-- of milliseconds. Do not issue another mutation when the requested state
+	-- already matches the authoritative snapshot, or when that exact mutation
+	-- is already in flight. Repeated confirm presses used to create avoidable
+	-- lobby traffic and visible update spikes.
+	local current = self:CurrentGlobalOptions()
+	local target = {
+		score_mode = payload.score_mode or current.score_mode,
+		music_rate = payload.music_rate or current.music_rate,
+	}
+	local requestKey = tostring(self.currentRoomId)
+		.. "|" .. tostring(target.score_mode)
+		.. "|" .. string.format("%.3f", tonumber(target.music_rate) or 1)
+	local currentKey = tostring(self.currentRoomId)
+		.. "|" .. tostring(current.score_mode)
+		.. "|" .. string.format("%.3f", tonumber(current.music_rate) or 1)
+
+	if requestKey == currentKey then
+		online_flow_trace("global_options_request_skipped reason=unchanged"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " key=" .. tostring(requestKey))
+		safe_callback(callback, true, { room = self.currentRoom }, {
+			statusCode = 200,
+			skipped = true,
+		})
+		return
+	end
+
+	self.globalOptionsInFlightCallbacksByKey = self.globalOptionsInFlightCallbacksByKey or {}
+	if self.globalOptionsInFlightCallbacksByKey[requestKey] ~= nil then
+		local callbacks = self.globalOptionsInFlightCallbacksByKey[requestKey]
+		if callback ~= nil then table.insert(callbacks, callback) end
+		online_flow_trace("global_options_request_coalesced reason=matching_in_flight"
+			.. " room=" .. tostring(self.currentRoomId)
+			.. " key=" .. tostring(requestKey)
+			.. " callbacks=" .. tostring(#callbacks))
+		return
+	end
+
+	local callbacks = {}
+	if callback ~= nil then table.insert(callbacks, callback) end
+	self.globalOptionsInFlightCallbacksByKey[requestKey] = callbacks
 	online_flow_trace("global_options_request room=" .. tostring(self.currentRoomId)
 		.. " phase=" .. tostring(self.currentRoom and self.currentRoom.phase or "nil")
 		.. " scoreMode=" .. tostring(payload.score_mode or "nil")
@@ -11431,7 +11474,11 @@ function ITGOnline:UpdateGlobalOptions(options, callback)
 			})
 		end
 
-		safe_callback(callback, ok, decoded, response)
+		local callbacks = self.globalOptionsInFlightCallbacksByKey[requestKey] or {}
+		self.globalOptionsInFlightCallbacksByKey[requestKey] = nil
+		for _, pendingCallback in ipairs(callbacks) do
+			safe_callback(pendingCallback, ok, decoded, response)
+		end
 	end)
 end
 

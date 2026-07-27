@@ -85,12 +85,13 @@ Policy PolicyForMode(Mode mode) {
       break;
     case Mode::CompositedWindow:
     default:
-      policy.cadenceOwner = CadenceOwner::WindowServer;
-      policy.displaySyncEnabled = true;
-      // displaySyncEnabled already queues each drawable for the next display
-      // refresh.  Adding presentDrawable:afterMinimumDuration: at the physical
-      // refresh interval can defer a frame by a second vblank when the two
-      // schedules straddle the same deadline, starving the drawable pool.
+      // The engine already uses DisplayLink-aligned pacing. Letting the
+      // composited CAMetalLayer add a second WindowServer cadence caused
+      // nextDrawable to stall repeatedly in a regular window. Keep one owner
+      // across windowed and fullscreen presentation; the compositor still
+      // performs the final display composition.
+      policy.cadenceOwner = CadenceOwner::Engine;
+      policy.displaySyncEnabled = false;
       policy.scheduleMinimumPresentDuration = false;
       break;
   }

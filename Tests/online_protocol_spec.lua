@@ -624,9 +624,12 @@ assert(onlineClientContent:find(
 ), "a new manager selection must use the live wheel chart instead of stale option state")
 assert(onlineClientContent:find("function ITGOnline:LocalPartyReadyForEvaluation", 1, true)
 	and onlineClientContent:find(
-		"hold_gameplay_release reason=local_party_final_scores_accepted", 1, true
+		"hold_gameplay_wait reason=local_party_final_scores_accepted", 1, true
+	)
+	and onlineClientContent:find(
+		"await_global_results", 1, true
 	),
-	"gameplay must release to evaluation after local, not global, final acceptance")
+	"a failed local player must stay in gameplay until global results are ready")
 assert(onlineClientContent:find("roomDeleted = roomDeleted == true", 1, true)
 	and onlineClientContent:find(
 		'PurgeStaleLobbyCandidate(roomId, "leave_room_response_deleted")', 1, true
@@ -707,5 +710,9 @@ assert(playerOptionsContent:find("ApplySimplyLoveScoreMode = function", 1, true)
 		"ApplySimplyLoveScoreMode(player, options.score_mode)", 1, true
 	),
 	"local options and manager-global options must share one complete score-mode applicator")
+assert(onlineClientContent:find("global_options_request_skipped reason=unchanged", 1, true)
+	and onlineClientContent:find("global_options_request_coalesced reason=matching_in_flight", 1, true)
+	and onlineClientContent:find("globalOptionsInFlightCallbacksByKey", 1, true),
+	"identical global options mutations must be skipped or coalesced")
 
 print("online protocol behavioral tests passed")
