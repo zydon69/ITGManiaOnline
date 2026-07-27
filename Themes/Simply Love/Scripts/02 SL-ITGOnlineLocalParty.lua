@@ -80,6 +80,16 @@ function Party.all_local_finals_accepted(plan, acceptedBySide)
 	return true
 end
 
+function Party.score_transport_should_continue(plan, finalizedBySide)
+	if type(plan) ~= "table" or type(finalizedBySide) ~= "table" then return false end
+	local requiredSides = type(plan.requiredSides) == "table" and plan.requiredSides or {}
+	if #requiredSides == 0 then return false end
+	for _, side in ipairs(requiredSides) do
+		if finalizedBySide[normalized_side(side)] ~= true then return true end
+	end
+	return false
+end
+
 function Party.failed_player_route(plan, side)
 	local role = Party.role_for_side(plan, side)
 	if role == "coordinator" then return "primary" end

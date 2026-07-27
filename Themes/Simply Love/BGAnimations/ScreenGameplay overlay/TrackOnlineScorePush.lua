@@ -34,8 +34,14 @@ local function online_score_trace(message, force)
 	end
 end
 
-local function live_score_finalized()
-	return ITGOnline and ITGOnline.IsLiveScoreFinalizedForCurrentRound
+local function primary_live_score_finalized()
+	if not ITGOnline then return false end
+	if ITGOnline.IsPrimaryScoreTransportFinalizedForCurrentRound then
+		return ITGOnline:IsPrimaryScoreTransportFinalizedForCurrentRound(
+			"track_online_score_push"
+		)
+	end
+	return ITGOnline.IsLiveScoreFinalizedForCurrentRound
 		and ITGOnline:IsLiveScoreFinalizedForCurrentRound("track_online_score_push")
 end
 
@@ -48,9 +54,17 @@ local function live_score_runtime_active()
 	return phase == "starting" or phase == "playing"
 end
 
+local function local_score_transport_complete()
+	if not live_score_runtime_active() then return false end
+	if not (ITGOnline and ITGOnline.ShouldContinueLocalScoreTransport) then
+		return primary_live_score_finalized()
+	end
+	return not ITGOnline:ShouldContinueLocalScoreTransport("track_online_score_push")
+end
+
 local function live_score_playing()
 	if not live_score_runtime_active() then return false end
-	if live_score_finalized() then return false end
+	if primary_live_score_finalized() then return false end
 	local phase = ITGOnline.NormalizeRoomPhase and ITGOnline:NormalizeRoomPhase(ITGOnline.currentRoom.phase) or tostring(ITGOnline.currentRoom.phase or "")
 	return phase == "playing"
 end
@@ -86,11 +100,11 @@ end
 return Def.Actor{
 	OnCommand=function(self)
 		self.scoreCaptureQueued = false
-		if live_score_finalized() then
-			online_score_trace("tracker_off reason=final_score_already_accepted"
+		if local_score_transport_complete() then
+			online_score_trace("tracker_off reason=all_local_scores_finalized"
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
 			if ITGOnline and ITGOnline.StopLiveScoreFlush then
-				ITGOnline:StopLiveScoreFlush("tracker_finalized_on")
+				ITGOnline:StopLiveScoreFlush("tracker_all_local_scores_finalized_on")
 			end
 			return
 		end
@@ -107,11 +121,11 @@ return Def.Actor{
 		self:queuecommand("FlushOnlineScore")
 	end,
 	FlushOnlineScoreCommand=function(self)
-		if live_score_finalized() then
-			online_score_trace("tracker_stop reason=final_score_already_accepted"
+		if local_score_transport_complete() then
+			online_score_trace("tracker_stop reason=all_local_scores_finalized"
 				.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil"), true)
 			if ITGOnline and ITGOnline.StopLiveScoreFlush then
-				ITGOnline:StopLiveScoreFlush("tracker_finalized_flush")
+				ITGOnline:StopLiveScoreFlush("tracker_all_local_scores_finalized_flush")
 			end
 			return
 		end
@@ -133,7 +147,7 @@ return Def.Actor{
 		if ITGOnline and ITGOnline.TickLiveScoreTransport then
 			ITGOnline:TickLiveScoreTransport()
 		end
-		if ITGOnline and ITGOnline.FlushLiveScore then
+		if not primary_live_score_finalized() and ITGOnline and ITGOnline.FlushLiveScore then
 			ITGOnline:FlushLiveScore()
 		end
 		self:sleep(transportTickSeconds):queuecommand("FlushOnlineScore")

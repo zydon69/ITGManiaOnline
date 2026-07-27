@@ -44,6 +44,16 @@ equal(party.all_local_finals_accepted(soloP1, { P1 = true }), true,
 	"solo evaluation releases independently from remote machines")
 equal(party.all_local_finals_accepted(soloP1, { P1 = false }), false,
 	"solo evaluation must wait for its local final acknowledgement")
+equal(party.score_transport_should_continue(versus, { P1 = true, P2 = false }), true,
+	"P2 live-score transport must continue after P1 finalization")
+equal(party.score_transport_should_continue(versus, { P1 = false, P2 = true }), true,
+	"P1 live-score transport must continue after P2 finalization")
+equal(party.score_transport_should_continue(versus, { P1 = true, P2 = true }), false,
+	"two-player score transport stops only after both local finals")
+equal(party.score_transport_should_continue(soloP1, { P1 = false }), true,
+	"solo score transport continues before finalization")
+equal(party.score_transport_should_continue(soloP1, { P1 = true }), false,
+	"solo score transport stops after finalization")
 equal(party.failed_player_route(versus, "P1"), "primary",
 	"P1 failure must use the primary score identity")
 equal(party.failed_player_route(versus, "P2"), "companion",
@@ -101,6 +111,12 @@ equal(roomPolicy.presence_status(true, "playing", "ScreenGameplayShared"), "play
 	"shared gameplay presence is playing")
 equal(roomPolicy.presence_status(true, "results", "ScreenGameplay"), "playing",
 	"gameplay held for global results remains playing")
+equal(roomPolicy.presence_status(true, "results", "ScreenEvaluationStage"), "playing",
+	"evaluation presence remains playing until the server closes the active round")
+equal(roomPolicy.presence_status(true, "playing", "ScreenEvaluationStage"), "playing",
+	"a locally completed player cannot regress presence while remote players continue")
+equal(roomPolicy.presence_status(true, "lobby", "ScreenEvaluationStage"), "in_room",
+	"presence returns in-room only after the authoritative lobby reset")
 
 local pendingSongSyncIds = roomPolicy.pending_song_sync_member_ids({
 	phase = "config",
@@ -363,6 +379,35 @@ assert(clientSource:find('online_score_trace("live_score_queue_activity room="',
 assert(clientSource:find("local companionTickDue =", 1, true)
 	and clientSource:find("self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()", 1, true),
 	"Player 2 score collection must run at the network cadence instead of every 100 ms")
+local scoreTransportTickStart = assert(clientSource:find(
+	"function ITGOnline:TickLiveScoreTransport()",
+	1,
+	true
+), "the shared live-score transport tick must remain identifiable")
+local scoreTransportTickEnd = assert(clientSource:find(
+	"function ITGOnline:HasPendingLiveScore()",
+	scoreTransportTickStart,
+	true
+), "the shared live-score transport tick boundary must remain identifiable")
+local scoreTransportTickSource = clientSource:sub(
+	scoreTransportTickStart,
+	scoreTransportTickEnd - 1
+)
+assert(scoreTransportTickSource:find(
+	'self:ShouldContinueLocalScoreTransport("live_score_tick")',
+	1,
+	true
+) and scoreTransportTickSource:find("self:SendCompanionScore(false, false", 1, true),
+	"P1 finalization must not return before the P2 transport tick")
+assert(not scoreTransportTickSource:find(
+	'if self:IsLiveScoreFinalizedForCurrentRound("live_score_tick") then',
+	1,
+	true
+), "the shared transport must never use P1 finalization as its global stop condition")
+assert(clientSource:find("function ITGOnline:ShouldContinueLocalScoreTransport", 1, true)
+	and clientSource:find("ITGOnlineLocalParty.score_transport_should_continue", 1, true)
+	and clientSource:find("function ITGOnline:IsPrimaryScoreTransportFinalizedForCurrentRound", 1, true),
+	"the shared score transport must use all local finalization states")
 assert(not onlineHelpersSource:find("OnlineScoreSnapshotMessageCommand", 1, true),
 	"the online handler must not retain the legacy HUD score receiver")
 assert(onlineScorePushSource:find("local function score_trace_enabled()", 1, true)
@@ -380,6 +425,9 @@ local scoreFlushSource = onlineScorePushSource:sub(scoreFlushStart, scoreCapture
 assert(not scoreFlushSource:find("BuildCurrentScoreSnapshot", 1, true)
 	and not scoreFlushSource:find("QueueLiveScore", 1, true),
 	"the transport timer must never walk or requeue gameplay statistics")
+assert(scoreFlushSource:find("local_score_transport_complete()", 1, true)
+	and scoreFlushSource:find("not primary_live_score_finalized()", 1, true),
+	"the shared timer must outlive either player while suppressing finalized P1 traffic")
 assert(not clientSource:find("RememberLiveScoreSnapshot", 1, true)
 	and not clientSource:find("QueueLiveScoreTickIfDue", 1, true)
 	and clientSource:find("function ITGOnline:TickLiveScoreTransport()", 1, true),

@@ -12,18 +12,13 @@ local function member_identifier(member)
 	return tostring(member.user_id or user.id or member.id or "")
 end
 
-function Policy.presence_status(hasRoom, phase, screenName)
+function Policy.presence_status(hasRoom, phase, _screenName)
 	if hasRoom ~= true then return "available" end
 
 	phase = normalized_phase(phase)
-	screenName = tostring(screenName or "")
-	local gameplayScreen = screenName == "ScreenGameplay"
-		or screenName == "ScreenGameplayShared"
-	if gameplayScreen and (
-		phase == "starting"
+	if phase == "starting"
 		or phase == "playing"
-		or phase == "results"
-	) then
+		or phase == "results" then
 		return "playing"
 	end
 

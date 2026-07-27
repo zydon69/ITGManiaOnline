@@ -242,8 +242,9 @@ if(NOT DUPLICATE_LIVE_SCORE_FLUSH_OFFSET EQUAL -1)
 endif()
 
 foreach(REQUIRED_SNIPPET
-    "IsLiveScoreFinalizedForCurrentRound(\"track_online_score_push\")"
-    "tracker_stop reason=final_score_already_accepted"
+    "IsPrimaryScoreTransportFinalizedForCurrentRound"
+    "ShouldContinueLocalScoreTransport(\"track_online_score_push\")"
+    "tracker_stop reason=all_local_scores_finalized"
     "_skipped reason=inactive_online_context"
     "CaptureOnlineScoreCommand"
     "self.scoreCaptureQueued"

@@ -4895,6 +4895,23 @@ function ITGOnline:IsLiveScoreFinalizedForCurrentRound(source)
 	return self:IsLiveScoreFinalizedForRound(roundKey)
 end
 
+function ITGOnline:IsPrimaryScoreTransportFinalizedForCurrentRound(source, roundKey)
+	roundKey = tostring(roundKey or (self.CanonicalGameplayRoundKey
+		and self:CanonicalGameplayRoundKey(source or "primary_score_transport_finalized_check")
+		or ""))
+	if not (self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)) then
+		return false
+	end
+	if self:IsLiveScoreFinalizedForRound(roundKey) then return true end
+
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
+		if self:IsPrimaryLocalPlayer(player) then
+			return self:LocalPlayerHasFinalResult(self.currentRoom, player)
+		end
+	end
+	return false
+end
+
 function ITGOnline:NormalizeRoomPhase(value)
 	local phase = tostring(value or ""):lower()
 	if phase == "lobby" or phase == "lobby_ready" or phase == "config"
@@ -12547,11 +12564,22 @@ function ITGOnline:TickLiveScoreTransport()
 		end
 		return false
 	end
-	if self:IsLiveScoreFinalizedForCurrentRound("live_score_tick") then
-		self:StopLiveScoreFlush("tick_final_score_already_accepted")
+
+	local primaryFinalized = self:IsPrimaryScoreTransportFinalizedForCurrentRound(
+		"live_score_tick"
+	)
+	if primaryFinalized
+		and (self.pendingLiveScoreSnapshot ~= nil
+			or tostring(self.pendingLiveScoreRoundKey or "") ~= ""
+			or self.liveScoreInFlight == true)
+	then
+		self:StopLiveScoreFlush("tick_primary_final_score_already_accepted")
 		self.liveScoreInFlight = false
+	end
+	if not self:ShouldContinueLocalScoreTransport("live_score_tick") then
 		return false
 	end
+
 	local companionNow = GetTimeSinceStart()
 	local companionTickDue = companionNow >= (tonumber(self.companionLiveScoreNextTickAt) or 0)
 	if companionTickDue
@@ -12581,12 +12609,28 @@ end
 
 function ITGOnline:HasPendingLiveScore()
 	if not self:HasCurrentOnlineRoom() then return false end
-	if self:IsLiveScoreFinalizedForCurrentRound("has_pending_live_score") then
-		self:StopLiveScoreFlush("pending_final_score_already_accepted")
+
+	local primaryFinalized = self:IsPrimaryScoreTransportFinalizedForCurrentRound(
+		"has_pending_live_score"
+	)
+	if primaryFinalized
+		and (self.pendingLiveScoreSnapshot ~= nil
+			or tostring(self.pendingLiveScoreRoundKey or "") ~= ""
+			or self.liveScoreInFlight == true)
+	then
+		self:StopLiveScoreFlush("pending_primary_final_score_already_accepted")
 		self.liveScoreInFlight = false
+	end
+	if not self:ShouldContinueLocalScoreTransport("has_pending_live_score") then
 		return false
 	end
-	return self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true
+
+	local primaryPending = not primaryFinalized
+		and (self.pendingLiveScoreSnapshot ~= nil or self.liveScoreInFlight == true)
+	local companionPending = self:IsLocalTwoPlayerSession()
+		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "playing"
+		and not self:IsCompanionScoreFinalizedForCurrentRound("has_pending_live_score")
+	return primaryPending or companionPending
 end
 
 function ITGOnline:LiveScoreMinIntervalSeconds()
@@ -13757,6 +13801,47 @@ function ITGOnline:IsCompanionScoreFinalizedForCurrentRound(source, roundKey, st
 			.. " roomHasFinalResult=" .. tostring(roomHasFinalResult == true))
 	end
 	return true
+end
+
+function ITGOnline:ShouldContinueLocalScoreTransport(source)
+	if not self:HasActiveLiveScoreRoom() then return false end
+
+	local roundKey = tostring(self:CanonicalGameplayRoundKey(
+		source or "local_score_transport"
+	) or "")
+	-- The gameplay actor can start before the first authoritative playing
+	-- snapshot. Keep it alive until the round identity becomes available.
+	if not self:PlayStateKeyIsValid(roundKey) then return true end
+
+	local finalizedBySide = {}
+	for _, player in ipairs(self:RequiredLocalPlayers()) do
+		local side = local_player_key(player)
+		local finalized
+		if self:IsPrimaryLocalPlayer(player) then
+			finalized = self:IsPrimaryScoreTransportFinalizedForCurrentRound(
+				source or "local_score_transport",
+				roundKey
+			)
+		else
+			finalized = self:IsCompanionScoreFinalizedForCurrentRound(
+				source or "local_score_transport",
+				roundKey
+			)
+		end
+		finalizedBySide[side] = finalized == true
+	end
+
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.score_transport_should_continue then
+		return ITGOnlineLocalParty.score_transport_should_continue(
+			self:LocalPartyPlan(),
+			finalizedBySide
+		)
+	end
+
+	for _, finalized in pairs(finalizedBySide) do
+		if finalized ~= true then return true end
+	end
+	return false
 end
 
 function ITGOnline:SendCompanionScore(force, final, callback)
