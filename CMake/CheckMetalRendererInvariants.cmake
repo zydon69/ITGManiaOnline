@@ -222,20 +222,24 @@ require_contains(
   "dropped presentation frames are distinct from hard failures")
 require_contains(
   "${metal_presenter}"
-  "MetalDrawablePrefetchRenderWaitUsec(targetHz)"
-  "drawable prefetch waits scale with the physical frame interval")
+  "MetalDrawablePrefetchRenderWaitUsec(\n    const MacOSMetalPresentation::Policy& presentationPolicy,"
+  "drawable prefetch wait policy receives the active presentation mode")
+require_contains(
+  "${metal_presenter}"
+  "Mode::CompositedWindow) {\n    return 0;"
+  "regular windows never block the engine waiting for a Metal drawable")
 require_contains(
   "${metal_presentation_policy}"
   "case Mode::CompositedWindow:"
   "regular macOS windows have an explicit presentation policy")
 require_contains(
   "${metal_presentation_policy}"
-  "policy.displaySyncEnabled = false"
-  "composited Metal layers use engine-owned pacing")
+  "policy.displaySyncEnabled = true"
+  "composited Metal layers synchronize their drawable pool with WindowServer")
 require_contains(
   "${metal_presentation_policy}"
-  "policy.cadenceOwner = CadenceOwner::Engine;\n      policy.displaySyncEnabled = false;"
-  "composited presentation keeps a single engine cadence")
+  "policy.cadenceOwner = CadenceOwner::WindowServer;\n      policy.displaySyncEnabled = true;"
+  "composited presentation delegates final cadence to WindowServer")
 require_contains(
   "${metal_presentation_policy}"
   "policy.scheduleMinimumPresentDuration = false;\n      break;"

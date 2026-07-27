@@ -67,7 +67,17 @@ constexpr int kMetalDrawablePrefetchMinRenderWaitUs = 500;
 constexpr int kMetalDrawablePrefetchMaxRenderWaitUs = 7500;
 constexpr uint64_t kMetalDisplayPacingRefreshUsec = 2000000;
 
-int MetalDrawablePrefetchRenderWaitUsec(double targetHz) {
+int MetalDrawablePrefetchRenderWaitUsec(
+    const MacOSMetalPresentation::Policy& presentationPolicy,
+    double targetHz) {
+  // In a regular window, WindowServer owns the drawable pool.  Waiting for it
+  // here turns a missed compositor deadline into a long engine frame.  Keep
+  // gameplay, input and audio moving; the presenter can repeat one image and
+  // consume the next prefetched drawable on the following frame instead.
+  if (presentationPolicy.mode ==
+      MacOSMetalPresentation::Mode::CompositedWindow) {
+    return 0;
+  }
   if (!std::isfinite(targetHz) || targetHz <= 1.0) {
     return kMetalDrawablePrefetchMaxRenderWaitUs;
   }
@@ -866,9 +876,9 @@ void StartDrawablePrefetcher(MacOSMetalPresenterImpl* impl) {
             [drawable release];
             continue;
           }
+          serial = ++impl->prefetchedDrawableSerial;
           impl->prefetchedDrawable = drawable;
           impl->prefetchedDrawableAcquireMs = acquireMs;
-          serial = ++impl->prefetchedDrawableSerial;
           g_iMetalPrefetchedDrawables.store(serial);
           if (acquireMs >= kMetalSlowNextDrawableSummaryMs) {
             slowAcquires = ++impl->prefetchedDrawableSlowAcquires;
@@ -1040,11 +1050,11 @@ id<CAMetalDrawable> TakePrefetchedDrawable(
       }
     }
 
-    drawable = impl->prefetchedDrawable;
-    impl->prefetchedDrawable = nil;
     if (info != nullptr) {
       info->misses = impl->prefetchedDrawableMisses;
     }
+    drawable = impl->prefetchedDrawable;
+    impl->prefetchedDrawable = nil;
     if (drawable != nil) {
       if (info != nullptr) {
         info->fromPrefetch = true;
@@ -2954,20 +2964,20 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
     return MacOSMetalPresentResult::Failed;
   }
 
-  if (!RenderSolidBatchesToTexture(
-          impl->offscreenPresentTexture,
-          impl->offscreenPresentDepthTexture, batches, batchCount,
-          false, clearDepth, clearRed, clearGreen, clearBlue, clearAlpha,
-          width, height, nullptr, preparedVertexFrame)) {
-    return MacOSMetalPresentResult::Failed;
-  }
-
+  // Take the drawable before encoding the offscreen scene.  Taking it clears
+  // the prefetch slot and immediately wakes the prefetch thread, allowing the
+  // next WindowServer acquisition to overlap this frame's GPU work.  Acquiring
+  // only after the scene was encoded left the prefetcher nearly a full frame
+  // behind in a composited window.
   MacOSMetalDrawableAcquireInfo drawableInfo;
-  const int drawableWaitUsec =
-      MetalDrawablePrefetchRenderWaitUsec(targetHz);
+  const int drawableWaitUsec = MetalDrawablePrefetchRenderWaitUsec(
+      impl->presentationPolicy, targetHz);
   id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
       impl, &drawableInfo, drawableWaitUsec);
   if (drawable == nil) {
+    // RenderSolidBatchesToTexture normally consumes this token.  A skipped
+    // presentation must release it explicitly to keep the limiter balanced.
+    ReleaseVertexFrameNow(impl, preparedVertexFrame);
     const uint64_t skippedFrames = ++impl->offscreenPresentSkippedNoDrawable;
     g_iMetalOffscreenPresentSkippedNoDrawableFrames.store(
         skippedFrames, std::memory_order_relaxed);
@@ -2985,6 +2995,16 @@ MacOSMetalPresenter::PresentSolidBatchesOffscreenFirst(
           targetHz, width, height);
     }
     return MacOSMetalPresentResult::Skipped;
+  }
+
+  if (!RenderSolidBatchesToTexture(
+          impl->offscreenPresentTexture,
+          impl->offscreenPresentDepthTexture, batches, batchCount,
+          false, clearDepth, clearRed, clearGreen, clearBlue, clearAlpha,
+          width, height, nullptr, preparedVertexFrame)) {
+    [drawable release];
+    ReleaseVertexFrameNow(impl, preparedVertexFrame);
+    return MacOSMetalPresentResult::Failed;
   }
 
   std::shared_ptr<MacOSMetalFrameLimiter> frameLimiter =
@@ -3864,8 +3884,8 @@ bool MacOSMetalPresenter::PresentInteropSurfaceAt(int index, double targetHz) {
   }
 
   MacOSMetalDrawableAcquireInfo drawableInfo;
-  const int drawableWaitUsec =
-      MetalDrawablePrefetchRenderWaitUsec(targetHz);
+  const int drawableWaitUsec = MetalDrawablePrefetchRenderWaitUsec(
+      impl->presentationPolicy, targetHz);
   id<CAMetalDrawable> drawable = TakePrefetchedDrawable(
       impl, &drawableInfo, drawableWaitUsec);
   if (drawable == nil) {

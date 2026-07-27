@@ -85,13 +85,13 @@ Policy PolicyForMode(Mode mode) {
       break;
     case Mode::CompositedWindow:
     default:
-      // The engine already uses DisplayLink-aligned pacing. Letting the
-      // composited CAMetalLayer add a second WindowServer cadence caused
-      // nextDrawable to stall repeatedly in a regular window. Keep one owner
-      // across windowed and fullscreen presentation; the compositor still
-      // performs the final display composition.
-      policy.cadenceOwner = CadenceOwner::Engine;
-      policy.displaySyncEnabled = false;
+      // A regular NSWindow is ultimately presented by WindowServer. Disabling
+      // CAMetalLayer display synchronization makes its drawable pool drain
+      // faster than the compositor replenishes it, producing repeated frames
+      // even when the engine itself is on cadence. Keep engine pacing for
+      // simulation, but let the layer synchronize submitted drawables.
+      policy.cadenceOwner = CadenceOwner::WindowServer;
+      policy.displaySyncEnabled = true;
       policy.scheduleMinimumPresentDuration = false;
       break;
   }

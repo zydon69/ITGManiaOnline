@@ -24,17 +24,17 @@ int main() {
       windowed.mode == Mode::CompositedWindow,
       "a regular NSWindow must use the composited policy");
   Require(
-      windowed.cadenceOwner == CadenceOwner::Engine,
-      "engine pacing must remain the sole composited-window cadence owner");
+      windowed.cadenceOwner == CadenceOwner::WindowServer,
+      "a composited window must let WindowServer own final presentation");
   Require(
-      !windowed.displaySyncEnabled,
-      "a composited CAMetalLayer must not add a second display cadence");
+      windowed.displaySyncEnabled,
+      "a composited CAMetalLayer must synchronize its drawable pool");
   Require(
       !windowed.scheduleMinimumPresentDuration,
-      "engine-paced composited presents must not add a second cadence");
+      "composited presents must not add a second minimum-duration delay");
   Require(
       MinimumPresentDurationSeconds(windowed, 120.0) == 0.0,
-      "engine-paced composited presents must be submitted immediately");
+      "composited presents must be submitted immediately to WindowServer");
 
   const Policy nativeFullscreen =
       PolicyForMode(ResolveMode(true, true, NativeWindowEvent::None));
