@@ -692,13 +692,12 @@ local paneNumbersPath = sourceRoot
 local paneNumbersFile = assert(io.open(paneNumbersPath, "rb"), "missing pane 2 judgment values")
 local paneNumbersContent = paneNumbersFile:read("*a")
 paneNumbersFile:close()
-assert(paneNumbersContent:find("local usesExPrimaryLayout", 1, true)
-	and paneNumbersContent:find("local ITGPrimaryP2Positions", 1, true)
-	and paneNumbersContent:find("TapNotes = -128", 1, true)
-	and paneNumbersContent:find("Radar = -3", 1, true)
-	and paneNumbersContent:find("Percent = 61", 1, true)
-	and paneNumbersContent:find("and ITGPrimaryP2Positions", 1, true),
-	"EX and HardEX must reuse the aligned ITG primary value columns for P2")
+assert(not paneNumbersContent:find("usesExPrimaryLayout", 1, true)
+	and paneNumbersContent:find("TapNotes = 94", 1, true)
+	and paneNumbersContent:find("Radar = 218", 1, true)
+	and paneNumbersContent:find("Percent = 286", 1, true)
+	and paneNumbersContent:find("ScreenEvaluation Pane2 geometry", 1, true),
+	"EX and HardEX must retain Pane2's label-aligned P2 value columns")
 local playerOptionsPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-PlayerOptions.lua"
 local playerOptionsFile = assert(io.open(playerOptionsPath, "rb"), "missing player options")
 local playerOptionsContent = playerOptionsFile:read("*a")

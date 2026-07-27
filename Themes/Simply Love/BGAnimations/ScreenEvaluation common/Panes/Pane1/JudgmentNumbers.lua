@@ -3,19 +3,29 @@ local player, controller = unpack(...)
 local pn = ToEnumShortString(player)
 local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
 
+-- ============================================================================
+-- MANUAL P2 CALIBRATION (EX + HardEX) — do not change without a two-local-
+-- player in-game evaluation check.
+--
+-- Pane1 is the ITG reference pane. The validated shared value offset is +230.
+-- It intentionally moves tap counts, radar counts, and /possible together.
+-- ============================================================================
+local P2ExValueOffset = (controller == PLAYER_2
+	and (SL[pn].ActiveModifiers.ShowExScore or SL[pn].ActiveModifiers.ShowHardEXScore)) and 230 or 0
+
 local TapNoteScores = {
 	Types = { 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
 	-- x values for P1 and P2
-	x = { P1=64, P2=-128 }
+	x = { P1=64, P2=-128 + P2ExValueOffset }
 }
 
 local RadarCategories = {
 	Types = { 'Hands', 'Holds', 'Mines', 'Rolls' },
 	-- x values for P1 and P2
-	x = { P1=-180, P2=-3 }
+	x = { P1=-180, P2=-3 + P2ExValueOffset }
 }
 
-local SlashPossibleX = { P1=-114, P2=61 }
+local SlashPossibleX = { P1=-114, P2=61 + P2ExValueOffset }
 
 local t = Def.ActorFrame{
 	InitCommand=function(self)self:zoom(0.8):xy(90,_screen.cy-24) end,

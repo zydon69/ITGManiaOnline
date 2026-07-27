@@ -2,29 +2,35 @@ local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
 local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
-local usesExPrimaryLayout = SL[pn].ActiveModifiers.ShowExScore
-	or SL[pn].ActiveModifiers.ShowHardEXScore
 
--- EX and HardEX promote Pane2 to the primary evaluation pane. Reuse the
--- proven ITG Pane1 value columns so P2's labels and values remain aligned.
-local ITGPrimaryP2Positions = {
-	TapNotes = -128,
-	Radar = -3,
-	Percent = 61,
-	SlashPossible = 61,
+-- Pane2's labels always use the same geometry. Keep its value columns on that
+-- same geometry when EX or HardEX promotes Pane2 to the primary pane.
+--
+-- ============================================================================
+-- MANUAL P2 CALIBRATION (EX + HardEX) — do not change without a two-local-
+-- player in-game evaluation check.
+--
+-- Pane2 is the EX/HardEX pane. The validated shared value offset is -220.
+-- The ITG reference pane deliberately keeps its separately calibrated offset.
+-- ============================================================================
+local P2ExValueOffset = (controller == PLAYER_2
+	and (SL[pn].ActiveModifiers.ShowExScore or SL[pn].ActiveModifiers.ShowHardEXScore)) and -220 or 0
+local P2Positions = {
+	TapNotes = 94 + P2ExValueOffset,
+	Radar = 218 + P2ExValueOffset,
+	Percent = 286 + P2ExValueOffset,
+	SlashPossible = 286 + P2ExValueOffset,
 }
 
--- When Pane2 remains the optional FA+ detail pane, keep its wider secondary
--- layout instead of moving that separate presentation.
-local FAPlusDetailP2Positions = {
-	TapNotes = 94,
-	Radar = 218,
-	Percent = 286,
-	SlashPossible = 286,
-}
-local P2Positions = usesExPrimaryLayout
-	and ITGPrimaryP2Positions
-	or FAPlusDetailP2Positions
+Trace(("ScreenEvaluation Pane2 geometry player=%s controller=%s ex=%s hardex=%s tap=%i radar=%i percent=%i"):format(
+	pn,
+	ToEnumShortString(controller),
+	tostring(SL[pn].ActiveModifiers.ShowExScore == true),
+	tostring(SL[pn].ActiveModifiers.ShowHardEXScore == true),
+	P2Positions.TapNotes,
+	P2Positions.Radar,
+	P2Positions.Percent
+))
 
 local TapNoteScores = {
 	Types = { 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },

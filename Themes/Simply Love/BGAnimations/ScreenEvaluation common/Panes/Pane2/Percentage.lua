@@ -2,6 +2,13 @@ local player, controller = unpack(...)
 
 local percent = nil
 local diffuse = nil
+local modifiers = SL[ToEnumShortString(player)].ActiveModifiers
+local usesExPane = modifiers.ShowExScore or modifiers.ShowHardEXScore
+-- ============================================================================
+-- MANUAL P2 CALIBRATION (EX + HardEX) — do not change without a two-local-
+-- player in-game evaluation check. The validated percentage position is x=145.
+-- ============================================================================
+local p2PercentX = usesExPane and 145 or 141
 
 if SL[ToEnumShortString(player)].ActiveModifiers.ShowHardEXScore then
 	percent = CalculateHardExScore(player)
@@ -45,7 +52,7 @@ return Def.ActorFrame{
 		Text=("%.2f"):format(percent),
 		InitCommand=function(self)
 			self:horizalign(right):zoom(0.585)
-			self:x( (controller == PLAYER_1 and 1.5 or 141))
+			self:x(controller == PLAYER_1 and 1.5 or p2PercentX)
 			self:diffuse(diffuse)
 		end
 	}
