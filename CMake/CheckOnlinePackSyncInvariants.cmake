@@ -12,6 +12,10 @@ file(
   ONLINE_CLIENT_TEXT)
 file(
   READ
+  "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomPolicy.lua"
+  ONLINE_ROOM_POLICY_TEXT)
+file(
+  READ
   "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
   ONLINE_LOBBY_OVERLAY_TEXT)
 file(
@@ -147,12 +151,30 @@ foreach(REQUIRED_SNIPPET
     "profile-guid:v2:"
     "stored_token_binding_user_mismatch"
     "stored token ignored reason=profile_binding_missing_or_invalid"
+    "OptionsReadyDeadlineBlockedByPackSync"
+    "self:Heartbeat(self:CurrentPresenceStatus(), true, true)"
+    "SongAvailabilityProjectionIncludesCompanion"
+    "server_projection_confirmed"
+    "server_projection_unavailable"
     "RUNTIME_VALIDATION [ITGOnline]")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
   if(SNIPPET_OFFSET EQUAL -1)
     message(
       FATAL_ERROR
       "Online heartbeat invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
+    "function Policy.presence_status"
+    "function Policy.pending_song_sync_member_ids"
+    "function Policy.options_deadline_blocked"
+    "function Policy.projection_includes_user")
+  string(FIND "${ONLINE_ROOM_POLICY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+      FATAL_ERROR
+      "Online room policy invariant failed: missing '${REQUIRED_SNIPPET}'")
   endif()
 endforeach()
 

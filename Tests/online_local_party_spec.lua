@@ -8,6 +8,9 @@ local lobbyPresentation = assert(dofile(
 local lobbyModel = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLobbyModel.lua"
 ))
+local roomPolicy = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomPolicy.lua"
+))
 
 local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
@@ -88,6 +91,42 @@ equal(party.resolve_pre_game_chart(nil, p1Level6, nil, nil, p1Level6), p1Level6,
 	"P1 must keep its level 6 wheel intent")
 equal(party.resolve_pre_game_chart(nil, p2Level8, nil, nil, p1Level6), p2Level8,
 	"P2 must keep its level 8 wheel intent instead of the manager fallback")
+equal(roomPolicy.presence_status(false, nil, "ScreenOnlineLobbies"), "available",
+	"presence without a room is available")
+equal(roomPolicy.presence_status(true, "config", "ScreenPlayerOptions"), "in_room",
+	"options presence remains in-room")
+equal(roomPolicy.presence_status(true, "starting", "ScreenGameplay"), "playing",
+	"starting gameplay presence is playing")
+equal(roomPolicy.presence_status(true, "playing", "ScreenGameplayShared"), "playing",
+	"shared gameplay presence is playing")
+equal(roomPolicy.presence_status(true, "results", "ScreenGameplay"), "playing",
+	"gameplay held for global results remains playing")
+
+local pendingSongSyncIds = roomPolicy.pending_song_sync_member_ids({
+	phase = "config",
+	selected_song = { title = "Test" },
+	members = {
+		{ id = 1, song_available = true, missing_song = false },
+		{ id = 2, song_available = false, missing_song = true },
+		{ id = 3, song_available = nil, missing_song = false },
+	},
+})
+equal(#pendingSongSyncIds, 2,
+	"options deadline waits for every authoritative song confirmation")
+equal(pendingSongSyncIds[1], "2", "missing-song blocker identity")
+equal(pendingSongSyncIds[2], "3", "unconfirmed-song blocker identity")
+equal(roomPolicy.options_deadline_blocked({
+	phase = "config",
+	selected_song = { title = "Test" },
+	members = {
+		{ id = 1, song_available = true },
+		{ id = 2, song_available = true },
+	},
+}), false, "options deadline starts once every song is confirmed")
+equal(roomPolicy.projection_includes_user({ 4, "7" }, 7), true,
+	"availability projection accepts protocol-equivalent user identifiers")
+equal(roomPolicy.projection_includes_user({ 4, "7" }, 8), false,
+	"availability projection does not cover another user")
 equal(lobbyPresentation.text("MissingTranslation", "Fallback"), "Fallback",
 	"lobby presentation must preserve safe translation fallbacks")
 equal(lobbyModel.joined_player_stable_key({ playerId = 42 }), "id:42",
@@ -192,6 +231,21 @@ assert(clientSource:find("ITGOnlineLocalParty.should_preserve_local_chart_choice
 	"the online client must preserve each local wheel chart before options")
 assert(clientSource:find("function ITGOnline:CurrentRoomSnapshotIsAuthoritative", 1, true),
 	"client must expose the authoritative cached-room policy")
+assert(clientSource:find("function ITGOnline:CurrentPresenceStatus", 1, true)
+	and clientSource:find("self:Heartbeat(self:CurrentPresenceStatus(), true, true)", 1, true),
+	"user activity must preserve the active-round playing presence")
+assert(not clientSource:find('self:Heartbeat("in_room", true, true)', 1, true),
+	"user activity must never hard-code a presence regression to in_room")
+assert(onlineHelpersSource:find("ITGOnline:CurrentPresenceStatus", 1, true),
+	"screen heartbeats must use the same centralized presence policy")
+assert(clientSource:find("function ITGOnline:OptionsReadyDeadlineBlockedByPackSync", 1, true)
+	and clientSource:find("options_ready_deadline_deferred", 1, true)
+	and clientSource:find("reason=pack_sync_pending", 1, true),
+	"the options deadline must remain suspended while authoritative pack sync is pending")
+assert(clientSource:find("function ITGOnline:SongAvailabilityProjectionIncludesCompanion", 1, true)
+	and clientSource:find("reason=server_projection_confirmed", 1, true)
+	and clientSource:find("reason=server_projection_unavailable", 1, true),
+	"availability must prefer server-side local-party projection with a legacy fallback")
 assert(onlineLobbyScreenSource:find(
 	"Display_sync_skipped reason=authoritative_current_room",
 	1,

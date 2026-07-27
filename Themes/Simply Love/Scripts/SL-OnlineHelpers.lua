@@ -2622,9 +2622,10 @@ queue_presence_update = function(actor, source, force)
 end
 
 local function current_presence_status()
-	if not (ITGOnline and ITGOnline.currentRoomId) then
-		return "available"
+	if ITGOnline and ITGOnline.CurrentPresenceStatus then
+		return ITGOnline:CurrentPresenceStatus(current_online_screen_name())
 	end
+	if not (ITGOnline and ITGOnline.currentRoomId) then return "available" end
 	local screenName = current_online_screen_name()
 	local phase = normalized_room_phase_for_runtime()
 	if gameplayScreens[screenName] and phase == "playing" then
