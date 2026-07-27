@@ -78,6 +78,10 @@ local function MakeLazyPane(i, player, controller, ComputedData)
 					child:playcommand("Begin")
 					child:playcommand("On")
 				end
+				MESSAGEMAN:Broadcast("EvaluationLazyPaneLoaded", {
+					PaneIndex = i,
+					Controller = controller_name,
+				})
 				Trace(("ScreenEvaluation lazy pane loaded name=%s pane=%i player=%s controller=%s"):format(
 					name,
 					i,

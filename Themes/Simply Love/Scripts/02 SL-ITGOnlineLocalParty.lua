@@ -113,4 +113,19 @@ function Party.companion_live_score_should_send(zeroLiveAccepted, final, hasLive
 	return zeroLiveAccepted ~= true
 end
 
+function Party.should_preserve_local_chart_choice(phase, screenName)
+	phase = tostring(phase or ""):lower()
+	screenName = tostring(screenName or "")
+
+	return phase == "lobby"
+		or phase == "lobby_ready"
+		or phase == "config"
+		or screenName == "ScreenSelectMusic"
+		or screenName == "ScreenPlayerOptions"
+end
+
+function Party.resolve_pre_game_chart(pendingSteps, intentSteps, currentSteps, preferredSteps, fallbackSteps)
+	return pendingSteps or intentSteps or currentSteps or preferredSteps or fallbackSteps
+end
+
 return Party

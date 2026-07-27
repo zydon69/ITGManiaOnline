@@ -3794,16 +3794,10 @@ CreateOnlineHandler = function()
 						})
 					end,
 					OnlineLobbyStateMessageCommand=function(self, params)
-						if online_trace then
-							online_trace(
-								"FLOW OnlineLobbyStateMessage begin connected=" .. tostring(self.connected) ..
-								" roomId=" .. tostring(params and params.roomId) ..
-								" phase=" .. tostring(params and (params.phase or params.status or params.readyPhase)))
-						end
-							if self.connected and params and params.roomId and OnlinePayloadMatchesActiveRoom(params) then
+						if self.connected and params and params.roomId and OnlinePayloadMatchesActiveRoom(params) then
 							local playerParts = {}
-								for index, rawPlayer in ipairs(params.players or {}) do
-									local player = type(rawPlayer) == "table" and rawPlayer or {}
+							for index, rawPlayer in ipairs(params.players or {}) do
+								local player = type(rawPlayer) == "table" and rawPlayer or {}
 								local user = type(player.user) == "table" and player.user or {}
 								playerParts[#playerParts + 1] = table.concat({
 									tostring(index),
@@ -3815,7 +3809,7 @@ CreateOnlineHandler = function()
 									tostring(player.pack_sync_status or player.packSyncStatus or ""),
 									tostring(player.pack_sync_sequence or player.packSyncSequence or ""),
 									tostring(player.download_progress or player.downloadProgress or ""),
-								}, ":")
+									}, ":")
 							end
 							table.sort(playerParts)
 							local songInfo = type(params.songInfo) == "table" and params.songInfo or {}
@@ -3866,12 +3860,6 @@ CreateOnlineHandler = function()
 							params.__receivedLocalTime = GetTimeSinceStart()
 							self.lastLobbyStatePayload = params
 							self.lastLobbyStateSignature = stateSignature
-							if online_trace then
-								local screenName = SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"
-								local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"
-								online_trace("FLOW OnlineLobbyStateMessage " .. flowContext .. "_begin roomId=" .. tostring(params.roomId)
-									.. " screen=" .. tostring(screenName))
-							end
 							DisplayLobbyState(params, self)
 							retry_deferred_config_ready("online_lobby_state")
 							if ITGOnline and ITGOnline.ForceGameplayEvaluationIfResultsReady then
@@ -3880,19 +3868,12 @@ CreateOnlineHandler = function()
 							if ITGOnline and ITGOnline.EnforceCurrentRoomScreenAfterStateUpdate then
 								ITGOnline:EnforceCurrentRoomScreenAfterStateUpdate("online_lobby_state_message")
 							end
-							if online_trace then
-								local screenName = SCREENMAN and SCREENMAN:GetTopScreen() and SCREENMAN:GetTopScreen():GetName() or "nil"
-								local flowContext = screenName == "ScreenOnlineLobbies" and "display_lobby" or "apply_room_state"
-								online_trace("FLOW OnlineLobbyStateMessage " .. flowContext .. "_end roomId=" .. tostring(params.roomId)
-									.. " screen=" .. tostring(screenName))
-							end
 							online_flow_trace("online_lobby_state_apply_end"
 								.. " roomId=" .. tostring(params.roomId or "nil")
 								.. " phase=" .. tostring(params.phase or params.status or params.readyPhase or "nil")
 								.. " inLobbyAfter=" .. tostring(self.inLobby == true)
 								.. " lastPayloadRoomId=" .. tostring(self.lastLobbyStatePayload and self.lastLobbyStatePayload.roomId or "nil"))
-							elseif online_trace then
-								online_trace("FLOW OnlineLobbyStateMessage ignored")
+						else
 							online_flow_trace("online_lobby_state_ignored"
 								.. " connected=" .. tostring(self.connected == true)
 								.. " hasParams=" .. tostring(params ~= nil)

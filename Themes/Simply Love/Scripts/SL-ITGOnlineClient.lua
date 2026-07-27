@@ -2972,6 +2972,19 @@ function ITGOnline:RealtimeIsFresh(maxAgeSeconds)
 	return self:RealtimeLastMessageAge() <= maxAge
 end
 
+function ITGOnline:CurrentRoomSnapshotIsAuthoritative(maxAgeSeconds)
+	if not self.currentRoomId or type(self.currentRoom) ~= "table" then return false end
+	if self:RoomKey(self.currentRoom.id) ~= self:RoomKey(self.currentRoomId) then return false end
+	if self:RoomKey(self.lastAuthoritativeRoomSnapshotRoomId) ~= self:RoomKey(self.currentRoomId) then
+		return false
+	end
+	if not self:RealtimeIsFresh(maxAgeSeconds) then return false end
+
+	local age = GetTimeSinceStart() - (tonumber(self.lastAuthoritativeRoomSnapshotAt) or 0)
+	local maxAge = math.max(0.5, tonumber(maxAgeSeconds) or tonumber(self.realtimeStaleSeconds) or 8.0)
+	return age >= 0 and age <= maxAge
+end
+
 function ITGOnline:RealtimeHealthSnapshot()
 	local age = self.RealtimeLastMessageAge and self:RealtimeLastMessageAge() or 999
 	local connected = self.RealtimeIsConnected and self:RealtimeIsConnected() or false
@@ -10821,7 +10834,10 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 		or screen == "ScreenGameplay"
 		or screen == "ScreenEvaluation"
 	if not shouldUseMemberOptions then
-		if phase == "config" or screen == "ScreenPlayerOptions" then
+		local shouldPreserveLocalChart = ITGOnlineLocalParty
+			and ITGOnlineLocalParty.should_preserve_local_chart_choice
+			and ITGOnlineLocalParty.should_preserve_local_chart_choice(phase, screen)
+		if shouldPreserveLocalChart then
 			local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
 			local playerState = self.pendingOnlineOptionStateByPlayer
 				and self.pendingOnlineOptionStateByPlayer[playerKey] or nil
@@ -10833,11 +10849,13 @@ function ITGOnline:ResolveLocalGameplayStepsForSelectedSong(songInfo, fallbackSt
 				and GAMESTATE:GetCurrentSteps(player) or nil
 			local currentBelongs = steps_belongs_to_song(song, currentSteps)
 			local preferredSteps, preferredReason = find_steps_from_local_preference(song, player)
-			local resolvedSteps = pendingBelongs and pending
-				or intentSteps
-				or currentBelongs and currentSteps
-				or preferredSteps
-				or fallbackSteps
+			local resolvedSteps = ITGOnlineLocalParty.resolve_pre_game_chart(
+				pendingBelongs and pending or nil,
+				intentSteps,
+				currentBelongs and currentSteps or nil,
+				preferredSteps,
+				fallbackSteps
+			)
 			local localReason = pendingBelongs and "pending_online_option_steps"
 				or intentSteps and intentReason
 				or currentBelongs and "current_player_steps"
@@ -11933,19 +11951,36 @@ function ITGOnline:PreviewSong(callback)
 	end, nil, { cancelOnScreenChange = true })
 end
 
-function ITGOnline:ServerJudgments(player)
-	local counts = GetExJudgmentCounts(player)
+local function server_hold_judgment_counts(player)
+	local sourcePlayer = GetRoutineSourcePlayer and GetRoutineSourcePlayer(player) or player
+	local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(sourcePlayer) or nil
+	if not stats and STATSMAN and STATSMAN.GetCurStageStats then
+		local stageStats = STATSMAN:GetCurStageStats()
+		if stageStats and stageStats.GetPlayerStageStats then
+			stats = stageStats:GetPlayerStageStats(sourcePlayer)
+		end
+	end
+	if not stats or not stats.GetHoldNoteScores then return {} end
+
+	local function resolved_count(score)
+		local ok, value = pcall(function()
+			return stats:GetHoldNoteScores("HoldNoteScore_" .. score)
+		end)
+		return ok and value or 0
+	end
+
 	return {
-		fantastic = (counts.W0 or 0) + (counts.W1 or 0),
-		excellent = counts.W2 or 0,
-		great = counts.W3 or 0,
-		decent = counts.W4 or 0,
-		way_off = counts.W5 or 0,
-		miss = counts.Miss or 0,
-		mine = counts.Mines or 0,
-		hold_ok = (counts.Holds or 0) + (counts.Rolls or 0),
-		hold_ng = math.max(0, ((counts.totalHolds or 0) + (counts.totalRolls or 0)) - ((counts.Holds or 0) + (counts.Rolls or 0))),
+		Held = resolved_count("Held"),
+		LetGo = resolved_count("LetGo"),
+		MissedHold = resolved_count("MissedHold"),
 	}
+end
+
+function ITGOnline:ServerJudgments(player)
+	return ITGOnlineScoreJudgments.build(
+		GetExJudgmentCounts(player),
+		server_hold_judgment_counts(player)
+	)
 end
 
 function ITGOnline:ServerAccuracyFromJudgments(judgments)
@@ -11983,25 +12018,11 @@ function ITGOnline:HasScoredJudgments(judgments)
 end
 
 function ITGOnline:CopyServerJudgments(judgments)
-	local copy = {}
-	for _, key in ipairs({ "fantastic", "excellent", "great", "decent", "way_off", "miss", "mine", "hold_ok", "hold_ng" }) do
-		copy[key] = math.max(0, math.floor(tonumber(judgments and judgments[key]) or 0))
-	end
-	return copy
+	return ITGOnlineScoreJudgments.copy(judgments)
 end
 
 function ITGOnline:MergeMonotonicServerJudgments(current, previous)
-	local merged = self:CopyServerJudgments(current)
-	local restored = {}
-	for _, key in ipairs({ "fantastic", "excellent", "great", "decent", "way_off", "miss", "mine", "hold_ok", "hold_ng" }) do
-		local previousCount = math.max(0, math.floor(tonumber(previous and previous[key]) or 0))
-		local currentCount = math.max(0, math.floor(tonumber(merged[key]) or 0))
-		if previousCount > currentCount then
-			merged[key] = previousCount
-			restored[#restored + 1] = key .. ":" .. tostring(currentCount) .. "->" .. tostring(previousCount)
-		end
-	end
-	return merged, restored
+	return ITGOnlineScoreJudgments.merge_monotonic(current, previous)
 end
 
 function ITGOnline:ScoreFingerprint(score, combo, maxCombo, failed, judgments)
@@ -16424,11 +16445,12 @@ end
 -- Presence, heartbeat, and lobby discovery
 -- -----------------------------------------------------------------------
 
-function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
+function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity, retryCount)
 	if not player or self:IsPrimaryLocalPlayer(player)
 		or not self:HasActiveAccessTokenForPlayer(player) then
 		return false
 	end
+	retryCount = math.max(0, math.floor(tonumber(retryCount) or 0))
 	local session = local_player_session(player)
 	if not session then return false end
 	local localPartyId = self:ActiveLocalPartyId()
@@ -16443,6 +16465,7 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
 			force = force == true,
 			activity = activity == true,
 			fingerprint = fingerprint,
+			retryCount = retryCount,
 		}
 		return false
 	end
@@ -16465,7 +16488,8 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
 		.. " status=" .. tostring(status)
 		.. " room=" .. tostring(roomId or "nil")
 		.. " force=" .. tostring(force == true)
-		.. " activity=" .. tostring(activity == true))
+		.. " activity=" .. tostring(activity == true)
+		.. " retryCount=" .. tostring(retryCount))
 	self:RequestAsLocalPlayer(player, "POST", "/presence/heartbeat", payload, function(ok, decoded, response)
 		session.heartbeatInFlight = false
 		local queued = session.heartbeatQueued
@@ -16489,13 +16513,31 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity)
 			self:HandleLocalPartyInvariantFailure("companion_presence_room_mismatch", player, decoded)
 			return
 		end
+		local statusCode = tonumber(response and response.statusCode) or 0
+		local retryable = statusCode == 0 or statusCode == 429 or statusCode >= 500
+		local requestRoomStillCurrent = tostring(roomId or "") == tostring(self.currentRoomId or "")
+		if not ok and retryable and retryCount < 2 and requestRoomStillCurrent and not queued then
+			queued = {
+				status = status,
+				roomId = roomId,
+				force = true,
+				activity = activity == true,
+				fingerprint = fingerprint,
+				retryCount = retryCount + 1,
+			}
+			online_flow_trace("companion_heartbeat_retry_queued localPlayer=" .. local_player_key(player)
+				.. " room=" .. tostring(roomId or "nil")
+				.. " statusCode=" .. tostring(statusCode)
+				.. " retryCount=" .. tostring(queued.retryCount))
+		end
 		if queued then
 			self:HeartbeatCompanion(
 				player,
 				queued.status,
 				queued.roomId,
 				queued.force,
-				queued.activity
+				queued.activity,
+				queued.retryCount
 			)
 		end
 	end)

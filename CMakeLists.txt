@@ -72,6 +72,11 @@ if(BUILD_TESTING)
               ${CMAKE_SOURCE_DIR}/Tests/online_local_party_spec.lua
               ${CMAKE_SOURCE_DIR})
     add_test(
+      NAME online_score_judgments_behavior
+      COMMAND ${ITGMANIA_LUA_EXECUTABLE}
+              ${CMAKE_SOURCE_DIR}/Tests/online_score_judgments_spec.lua
+              ${CMAKE_SOURCE_DIR})
+    add_test(
       NAME profile_io_cache_behavior
       COMMAND ${ITGMANIA_LUA_EXECUTABLE}
               ${CMAKE_SOURCE_DIR}/Tests/profile_io_cache_spec.lua

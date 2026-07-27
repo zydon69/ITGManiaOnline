@@ -4900,8 +4900,18 @@ local af = Def.ActorFrame{
 						showPrompt=false
 					})
 					self:GetChild("NetworkStatus"):visible(false)
-					ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "display")
-					if ITGOnline and ITGOnline.Sync then
+					local appliedCurrentRoom =
+						ScreenOnlineLobbiesApplyCurrentRoomSnapshot(self, "display")
+					local authoritativeCurrentRoom = appliedCurrentRoom
+						and ITGOnline
+						and ITGOnline.CurrentRoomSnapshotIsAuthoritative
+						and ITGOnline:CurrentRoomSnapshotIsAuthoritative()
+					if authoritativeCurrentRoom then
+						lobby_flow_trace("Display_sync_skipped reason=authoritative_current_room"
+							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+							.. " snapshotSource=" .. tostring(ITGOnline.lastAuthoritativeRoomSnapshotSource or "nil")
+							.. " realtimeAge=" .. string.format("%.3f", ITGOnline:RealtimeLastMessageAge()))
+					elseif ITGOnline and ITGOnline.Sync then
 						lobby_flow_trace("Display_sync_requested")
 						ITGOnline:Sync(function(ok, decoded)
 							lobby_flow_trace("Display_sync_result ok=" .. tostring(ok == true)

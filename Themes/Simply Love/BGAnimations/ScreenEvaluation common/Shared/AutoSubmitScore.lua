@@ -32,16 +32,11 @@ end
 
 local GetMachineTag
 
-local GetLazyPaneContent = function(panes, paneIndex, side)
+local GetLoadedPaneContent = function(panes, paneIndex, side)
 	if not panes then return nil end
 
 	local sidePane = panes:GetChild(("Pane%i_SideP%i"):format(paneIndex, side))
 	if not sidePane then return nil end
-
-	local ok, command = pcall(function() return sidePane:GetCommand("EnsureLoaded") end)
-	if ok and command then
-		sidePane:playcommand("EnsureLoaded")
-	end
 
 	local childOk, content = pcall(function()
 		return sidePane:GetChild("")
@@ -76,32 +71,46 @@ local DecodeResponseBody = function(res)
 		GrooveStatsSubmitTrace("warning=json_decode_failed")
 		return nil
 	end
+	if type(data) ~= "table" then
+		GrooveStatsSubmitTrace("result=failed reason=json_payload_shape")
+		GrooveStatsSubmitTrace("warning=json_payload_must_be_object")
+		return nil
+	end
 
 	return data
 end
 
-local UpdateGrooveStatsConnectionState = function(res)
+local UpdateGrooveStatsConnectionState = function(res, decodedBody)
 	if not res or not res.statusCode then return end
 
 	local code = res.statusCode
-	local body = nil
-	if code == 200 and res.body and res.body ~= "" then
-		local ok, data = pcall(function()
-			return JsonDecode(res.body)
-		end)
-		if ok then body = data end
-	end
-
-	if (code >= 400 and code < 499 and code ~= 429) or (code == 200 and body and body.error and #body.error) then
+	local responseError = type(decodedBody) == "table" and decodedBody.error or nil
+	local hasResponseError = responseError ~= nil
+		and (
+			(type(responseError) ~= "string" and type(responseError) ~= "table")
+			or #responseError > 0
+		)
+	if (code >= 400 and code < 499 and code ~= 429)
+		or (code == 200 and hasResponseError)
+	then
 		SL.GrooveStats.IsConnected = false
 	end
 end
 
 local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColor)
-	if not pane or type(leaderboard) ~= "table" then return false end
+	if type(leaderboard) ~= "table" then return 1, nil end
+
+	local personalRank = nil
+	for gsEntry in ivalues(leaderboard) do
+		if gsEntry["isSelf"] then
+			personalRank = gsEntry["rank"]
+			break
+		end
+	end
+	if not pane then return 1, personalRank end
 
 	local highScoreList = GetChildSafe(pane, "HighScoreList")
-	if not highScoreList then return false end
+	if not highScoreList then return 1, personalRank end
 
 	local entryNum = 1
 	for gsEntry in ivalues(leaderboard) do
@@ -124,6 +133,7 @@ local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColo
 			entry:diffuse(color("#BD94FF"))
 		elseif gsEntry["isSelf"] then
 			entry:diffuse(color("#A1FF94"))
+			personalRank = gsEntry["rank"]
 		end
 
 		if gsEntry["isFail"] then
@@ -133,7 +143,7 @@ local PopulateGrooveStatsLeaderboardPane = function(pane, leaderboard, scoreColo
 		entryNum = entryNum + 1
 	end
 
-	return entryNum > 1
+	return entryNum, personalRank
 end
 
 GetMachineTag = function(gsEntry)
@@ -213,8 +223,9 @@ local GetRescoredJudgmentCounts = function(player)
 	return rescored
 end
 
-local AttemptDownloads = function(res)
-	local data = JsonDecode(res.body)
+local AttemptDownloads = function(data)
+	if type(data) ~= "table" then return end
+
 	for i=1,2 do
 		local playerStr = "player"..i
 		local events = {"rpg", "itl"}
@@ -256,7 +267,10 @@ local AttemptDownloads = function(res)
 	end
 end
 
-local AutoSubmitRequestProcessor = function(res, overlay)
+local pendingAutoSubmitResponse = nil
+local latestSuccessfulResponse = nil
+
+local AutoSubmitRequestProcessor = function(res, overlay, paneRefreshOnly, decodedData)
 	local master = GetChildSafe(overlay, "AutoSubmitMaster")
 	if not master then
 		GrooveStatsSubmitTrace("response_received_without_ui status=" .. tostring(res and res.statusCode or "nil")
@@ -272,13 +286,17 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 	local P1SubmitText = GetChildSafe(master, "P1SubmitText")
 	local P2SubmitText = GetChildSafe(master, "P2SubmitText")
-	GrooveStatsSubmitTrace("response_received room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
-		.. " status=" .. tostring(res and res.statusCode or "nil")
-		.. " hasError=" .. tostring(res and res.error ~= nil)
-		.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
+	if not paneRefreshOnly then
+		GrooveStatsSubmitTrace("response_received room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+			.. " status=" .. tostring(res and res.statusCode or "nil")
+			.. " hasError=" .. tostring(res and res.error ~= nil)
+			.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
+	end
 
 	if not res or res.error or res.statusCode ~= 200 then
+		UpdateGrooveStatsConnectionState(res, nil)
+		if paneRefreshOnly then return end
 		local statusCode = res and res.statusCode or nil
 		local error = res and res.error and ToEnumShortString(res.error) or nil
 		GrooveStatsSubmitTrace("result=failed status=" .. tostring(statusCode)
@@ -293,27 +311,37 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 		return
 	end
 
-	GrooveStatsSubmitTrace("result=ok status=" .. tostring(res.statusCode))
+	if not paneRefreshOnly then
+		GrooveStatsSubmitTrace("result=ok status=" .. tostring(res.statusCode))
+	end
 
 	local panes = GetChildSafe(overlay, "Panes")
 	local shouldDisplayOverlay = false
-
-	-- Hijack the leaderboard pane to display the GrooveStats leaderboards.
-	if panes then
-		local data = DecodeResponseBody(res)
+	local data = decodedData or DecodeResponseBody(res)
+	UpdateGrooveStatsConnectionState(res, data)
+	if not paneRefreshOnly then
+		latestSuccessfulResponse = data and {
+			response = res,
+			overlay = overlay,
+			data = data,
+		} or nil
 		GrooveStatsSubmitTrace("response_decoded room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
 			.. " hasData=" .. tostring(data ~= nil)
 			.. " hasPlayer1=" .. tostring(data and data.player1 ~= nil)
 			.. " hasPlayer2=" .. tostring(data and data.player2 ~= nil))
+	end
+
+	-- Hijack the leaderboard pane to display the GrooveStats leaderboards.
+	if panes and data then
 		for i=1,2 do
 			local playerStr = "player"..i
 			local entryNum = 1
-			local rivalNum = 1
+			local validLeaderboardResponse = false
 			-- Pane 8 is the groovestats highscores pane.
-			local highScorePane = GetLazyPaneContent(panes, 8, i)
-			local QRPane = GetLazyPaneContent(panes, 7, i)
-			local RPGPane = GetLazyPaneContent(panes, 9, i)
-			local ITLPane = GetLazyPaneContent(panes, 10, i)
+			local highScorePane = GetLoadedPaneContent(panes, 8, i)
+			local QRPane = GetLoadedPaneContent(panes, 7, i)
+			local RPGPane = GetLoadedPaneContent(panes, 9, i)
+			local ITLPane = GetLoadedPaneContent(panes, 10, i)
 
 			-- If only one player is joined, we then need to update both panes with only
 			-- one players' data.
@@ -331,6 +359,7 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 				-- And then also ensure that the chart hash matches the currently parsed one.
 				-- It's better to just not display anything than display the wrong scores.
 				if SL["P"..side].Streams.Hash == data[playerStr]["chartHash"] then
+					validLeaderboardResponse = true
 					GrooveStatsSubmitTrace("leaderboard_apply player=P" .. tostring(side)
 						.. " chartHash=" .. tostring(data[playerStr]["chartHash"] or "")
 						.. " expectedHash=" .. tostring(SL["P"..side].Streams.Hash or "")
@@ -347,43 +376,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 						leaderboardData = data[playerStr]["gsLeaderboard"]
 					end
 
-					if leaderboardData and highScorePane then
-						for gsEntry in ivalues(leaderboardData) do
-							local highScoreList = GetChildSafe(highScorePane, "HighScoreList")
-							local entry = highScoreList and GetChildSafe(highScoreList, "HighScoreEntry"..entryNum)
-							if not entry then break end
-							entry:stoptweening()
-							entry:diffuse(Color.White)
-							SetEntryText(
-								tostring(gsEntry["rank"] or entryNum)..".",
-								GetMachineTag(gsEntry),
-								string.format("%.2f%%", tonumber(gsEntry["score"] or 0) / 100),
-								FormatGrooveStatsDateSafe(gsEntry["date"]),
-								entry
-							)
-
-							-- TODO(teejusb): Determine how we want to easily display EX scores.
-							-- For now just highlight blue because it's simple.
-							local score = GetChildSafe(entry, "Score")
-							if showExScore then
-								if score then score:diffuse(SL.JudgmentColors["ITG"][1]) end
-							else
-								if score then score:diffuse(Color.White) end
-							end
-
-							if gsEntry["isRival"] then
-								entry:diffuse(color("#BD94FF"))
-								rivalNum = rivalNum + 1
-							elseif gsEntry["isSelf"] then
-								entry:diffuse(color("#A1FF94"))
-								personalRank = gsEntry["rank"]
-							end
-
-							if gsEntry["isFail"] then
-								if score then score:diffuse(Color.Red) end
-							end
-							entryNum = entryNum + 1
-						end
+					if leaderboardData then
+						entryNum, personalRank = PopulateGrooveStatsLeaderboardPane(
+							highScorePane,
+							leaderboardData,
+							showExScore and SL.JudgmentColors["ITG"][1] or Color.White
+						)
 
 						if QRPane then
 							local qrCode = GetChildSafe(QRPane, "QRCode")
@@ -391,10 +389,12 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 							if qrCode then qrCode:queuecommand("Hide") end
 							if helpText then helpText:settext(THEME:GetString("GrooveStats", "ScoreAlreadySubmitted")) end
 						end
-						if i == 1 and P1SubmitText then
-							P1SubmitText:queuecommand("Submit")
-						elseif i == 2 and P2SubmitText then
-							P2SubmitText:queuecommand("Submit")
+						if not paneRefreshOnly then
+							if i == 1 and P1SubmitText then
+								P1SubmitText:queuecommand("Submit")
+							elseif i == 2 and P2SubmitText then
+								P2SubmitText:queuecommand("Submit")
+							end
 						end
 					end
 
@@ -415,7 +415,10 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 					end
 
 					-- Only display the overlay on the sides that are actually joined.
-					if ToEnumShortString("PLAYER_P"..i) == "P"..side and (data[playerStr]["rpg"] or data[playerStr]["itl"]) then
+					if not paneRefreshOnly
+						and ToEnumShortString("PLAYER_P"..i) == "P"..side
+						and (data[playerStr]["rpg"] or data[playerStr]["itl"])
+					then
 						local eventOverlay = GetChildSafe(master, "EventOverlay")
 						local eventAf = eventOverlay and GetChildSafe(eventOverlay, "P"..i.."EventAf")
 						if eventAf then
@@ -445,7 +448,7 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 					end
 
 					-- Only update PB/WR messages on the side that is joined
-					if ToEnumShortString("PLAYER_P"..i) == "P"..side then
+					if not paneRefreshOnly and ToEnumShortString("PLAYER_P"..i) == "P"..side then
 						local upperPane = GetChildSafe(overlay, "P"..side.."_AF_Upper")
 						if upperPane then
 							if data[playerStr]["result"] == "score-added" or data[playerStr]["result"] == "improved" then
@@ -478,7 +481,7 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 
 			-- Empty out any remaining entries on a successful response.
 			-- For failed responses we fallback to the scores available in the machine.
-			if res["status"] == "success" and highScorePane then
+			if validLeaderboardResponse and highScorePane then
 				local highScoreList = GetChildSafe(highScorePane, "HighScoreList")
 				for j=entryNum, NumEntries do
 					local entry = highScoreList and GetChildSafe(highScoreList, "HighScoreEntry"..j)
@@ -503,10 +506,30 @@ local AutoSubmitRequestProcessor = function(res, overlay)
 		overlay:queuecommand("DirectInputToEventOverlayHandler")
 	end
 
-	if ThemePrefs.Get("AutoDownloadUnlocks") then
+	if not paneRefreshOnly and ThemePrefs.Get("AutoDownloadUnlocks") then
 		-- This will only download if the expected data exists.
-		AttemptDownloads(res)
+		AttemptDownloads(data)
 	end
+end
+
+local QueueAutoSubmitResponse = function(res, overlay)
+	local master = GetChildSafe(overlay, "AutoSubmitMaster")
+	if not master then
+		GrooveStatsSubmitTrace("response_received_without_ui status="
+			.. tostring(res and res.statusCode or "nil")
+			.. " hasError=" .. tostring(res and res.error ~= nil)
+			.. " bodyBytes=" .. tostring(res and res.body and string.len(res.body) or 0))
+		GrooveStatsSubmitTrace("response_ignored reason=evaluation_ui_closed")
+		return
+	end
+
+	pendingAutoSubmitResponse = {
+		response = res,
+		overlay = overlay,
+	}
+	GrooveStatsSubmitTrace("response_deferred_to_actor_queue status="
+		.. tostring(res and res.statusCode or "nil"))
+	master:queuecommand("ProcessGrooveStatsResponse")
 end
 
 local af = Def.ActorFrame {
@@ -549,6 +572,22 @@ local af = Def.ActorFrame {
 		-- 		}
 		-- 	}
 		-- }})
+	end,
+	ProcessGrooveStatsResponseCommand=function(self)
+		local pending = pendingAutoSubmitResponse
+		pendingAutoSubmitResponse = nil
+		if not pending then return end
+		AutoSubmitRequestProcessor(pending.response, pending.overlay, false, nil)
+	end,
+	EvaluationLazyPaneLoadedMessageCommand=function(self)
+		local successful = latestSuccessfulResponse
+		if not successful then return end
+		AutoSubmitRequestProcessor(
+			successful.response,
+			successful.overlay,
+			true,
+			successful.data
+		)
 	end,
 	RequestResponseActor(17, 50)..{
 		OnCommand=function(self)
@@ -668,8 +707,7 @@ local af = Def.ActorFrame {
 					connectTimeout=30,
 					transferTimeout=30,
 					onResponse=function(res)
-						UpdateGrooveStatsConnectionState(res)
-						AutoSubmitRequestProcessor(res, evalCommon)
+						QueueAutoSubmitResponse(res, evalCommon)
 					end,
 				}
 			else

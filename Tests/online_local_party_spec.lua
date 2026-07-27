@@ -74,6 +74,20 @@ equal(party.companion_live_score_should_send(true, false, true), true,
 	"real companion progress must resume live score publication")
 equal(party.companion_live_score_should_send(true, true, false), true,
 	"a final companion snapshot must never be suppressed")
+equal(party.should_preserve_local_chart_choice("lobby", "ScreenSelectMusic"), true,
+	"the wheel choice must survive the initial server song application")
+equal(party.should_preserve_local_chart_choice("lobby_ready", "ScreenOnlineLobbies"), true,
+	"the wheel choice must survive the lobby-ready acknowledgement")
+equal(party.should_preserve_local_chart_choice("config", "ScreenPlayerOptions"), true,
+	"the player-specific chart must remain authoritative in options")
+equal(party.should_preserve_local_chart_choice("starting", "ScreenGameplay"), false,
+	"gameplay must resolve the server-accepted member options")
+local p1Level6 = { player = "P1", meter = 6 }
+local p2Level8 = { player = "P2", meter = 8 }
+equal(party.resolve_pre_game_chart(nil, p1Level6, nil, nil, p1Level6), p1Level6,
+	"P1 must keep its level 6 wheel intent")
+equal(party.resolve_pre_game_chart(nil, p2Level8, nil, nil, p1Level6), p2Level8,
+	"P2 must keep its level 8 wheel intent instead of the manager fallback")
 equal(lobbyPresentation.text("MissingTranslation", "Fallback"), "Fallback",
 	"lobby presentation must preserve safe translation fallbacks")
 equal(lobbyModel.joined_player_stable_key({ playerId = 42 }), "id:42",
@@ -156,6 +170,15 @@ local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHel
 local onlineScorePushSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackOnlineScorePush.lua"
 )
+local evaluationAutoSubmitSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Shared/AutoSubmitScore.lua"
+)
+local evaluationPanesSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/default.lua"
+)
+local onlineLobbyScreenSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
+)
 assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
 	"new installations must enable online network diagnostics by default")
 assert(not clientSource:find("forceOnlineFlowLogging", 1, true),
@@ -164,6 +187,26 @@ assert(clientSource:find('["OnlineTrace"] = "true"', 1, true),
 	"new debug configurations must enable the online trace")
 assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
 	"client must expose an isolated Player 2 score pipeline")
+assert(clientSource:find("ITGOnlineLocalParty.should_preserve_local_chart_choice", 1, true)
+	and clientSource:find("ITGOnlineLocalParty.resolve_pre_game_chart", 1, true),
+	"the online client must preserve each local wheel chart before options")
+assert(clientSource:find("function ITGOnline:CurrentRoomSnapshotIsAuthoritative", 1, true),
+	"client must expose the authoritative cached-room policy")
+assert(onlineLobbyScreenSource:find(
+	"Display_sync_skipped reason=authoritative_current_room",
+	1,
+	true
+), "a fresh realtime room snapshot must suppress the screen-entry full sync")
+assert(clientSource:find("companion_heartbeat_retry_queued", 1, true),
+	"transient companion heartbeat failures must receive a bounded retry")
+assert(not evaluationAutoSubmitSource:find('playcommand("EnsureLoaded")', 1, true),
+	"GrooveStats callbacks must never force lazy evaluation panes onto the render thread")
+assert(evaluationAutoSubmitSource:find("response_deferred_to_actor_queue", 1, true),
+	"GrooveStats HTTP callbacks must defer UI work to the actor queue")
+assert(not evaluationAutoSubmitSource:find('res["status"]', 1, true),
+	"GrooveStats leaderboard cleanup must use validated response data, not an absent transport field")
+assert(evaluationPanesSource:find('MESSAGEMAN:Broadcast("EvaluationLazyPaneLoaded"', 1, true),
+	"newly opened panes must request pending GrooveStats data after loading")
 assert(clientSource:find("onlineStateTraceThrottle", 1, true),
 	"high-frequency state tracing must be throttled without disabling online diagnostics")
 assert(clientSource:find('"rv:" .. tostring(roomVersion or 0)', 1, true),
