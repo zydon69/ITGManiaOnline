@@ -2,16 +2,29 @@ local player, controller = unpack(...)
 
 local pn = ToEnumShortString(player)
 local pss = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(player) or STATSMAN:GetCurStageStats():GetPlayerStageStats(player)
+local usesExPrimaryLayout = SL[pn].ActiveModifiers.ShowExScore
+	or SL[pn].ActiveModifiers.ShowHardEXScore
 
--- Pane geometry is a presentation contract, not a scoring-mode concern.
--- JudgmentLabels.lua always uses this P2 layout; moving only the values for
--- EX/HardEX caused the first judgment rows to detach from their labels.
-local P2Positions = {
+-- EX and HardEX promote Pane2 to the primary evaluation pane. Reuse the
+-- proven ITG Pane1 value columns so P2's labels and values remain aligned.
+local ITGPrimaryP2Positions = {
+	TapNotes = -128,
+	Radar = -3,
+	Percent = 61,
+	SlashPossible = 61,
+}
+
+-- When Pane2 remains the optional FA+ detail pane, keep its wider secondary
+-- layout instead of moving that separate presentation.
+local FAPlusDetailP2Positions = {
 	TapNotes = 94,
 	Radar = 218,
 	Percent = 286,
 	SlashPossible = 286,
 }
+local P2Positions = usesExPrimaryLayout
+	and ITGPrimaryP2Positions
+	or FAPlusDetailP2Positions
 
 local TapNoteScores = {
 	Types = { 'W0', 'W1', 'W2', 'W3', 'W4', 'W5', 'Miss' },
