@@ -13,6 +13,8 @@ local routine_shared = IsRoutine and IsRoutine()
 local source_player = routine_shared and GAMESTATE:GetMasterPlayerNumber() or player
 if routine_shared and player ~= source_player then return end
 local sequential_offsets = {}
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(source_player)
+	or STATSMAN:GetCurStageStats():GetPlayerStageStats(source_player)
 
 local require_step_on_hold_heads = THEME:GetMetric("Player", "RequireStepOnHoldHeads")
 
@@ -25,6 +27,7 @@ return Def.Actor{
 	JudgmentMessageCommand=function(self, params)
 		if params.Player ~= source_player then return end
 		if params.HoldNoteScore then return end
+		if not stats or stats:GetFailed() then return end
 
 		local tns = params.TapNoteScore
 

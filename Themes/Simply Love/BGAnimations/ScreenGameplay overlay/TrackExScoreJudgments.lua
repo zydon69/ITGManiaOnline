@@ -222,11 +222,10 @@ local function add_current_steps_possible(reason)
 end
 
 local function should_track_score_counts()
-	-- In courses/marathons, PlayerStageStats can remain failed while the
-	-- course keeps playing.  Continue accumulating live EX/HardEX counts
-	-- there; single-song gameplay still freezes after a real fail.
-	if GAMESTATE:IsCourseMode() then return true end
-	return not stats:GetFailed()
+	-- A failed result is immutable in every gameplay mode.  The chart or
+	-- course may continue for other players, but this player's pane must keep
+	-- the exact counters captured at the authoritative failure boundary.
+	return stats and not stats:GetFailed()
 end
 
 local function same_player(left, right)
@@ -348,17 +347,17 @@ return Def.Actor{
 						if should_track_score_counts() then
 							storage.ex_counts.W0 = storage.ex_counts.W0 + 1
 							storage.ex_counts.W010 = storage.ex_counts.W010 + 1
+							storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
+							storage.ex_counts.W010_total = storage.ex_counts.W010_total + 1
 							count_updated = true
 						end
-						storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
-						storage.ex_counts.W010_total = storage.ex_counts.W010_total + 1
 					elseif is_W0 then
 						if should_track_score_counts() then
 							storage.ex_counts.W0 = storage.ex_counts.W0 + 1
 							storage.ex_counts.W110 = storage.ex_counts.W110 + 1
+							storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
 							count_updated = true
 						end
-						storage.ex_counts.W0_total = storage.ex_counts.W0_total + 1
 					else
 						if should_track_score_counts() then
 							storage.ex_counts.W1 = storage.ex_counts.W1 + 1

@@ -94,8 +94,12 @@ require_contains(
   "row scoring rejects non-judgment enum values")
 require_contains(
   "${normal_score_source}"
-  "static_cast<uint64_t>(iScore) + 2U"
-  "failed-score rounding widens before addition")
+  "CanMutateScore(\"ScoreKeeperNormal::AddScoreInternal\")"
+  "internal score mutation stops at the authoritative fail boundary")
+require_not_contains(
+  "${normal_score_source}"
+  "AddScoreInternal failed score"
+  "the native score cannot receive post-fail points")
 require_contains(
   "${normal_score_source}"
   "if (IsValidPlayerNumber(m_pPlayerState->m_PlayerNumber))"

@@ -59,6 +59,19 @@ if(BUILD_TESTING)
     NAME bitmap_text_attribute_range
     COMMAND bitmap_text_attribute_range_tests)
 
+  add_executable(
+    score_mutation_policy_tests
+    Tests/score_mutation_policy_test.cpp)
+  target_include_directories(
+    score_mutation_policy_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")
+  set_property(
+    TARGET score_mutation_policy_tests PROPERTY CXX_STANDARD 17)
+  set_property(
+    TARGET score_mutation_policy_tests PROPERTY CXX_STANDARD_REQUIRED ON)
+  add_test(
+    NAME score_mutation_policy
+    COMMAND score_mutation_policy_tests)
+
   find_program(ITGMANIA_LUA_EXECUTABLE NAMES lua5.1 lua)
   if(ITGMANIA_LUA_EXECUTABLE)
     add_test(
@@ -117,6 +130,11 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND}
             -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -P ${CMAKE_SOURCE_DIR}/CMake/CheckSourceSafetyInvariants.cmake)
+  add_test(
+    NAME failed_score_freeze_invariants
+    COMMAND ${CMAKE_COMMAND}
+            -DITGMANIA_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -P ${CMAKE_SOURCE_DIR}/CMake/CheckFailedScoreFreezeInvariants.cmake)
   add_test(
     NAME writer_safety_invariants
     COMMAND ${CMAKE_COMMAND}

@@ -179,7 +179,7 @@ ScoreKeeperRave::ScoreKeeperRave(
     : ScoreKeeper(pPlayerState, pPlayerStageStats) {}
 
 void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
-  if (!HasScoringState("ScoreKeeperRave::HandleTapScore")) {
+  if (!CanMutateScore("ScoreKeeperRave::HandleTapScore")) {
     return;
   }
   TapNoteScore score = tn.result.tns;
@@ -202,7 +202,7 @@ void ScoreKeeperRave::HandleTapScore(const TapNote& tn) {
 }
 
 void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
-  if (!HasScoringState("ScoreKeeperRave::HandleTapRowScore")) {
+  if (!CanMutateScore("ScoreKeeperRave::HandleTapRowScore")) {
     return;
   }
   TapNoteScore scoreOfLastTap;
@@ -261,7 +261,7 @@ void ScoreKeeperRave::HandleTapRowScore(const NoteData& nd, int iRow) {
 }
 
 void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
-  if (!HasScoringState("ScoreKeeperRave::HandleHoldScore")) {
+  if (!CanMutateScore("ScoreKeeperRave::HandleHoldScore")) {
     return;
   }
   // todo: should hit mine be handled in HandleTapRow score instead? -aj
@@ -318,7 +318,7 @@ void ScoreKeeperRave::HandleHoldScore(const TapNote& tn) {
 
 extern ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE;
 void ScoreKeeperRave::HandleTapScoreNone() {
-  if (!HasScoringState("ScoreKeeperRave::HandleTapScoreNone")) {
+  if (!CanMutateScore("ScoreKeeperRave::HandleTapScoreNone")) {
     return;
   }
   if (PENALIZE_TAP_SCORE_NONE) {
@@ -330,7 +330,7 @@ void ScoreKeeperRave::HandleTapScoreNone() {
 }
 
 void ScoreKeeperRave::AddSuperMeterDelta(float fUnscaledPercentChange) {
-  if (!HasScoringState("ScoreKeeperRave::AddSuperMeterDelta") ||
+  if (!CanMutateScore("ScoreKeeperRave::AddSuperMeterDelta") ||
       !HasRaveGlobals("ScoreKeeperRave::AddSuperMeterDelta")) {
     return;
   }

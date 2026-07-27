@@ -6,9 +6,11 @@
 #include "NoteData.h"
 #include "NoteDataWithScoring.h"
 #include "NoteTypes.h"
+#include "PlayerStageStats.h"
 #include "PlayerState.h"
 #include "RageLog.h"
 #include "RageUtil.h"
+#include "ScoreMutationPolicy.h"
 #include "global.h"
 
 ScoreKeeper::ScoreKeeper(
@@ -29,6 +31,15 @@ bool ScoreKeeper::HasScoringState(const char* context) const {
       static_cast<void*>(m_pPlayerState),
       static_cast<void*>(m_pPlayerStageStats));
   return false;
+}
+
+bool ScoreKeeper::CanMutateScore(const char* context) const {
+  const bool hasScoringState = HasScoringState(context);
+  const bool failed =
+      hasScoringState && m_pPlayerStageStats != nullptr
+          ? m_pPlayerStageStats->m_bFailed
+          : false;
+  return ScoreMutationPolicy::Allows(hasScoringState, failed);
 }
 
 void ScoreKeeper::GetScoreOfLastTapInRow(

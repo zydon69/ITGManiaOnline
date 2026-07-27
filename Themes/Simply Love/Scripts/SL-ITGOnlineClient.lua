@@ -12023,6 +12023,41 @@ local function server_hold_judgment_counts(player)
 	}
 end
 
+local function online_score_max_combo(stats, currentCombo)
+	local maxCombo = math.max(0, tonumber(currentCombo) or 0)
+	if not stats then return maxCombo end
+
+	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
+		local ok, value = pcall(function()
+			return stats[methodName] and stats[methodName](stats) or nil
+		end)
+		if ok and tonumber(value) then
+			return math.max(maxCombo, tonumber(value))
+		end
+	end
+	return maxCombo
+end
+
+local function online_score_song_position(player, fallback)
+	local songPosition = math.max(0, tonumber(fallback) or 0)
+	if not player or not GAMESTATE or not GAMESTATE.GetPlayerState then
+		return songPosition
+	end
+
+	local ok, value = pcall(function()
+		local position = GAMESTATE:GetPlayerState(player):GetSongPosition()
+		local visibleOk, visible = pcall(function()
+			return position:GetMusicSecondsVisible()
+		end)
+		if visibleOk and tonumber(visible) then return tonumber(visible) end
+		return tonumber(position:GetMusicSeconds())
+	end)
+	if ok and tonumber(value) then
+		songPosition = math.max(songPosition, tonumber(value))
+	end
+	return songPosition
+end
+
 function ITGOnline:ServerJudgments(player)
 	return ITGOnlineScoreJudgments.build(
 		GetExJudgmentCounts(player),
@@ -12142,6 +12177,17 @@ function ITGOnline:BuildCurrentScoreSnapshot(player)
 	local comboOk, comboValue = pcall(function() return stats:GetCurrentCombo() end)
 	if comboOk and tonumber(comboValue) then combo = tonumber(comboValue) end
 	local failed = online_score_failed(player, stats)
+	local maxCombo, songPosition, judgments
+	if failed then
+		maxCombo = online_score_max_combo(stats, combo)
+		songPosition = online_score_song_position(player, self.lastScoreSongPosition)
+		local judgmentsOk, judgmentsValue = pcall(function()
+			return self:ServerJudgments(player)
+		end)
+		if judgmentsOk and type(judgmentsValue) == "table" then
+			judgments = self:CopyServerJudgments(judgmentsValue)
+		end
+	end
 
 	if self.debugScoreTrace == true then
 		local nowSecond = math.floor(GetTimeSinceStart())
@@ -12171,6 +12217,9 @@ function ITGOnline:BuildCurrentScoreSnapshot(player)
 		DisplayedPercent = displayedPercent,
 		ScoreMode = scoreMode,
 		Combo = combo,
+		MaxCombo = maxCombo,
+		SongPositionSeconds = songPosition,
+		Judgments = judgments,
 		Failed = failed,
 		scorePercent = scorePercent,
 		exScorePercent = exScore,
@@ -12178,6 +12227,9 @@ function ITGOnline:BuildCurrentScoreSnapshot(player)
 		displayedPercent = displayedPercent,
 		scoreMode = scoreMode,
 		combo = combo,
+		maxCombo = maxCombo,
+		songPositionSeconds = songPosition,
+		judgments = type(judgments) == "table" and self:CopyServerJudgments(judgments) or nil,
 		failed = failed,
 	}
 	if failed and player == online_score_source_player() then
@@ -12214,6 +12266,30 @@ function ITGOnline:FreezeFailedScoreSnapshot(snapshot, source)
 	for key, value in pairs(selected) do
 		frozen[key] = value
 	end
+	local candidateJudgments = type(snapshot.judgments) == "table"
+		and snapshot.judgments
+		or snapshot.Judgments
+	local previousJudgments = self.lastScoreJudgmentsByRoundKey
+		and self.lastScoreJudgmentsByRoundKey[roundKey]
+		or nil
+	if type(previousJudgments) == "table" then
+		candidateJudgments = self:MergeMonotonicServerJudgments(
+			candidateJudgments,
+			previousJudgments
+		)
+	end
+	local frozenJudgments = ITGOnlineScoreJudgments.freeze_once(candidateJudgments, nil)
+	frozen.Judgments = frozenJudgments
+	frozen.judgments = self:CopyServerJudgments(frozenJudgments)
+	frozen.MaxCombo = tonumber(snapshot.maxCombo or snapshot.MaxCombo)
+		or tonumber(selected.maxCombo or selected.MaxCombo)
+		or tonumber(snapshot.combo or snapshot.Combo)
+		or 0
+	frozen.maxCombo = frozen.MaxCombo
+	frozen.SongPositionSeconds = tonumber(snapshot.songPositionSeconds or snapshot.SongPositionSeconds)
+		or tonumber(selected.songPositionSeconds or selected.SongPositionSeconds)
+		or 0
+	frozen.songPositionSeconds = frozen.SongPositionSeconds
 	frozen.Failed = true
 	frozen.failed = true
 	frozen.Frozen = true
@@ -12227,7 +12303,10 @@ function ITGOnline:FreezeFailedScoreSnapshot(snapshot, source)
 		.. " displayed=" .. tostring(self:ScoreSnapshotDisplayedPercent(frozen) or "nil")
 		.. " score=" .. tostring(frozen.scorePercent or frozen.ScorePercent or "nil")
 		.. " ex=" .. tostring(frozen.exScorePercent or frozen.ExScorePercent or "nil")
-		.. " hardex=" .. tostring(frozen.hardExScorePercent or frozen.HardExScorePercent or "nil"))
+		.. " hardex=" .. tostring(frozen.hardExScorePercent or frozen.HardExScorePercent or "nil")
+		.. " judgments=" .. tostring(self:JudgmentTotal(frozenJudgments))
+		.. " maxCombo=" .. tostring(frozen.maxCombo)
+		.. " songPosition=" .. tostring(frozen.songPositionSeconds))
 	return frozen, true
 end
 
@@ -12950,45 +13029,48 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		return
 	end
 
-			local player = snapshot and snapshot.Player or online_score_source_player()
-			if IsRoutine and IsRoutine() then
-				player = online_score_source_player()
-			end
-			local stats = online_stage_stats_for_score(player)
-			local failedOk, failedValue = stats ~= nil and pcall(function() return stats:GetFailed() end) or false, false
-			local statsFailed = failedOk and failedValue == true or false
+	local player = snapshot and snapshot.Player or online_score_source_player()
+	if IsRoutine and IsRoutine() then
+		player = online_score_source_player()
+	end
+	local stats = online_stage_stats_for_score(player)
+	local failedOk, failedValue = stats ~= nil and pcall(function() return stats:GetFailed() end) or false, false
+	local statsFailed = failedOk and failedValue == true or false
 
-		local snapshotScorePercent = tonumber(snapshot and (snapshot.scorePercent or snapshot.ScorePercent))
-		local dancePoints = (snapshotScorePercent or 0) / 100
-		if stats and (snapshotScorePercent == nil or final == true) then
-			local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
-			if danceOk and tonumber(danceValue) then dancePoints = tonumber(danceValue) end
-		end
+	local snapshotFrozen = snapshot
+		and (snapshot.frozen == true or snapshot.Frozen == true)
+		or false
+	local snapshotScorePercent = tonumber(snapshot and (snapshot.scorePercent or snapshot.ScorePercent))
+	local dancePoints = (snapshotScorePercent or 0) / 100
+	if stats and not snapshotFrozen and (snapshotScorePercent == nil or final == true) then
+		local danceOk, danceValue = pcall(function() return stats:GetPercentDancePoints() end)
+		if danceOk and tonumber(danceValue) then dancePoints = tonumber(danceValue) end
+	end
 
-		local snapshotExScore = tonumber(snapshot and (snapshot.exScorePercent or snapshot.ExScorePercent))
-		local exScore = snapshotExScore or 0
-		if player and CalculateExScore and (snapshotExScore == nil or final == true) then
-			local exOk, exValue = pcall(function() return CalculateExScore(player) end)
-			if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
-		end
+	local snapshotExScore = tonumber(snapshot and (snapshot.exScorePercent or snapshot.ExScorePercent))
+	local exScore = snapshotExScore or 0
+	if player and CalculateExScore and not snapshotFrozen
+		and (snapshotExScore == nil or final == true)
+	then
+		local exOk, exValue = pcall(function() return CalculateExScore(player) end)
+		if exOk and tonumber(exValue) then exScore = tonumber(exValue) end
+	end
 
-		local snapshotHardExScore = tonumber(snapshot and (snapshot.hardExScorePercent or snapshot.HardExScorePercent))
-		local hardExScore = snapshotHardExScore or 0
-		if player and CalculateHardExScore and (snapshotHardExScore == nil or final == true) then
-			local hardExOk, hardExValue = pcall(function() return CalculateHardExScore(player) end)
-			if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
-		end
+	local snapshotHardExScore = tonumber(snapshot and (snapshot.hardExScorePercent or snapshot.HardExScorePercent))
+	local hardExScore = snapshotHardExScore or 0
+	if player and CalculateHardExScore and not snapshotFrozen
+		and (snapshotHardExScore == nil or final == true)
+	then
+		local hardExOk, hardExValue = pcall(function() return CalculateHardExScore(player) end)
+		if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
+	end
 
-		local songPosition = tonumber(self.lastScoreSongPosition) or 0
-		if player and GAMESTATE and GAMESTATE.GetPlayerState then
-			local positionOk, positionValue = pcall(function()
-				local songPositionState = GAMESTATE:GetPlayerState(player):GetSongPosition()
-				local visibleOk, visibleSeconds = pcall(function() return songPositionState:GetMusicSecondsVisible() end)
-				if visibleOk and tonumber(visibleSeconds) then return tonumber(visibleSeconds) end
-				return tonumber(songPositionState:GetMusicSeconds())
-			end)
-			if positionOk and tonumber(positionValue) then songPosition = tonumber(positionValue) end
-		end
+	local songPosition = tonumber(snapshot and (
+		snapshot.songPositionSeconds or snapshot.SongPositionSeconds
+	)) or tonumber(self.lastScoreSongPosition) or 0
+	if not snapshotFrozen then
+		songPosition = online_score_song_position(player, songPosition)
+	end
 	local positionKey = table.concat({
 		tostring(roundKey or ""),
 		tostring(scoreSongPayload.song_hash or scoreSongPayload.songHash or ""),
@@ -13003,7 +13085,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end
 	songPosition = math.max(0, tonumber(songPosition) or 0)
 	local startAtMs = tonumber(self.currentRoom.start_at_ms or "") or iso_utc_milliseconds(self.currentRoom.start_at)
-	if startAtMs and self.serverClockOffsetSeconds then
+	if not snapshotFrozen and startAtMs and self.serverClockOffsetSeconds then
 		local rateForClock = tonumber(scoreSongPayload.rate) or 1
 		rateForClock = math.max(0.25, math.min(3, rateForClock))
 		local estimatedServerNowSeconds = GetTimeSinceStart() + self.serverClockOffsetSeconds
@@ -13016,9 +13098,9 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		tonumber(self.lastScoreSongPosition) or 0,
 		tonumber(self.lastAcceptedScoreSongPosition) or 0
 	)
-		local failedFinal = final and (forceFinalFailed or statsFailed)
-		if final and chartDuration and not failedFinal then
-			local rate = tonumber(scoreSongPayload.rate) or 1
+	local failedFinal = final and (forceFinalFailed or statsFailed)
+	if final and chartDuration and not failedFinal then
+		local rate = tonumber(scoreSongPayload.rate) or 1
 		rate = math.max(0.25, math.min(3, rate))
 		local playDuration = math.max(0, (tonumber(chartDuration) or songPosition) / rate)
 		local allowedFinalPosition = playDuration + 9.95
@@ -13031,19 +13113,14 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		songPosition = math.max(songPosition, lastKnownSongPosition)
 	end
 	self.lastScoreSongPosition = songPosition
-		local maxCombo = tonumber(snapshot and (snapshot.maxCombo or snapshot.MaxCombo or snapshot.combo or snapshot.Combo)) or 0
-		if stats then
-			local currentComboOk, currentComboValue = pcall(function() return stats:GetCurrentCombo() end)
-			if currentComboOk and tonumber(currentComboValue) then maxCombo = tonumber(currentComboValue) end
-			for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
-				local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
-				if ok and tonumber(value) then
-					maxCombo = tonumber(value)
-					break
-				end
-			end
-		end
-			local failed = statsFailed
+	local maxCombo = tonumber(snapshot and (
+		snapshot.maxCombo or snapshot.MaxCombo or snapshot.combo or snapshot.Combo
+	)) or 0
+	if not snapshotFrozen then
+		maxCombo = online_score_max_combo(stats, maxCombo)
+	end
+	local failed = snapshot and (snapshot.failed == true or snapshot.Failed == true)
+		or statsFailed
 
 	local selectedMaxScore = tonumber(scoreSongPayload.max_score) or server_max_score_for_note_count(scoreSongPayload.chart_note_count)
 	local itgScorePercent = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
@@ -13078,7 +13155,10 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			displayedScorePercent = itgScorePercent
 		end
 	end
-	if final and forceFinalFailed and (tonumber(displayedScorePercent) or 0) <= 0 and previousDisplayedSnapshot ~= nil then
+	if final and forceFinalFailed and not snapshotFrozen
+		and (tonumber(displayedScorePercent) or 0) <= 0
+		and previousDisplayedSnapshot ~= nil
+	then
 		local preservedDisplayed = self:ScoreSnapshotDisplayedPercent(previousDisplayedSnapshot)
 		if preservedDisplayed ~= nil and preservedDisplayed > 0 then
 			online_flow_trace("final_failed_displayed_percent_restored"
@@ -13091,13 +13171,15 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end
 	displayedScorePercent = math.max(0, math.min(100, tonumber(displayedScorePercent) or 0))
 	local judgments = {}
-	if player then
+	if snapshotFrozen and type(snapshot.judgments or snapshot.Judgments) == "table" then
+		judgments = self:CopyServerJudgments(snapshot.judgments or snapshot.Judgments)
+	elseif player then
 		local judgmentsOk, judgmentsValue = pcall(function() return self:ServerJudgments(player) end)
 		if judgmentsOk and type(judgmentsValue) == "table" then judgments = self:CopyServerJudgments(judgmentsValue) end
 	end
 	local judgmentRoundKey = validRoundKey and roundKey or tostring(self.currentRoomId or "")
 	self.lastScoreJudgmentsByRoundKey = self.lastScoreJudgmentsByRoundKey or {}
-	if self:HasScoredJudgments(judgments) then
+	if self:HasScoredJudgments(judgments) and not snapshotFrozen then
 		local previousJudgments = self.lastScoreJudgmentsByRoundKey[judgmentRoundKey]
 		local restored
 		judgments, restored = self:MergeMonotonicServerJudgments(judgments, previousJudgments)
@@ -13109,7 +13191,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 				.. " counters=" .. table.concat(restored, ","))
 		end
 		self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] = self:CopyServerJudgments(judgments)
-	elseif final and self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] then
+	elseif not snapshotFrozen and final and self.lastScoreJudgmentsByRoundKey[judgmentRoundKey] then
 		judgments = self:CopyServerJudgments(self.lastScoreJudgmentsByRoundKey[judgmentRoundKey])
 	end
 	if final and not self:HasScoredJudgments(judgments) and not forceFinalFailed then
@@ -13650,17 +13732,54 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		return
 	end
 	local statsFailed = online_score_failed(player, stats)
-	if final and statsFailed and type(state.lastSnapshot) == "table" then
-		local currentDisplayed = self:ScoreSnapshotDisplayedPercent(snapshot) or 0
-		local previousDisplayed = self:ScoreSnapshotDisplayedPercent(state.lastSnapshot) or 0
-		if previousDisplayed > currentDisplayed then
-			snapshot = state.lastSnapshot
-			online_flow_trace("companion_final_failed_snapshot_preserved localPlayer=P2"
+	if statsFailed then
+		if type(state.failedSnapshot) == "table" then
+			snapshot = state.failedSnapshot
+		else
+			local selected = snapshot
+			if type(state.lastSnapshot) == "table"
+				and (self:ScoreSnapshotDisplayedPercent(state.lastSnapshot) or 0)
+					> (self:ScoreSnapshotDisplayedPercent(snapshot) or 0)
+			then
+				selected = state.lastSnapshot
+			end
+			local frozen = {}
+			for key, value in pairs(selected) do frozen[key] = value end
+			local candidateJudgments = snapshot.judgments or snapshot.Judgments
+			candidateJudgments = self:MergeMonotonicServerJudgments(
+				candidateJudgments,
+				state.judgments
+			)
+			local frozenJudgments = ITGOnlineScoreJudgments.freeze_once(candidateJudgments, nil)
+			frozen.Judgments = frozenJudgments
+			frozen.judgments = self:CopyServerJudgments(frozenJudgments)
+			frozen.MaxCombo = online_score_max_combo(
+				stats,
+				snapshot.maxCombo or snapshot.MaxCombo or snapshot.combo or snapshot.Combo
+			)
+			frozen.maxCombo = frozen.MaxCombo
+			frozen.SongPositionSeconds = online_score_song_position(
+				player,
+				snapshot.songPositionSeconds or snapshot.SongPositionSeconds
+			)
+			frozen.songPositionSeconds = frozen.SongPositionSeconds
+			frozen.Failed = true
+			frozen.failed = true
+			frozen.Frozen = true
+			frozen.frozen = true
+			state.failedSnapshot = frozen
+			state.judgments = self:CopyServerJudgments(frozenJudgments)
+			snapshot = frozen
+			online_flow_trace("companion_failed_score_frozen"
+				.. " localPlayer=P2"
 				.. " roundKey=" .. roundKey
-				.. " currentDisplayed=" .. tostring(currentDisplayed)
-				.. " preservedDisplayed=" .. tostring(previousDisplayed))
+				.. " displayed=" .. tostring(self:ScoreSnapshotDisplayedPercent(frozen) or 0)
+				.. " judgments=" .. tostring(self:JudgmentTotal(frozenJudgments))
+				.. " maxCombo=" .. tostring(frozen.maxCombo)
+				.. " songPosition=" .. tostring(frozen.songPositionSeconds))
 		end
 	end
+	local snapshotFrozen = snapshot.frozen == true or snapshot.Frozen == true
 	local snapshotDisplayedPercent = tonumber(snapshot.displayedPercent or snapshot.DisplayedPercent) or 0
 	local snapshotItgPercent = tonumber(snapshot.scorePercent or snapshot.ScorePercent) or 0
 	local snapshotExPercent = tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0
@@ -13721,11 +13840,16 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		or 1000000
 	local outgoingScore = math.max(0, math.floor((displayedPercent / 100) * maxScore + 0.5))
 
-	local judgments = self:CopyServerJudgments(self:ServerJudgments(player))
-	if self:HasScoredJudgments(judgments) then
+	local judgments = {}
+	if snapshotFrozen and type(snapshot.judgments or snapshot.Judgments) == "table" then
+		judgments = self:CopyServerJudgments(snapshot.judgments or snapshot.Judgments)
+	else
+		judgments = self:CopyServerJudgments(self:ServerJudgments(player))
+	end
+	if self:HasScoredJudgments(judgments) and not snapshotFrozen then
 		judgments = self:MergeMonotonicServerJudgments(judgments, state.judgments)
 		state.judgments = self:CopyServerJudgments(judgments)
-	elseif final and type(state.judgments) == "table" then
+	elseif not snapshotFrozen and final and type(state.judgments) == "table" then
 		judgments = self:CopyServerJudgments(state.judgments)
 	end
 	local failed = snapshot.failed == true or snapshot.Failed == true or statsFailed
@@ -13743,29 +13867,24 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 	accuracy = math.max(0, math.min(100, accuracy))
 
 	local combo = math.max(0, tonumber(snapshot.combo or snapshot.Combo) or 0)
-	local maxCombo = combo
-	for _, methodName in ipairs({ "GetMaxCombo", "MaxCombo" }) do
-		local ok, value = pcall(function() return stats[methodName] and stats[methodName](stats) or nil end)
-		if ok and tonumber(value) then
-			maxCombo = math.max(maxCombo, tonumber(value))
-			break
-		end
+	local maxCombo = math.max(
+		combo,
+		tonumber(snapshot.maxCombo or snapshot.MaxCombo) or 0
+	)
+	if not snapshotFrozen then
+		maxCombo = online_score_max_combo(stats, maxCombo)
 	end
 	maxCombo = math.max(maxCombo, tonumber(state.maxCombo) or 0)
 	state.maxCombo = maxCombo
-	local songPosition = tonumber(state.lastSongPosition) or 0
-	if GAMESTATE and GAMESTATE.GetPlayerState then
-		local ok, value = pcall(function()
-			local position = GAMESTATE:GetPlayerState(player):GetSongPosition()
-			local visibleOk, visible = pcall(function() return position:GetMusicSecondsVisible() end)
-			if visibleOk and tonumber(visible) then return tonumber(visible) end
-			return tonumber(position:GetMusicSeconds())
-		end)
-		if ok and tonumber(value) then songPosition = tonumber(value) end
+	local songPosition = tonumber(snapshot.songPositionSeconds or snapshot.SongPositionSeconds)
+		or tonumber(state.lastSongPosition)
+		or 0
+	if not snapshotFrozen then
+		songPosition = online_score_song_position(player, songPosition)
 	end
 	songPosition = math.max(0, songPosition, tonumber(state.lastAcceptedSongPosition) or 0)
 	local startAtMs = tonumber(self.currentRoom.start_at_ms or "") or iso_utc_milliseconds(self.currentRoom.start_at)
-	if startAtMs and self.serverClockOffsetSeconds then
+	if not snapshotFrozen and startAtMs and self.serverClockOffsetSeconds then
 		local rate = math.max(0.25, math.min(3, tonumber(song.rate) or 1))
 		local serverNow = GetTimeSinceStart() + self.serverClockOffsetSeconds
 		songPosition = math.max(songPosition, math.max(0, (serverNow - (startAtMs / 1000)) * rate - 0.5))

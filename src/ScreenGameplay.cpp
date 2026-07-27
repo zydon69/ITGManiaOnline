@@ -3419,6 +3419,13 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
 
         LOG->Trace("Player %d failed", (int)pn);
+        // Failure is the authoritative score-freeze boundary.  Publish the
+        // online final only after this flag is visible so every reader captures
+        // the same immutable PlayerStageStats state.
+        pss->m_bFailed = true;
+        if (bSharedSidesLifeMeter) {
+          PropagateSharedSidesFailure(pn, "ScreenGameplay::Update fail check");
+        }
         if (GetITGOnlineIsActive() && !m_bMarkedOnlineFailedEarly[pn]) {
           const bool marked = MarkITGOnlineFailedEarly(pn);
           if (marked) {
@@ -3428,10 +3435,6 @@ void ScreenGameplay::Update(float fDeltaTime) {
               "ITG Online: individual fail triggered early failed finalization "
               "marked=%d player=%d.",
               marked ? 1 : 0, (int)pn);
-        }
-        pss->m_bFailed = true;  // fail
-        if (bSharedSidesLifeMeter) {
-          PropagateSharedSidesFailure(pn, "ScreenGameplay::Update fail check");
         }
 
         {

@@ -47,6 +47,15 @@ function Judgments.copy(judgments)
 	return copy
 end
 
+-- Capture the first authoritative set of judgments for a failed player.
+-- Later engine activity must never replace or mutate this table.
+function Judgments.freeze_once(current, frozen)
+	if type(frozen) == "table" then
+		return Judgments.copy(frozen), false
+	end
+	return Judgments.copy(current), true
+end
+
 function Judgments.merge_monotonic(current, previous)
 	local merged = Judgments.copy(current)
 	local restored = {}

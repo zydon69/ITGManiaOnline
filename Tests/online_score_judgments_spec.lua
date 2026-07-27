@@ -73,4 +73,41 @@ equal(sanitized.fantastic, 0, "negative count clamp")
 equal(sanitized.excellent, 2, "fractional count floor")
 equal(sanitized.hold_ng, 0, "non-finite count clamp")
 
+local frozen, captured = judgments.freeze_once({
+	fantastic = 8,
+	miss = 6,
+	hold_ng = 1,
+}, nil)
+equal(captured, true, "first failed judgment snapshot is captured")
+equal(frozen.fantastic, 8, "failed fantastic count")
+equal(frozen.miss, 6, "failed miss count")
+
+local afterFail, recaptured = judgments.freeze_once({
+	fantastic = 20,
+	miss = 400,
+	hold_ng = 30,
+}, frozen)
+equal(recaptured, false, "failed judgment snapshot is immutable")
+equal(afterFail.fantastic, 8, "post-fail hits are ignored")
+equal(afterFail.miss, 6, "post-fail misses are ignored")
+equal(afterFail.hold_ng, 1, "post-fail holds are ignored")
+
+frozen.miss = 999
+equal(afterFail.miss, 6, "frozen judgment snapshots do not share mutable tables")
+
+local playerOneFinal = judgments.freeze_once({
+	fantastic = 5,
+	miss = 6,
+}, nil)
+local playerTwoFinal = judgments.freeze_once({
+	fantastic = 3,
+	miss = 8,
+}, nil)
+local playerOneAfterGameplay = judgments.freeze_once({ miss = 400 }, playerOneFinal)
+local playerTwoAfterGameplay = judgments.freeze_once({ miss = 500 }, playerTwoFinal)
+equal(playerOneAfterGameplay.miss, 6, "player one keeps its own failure-time result")
+equal(playerTwoAfterGameplay.miss, 8, "player two keeps its own failure-time result")
+equal(playerOneAfterGameplay.fantastic, 5, "player one snapshot is independent")
+equal(playerTwoAfterGameplay.fantastic, 3, "player two snapshot is independent")
+
 print("online score judgment behavior: ok")

@@ -4154,6 +4154,12 @@ void Player::HandleTapRowScore(unsigned row) {
     LOG->Warn("Invalid HandleTapRowScore context/row %u.", row);
     return;
   }
+  // The note field may keep advancing after an individual fail (notably
+  // online, while remote players are still active), but the failed player's
+  // result is immutable from that instant onward.
+  if (m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed) {
+    return;
+  }
   bool bNoCheating = true;
 #ifdef DEBUG
   bNoCheating = false;
@@ -4315,6 +4321,9 @@ void Player::HandleHoldCheckpoint(
     LOG->Warn("Invalid HandleHoldCheckpoint context.");
     return;
   }
+  if (m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed) {
+    return;
+  }
   if (iNumHoldsHeldThisRow < 0 || iNumHoldsMissedThisRow < 0) {
     LOG->Warn(
         "Invalid checkpoint counts held=%i missed=%i.",
@@ -4384,6 +4393,9 @@ void Player::HandleHoldCheckpoint(
 void Player::HandleHoldScore(const TapNote& tn) {
   if (m_pPlayerState == nullptr || GAMESTATE == nullptr) {
     LOG->Warn("Invalid HandleHoldScore context.");
+    return;
+  }
+  if (m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed) {
     return;
   }
   HoldNoteScore holdScore = tn.HoldResult.hns;
@@ -4736,6 +4748,9 @@ void Player::SetCombo(unsigned int iCombo, unsigned int iMisses) {
 }
 
 void Player::IncrementComboOrMissCombo(bool bComboOrMissCombo) {
+  if (m_pPlayerStageStats != nullptr && m_pPlayerStageStats->m_bFailed) {
+    return;
+  }
   const unsigned int iOldCombo =
       m_pPlayerStageStats ? m_pPlayerStageStats->m_iCurCombo : 0;
   const unsigned int iOldMissCombo =

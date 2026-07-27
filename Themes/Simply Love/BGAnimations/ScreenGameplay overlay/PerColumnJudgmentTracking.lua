@@ -26,6 +26,8 @@ local source_player = routine_shared and GAMESTATE:GetMasterPlayerNumber() or pl
 if routine_shared and player ~= source_player then return end
 local pn = ToEnumShortString(source_player)
 local mods = SL[pn].ActiveModifiers
+local stats = GetEvaluationPlayerStageStats and GetEvaluationPlayerStageStats(source_player)
+	or STATSMAN:GetCurStageStats():GetPlayerStageStats(source_player)
 
 local judgments = {}
 for i=1,GAMESTATE:GetCurrentStyle():ColumnsPerPlayer() do
@@ -57,8 +59,7 @@ return Def.Actor{
 	end,
 	JudgmentMessageCommand=function(self, params)
 		if not params or params.Player ~= source_player or not params.Notes then return end
-		local health_state = GAMESTATE:GetPlayerState(params.Player):GetHealthState()
-		if health_state ~= 'HealthState_Dead' then
+		if stats and not stats:GetFailed() then
 			for col,tapnote in pairs(params.Notes) do
 				local tnt = ToEnumShortString(tapnote:GetTapNoteType())
 

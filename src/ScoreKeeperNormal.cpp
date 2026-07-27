@@ -672,7 +672,7 @@ void ScoreKeeperNormal::AddTapRowScore(
 extern ThemeMetric<bool> PENALIZE_TAP_SCORE_NONE;
 extern ThemeMetric<bool> TICK_HOLDS;
 void ScoreKeeperNormal::HandleTapScoreNone() {
-  if (!HasScoringState("ScoreKeeperNormal::HandleTapScoreNone")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleTapScoreNone")) {
     return;
   }
   if (PENALIZE_TAP_SCORE_NONE) {
@@ -690,7 +690,7 @@ void ScoreKeeperNormal::HandleTapScoreNone() {
 }
 
 void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
-  if (!HasScoringState("ScoreKeeperNormal::AddScoreInternal")) {
+  if (!CanMutateScore("ScoreKeeperNormal::AddScoreInternal")) {
     return;
   }
   if (m_UseInternalScoring) {
@@ -745,30 +745,14 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
     const int64_t sum = (N * (N + 1)) / 2;
     const int Z = m_iMaxPossiblePoints / 10;
 
-    // Don't use a multiplier if the player has failed
-    if (m_pPlayerStageStats->m_bFailed) {
-      iScore = AddUnsignedDeltaSaturated(
-          iScore, p, "ScoreKeeperNormal::AddScoreInternal failed score");
-      // make score evenly divisible by 5
-      // only update this on the next step, to make it less *obvious*
-      /* Round to the nearest 5, instead of always rounding down, so a base
-       * score of 9 will round to 10, not 5. */
-      if (p > 0) {
-        const uint64_t rounded =
-            ((static_cast<uint64_t>(iScore) + 2U) / 5U) * 5U;
-        iScore = static_cast<unsigned int>(std::min<uint64_t>(
-            rounded, std::numeric_limits<unsigned int>::max()));
-      }
-    } else {
-      iScore = AddUnsignedDeltaSaturated(
-          iScore, GetScore(p, Z, sum, m_iTapNotesHit),
-          "ScoreKeeperNormal::AddScoreInternal tap score");
-      const unsigned int iCurrentCombo = m_pPlayerStageStats->m_iCurCombo;
-      iScore = AddUnsignedDeltaSaturated(
-          iScore,
-          static_cast<int64_t>(m_ComboBonusFactor[score]) * iCurrentCombo,
-          "ScoreKeeperNormal::AddScoreInternal combo bonus");
-    }
+    iScore = AddUnsignedDeltaSaturated(
+        iScore, GetScore(p, Z, sum, m_iTapNotesHit),
+        "ScoreKeeperNormal::AddScoreInternal tap score");
+    const unsigned int iCurrentCombo = m_pPlayerStageStats->m_iCurCombo;
+    iScore = AddUnsignedDeltaSaturated(
+        iScore,
+        static_cast<int64_t>(m_ComboBonusFactor[score]) * iCurrentCombo,
+        "ScoreKeeperNormal::AddScoreInternal combo bonus");
 
     // Subtract the maximum this step could have been worth from the bonus.
     m_iPointBonus = AddIntSaturated(
@@ -781,11 +765,9 @@ void ScoreKeeperNormal::AddScoreInternal(TapNoteScore score) {
         "ScoreKeeperNormal::AddScoreInternal current max score");
 
     if (m_iTapNotesHit == m_iNumTapsAndHolds && score >= TNS_W2) {
-      if (!m_pPlayerStageStats->m_bFailed) {
-        iScore = AddUnsignedDeltaSaturated(
-            iScore, m_iPointBonus,
-            "ScoreKeeperNormal::AddScoreInternal final point bonus");
-      }
+      iScore = AddUnsignedDeltaSaturated(
+          iScore, m_iPointBonus,
+          "ScoreKeeperNormal::AddScoreInternal final point bonus");
       if (m_bIsLastSongInCourse) {
         const int finalCourseBonus = std::max(
             0, AddIntSaturated(
@@ -913,7 +895,7 @@ int ScoreKeeperNormal::CalcNextToastyAt(int level) {
 }
 
 void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleTapScore")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleTapScore")) {
     return;
   }
   TapNoteScore tns = tn.result.tns;
@@ -927,13 +909,11 @@ void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
       return;
     }
     if (tns == TNS_HitMine) {
-      if (!m_pPlayerStageStats->m_bFailed) {
-        m_pPlayerStageStats->m_iActualDancePoints =
-            AddDancePointsClampedNonNegative(
-                m_pPlayerStageStats->m_iActualDancePoints,
-                TapNoteScoreToDancePoints(TNS_HitMine),
-                "ScoreKeeperNormal::HandleTapScore actual dance points");
-      }
+      m_pPlayerStageStats->m_iActualDancePoints =
+          AddDancePointsClampedNonNegative(
+              m_pPlayerStageStats->m_iActualDancePoints,
+              TapNoteScoreToDancePoints(TNS_HitMine),
+              "ScoreKeeperNormal::HandleTapScore actual dance points");
       m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine] =
           AddNonNegativeIntSaturated(
               m_pPlayerStageStats->m_iTapNoteScores[TNS_HitMine], 1,
@@ -959,7 +939,7 @@ void ScoreKeeperNormal::HandleTapScore(const TapNote& tn) {
 void ScoreKeeperNormal::HandleHoldCheckpointScore(
     const NoteData& nd, int iRow, int iNumHoldsHeldThisRow,
     int iNumHoldsMissedThisRow) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleHoldCheckpointScore")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleHoldCheckpointScore")) {
     return;
   }
   if (!IsValidScoreRow(iRow)) {
@@ -984,7 +964,7 @@ void ScoreKeeperNormal::HandleHoldCheckpointScore(
 
 void ScoreKeeperNormal::HandleTapNoteScoreInternal(
     TapNoteScore tns, TapNoteScore maximum, int row) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleTapNoteScoreInternal")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleTapNoteScoreInternal")) {
     return;
   }
   if (!IsRowTapNoteScore(tns) || !IsRowTapNoteScore(maximum)) {
@@ -996,13 +976,11 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
   }
 
   // Update dance points.
-  if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats
-        ->m_iActualDancePoints = AddDancePointsClampedNonNegative(
+  m_pPlayerStageStats
+      ->m_iActualDancePoints = AddDancePointsClampedNonNegative(
         m_pPlayerStageStats->m_iActualDancePoints,
         TapNoteScoreToDancePoints(tns),
         "ScoreKeeperNormal::HandleTapNoteScoreInternal actual dance points");
-  }
 
   // update judged row totals. Respect Combo segments here.
   TimingData* pTiming =
@@ -1039,7 +1017,7 @@ void ScoreKeeperNormal::HandleTapNoteScoreInternal(
 void ScoreKeeperNormal::HandleComboInternal(
     int iNumHitContinueCombo, int iNumHitMaintainCombo, int iNumBreakCombo,
     int iRow) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleComboInternal")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleComboInternal")) {
     return;
   }
   iNumHitContinueCombo = ClampComboInput(
@@ -1085,7 +1063,7 @@ void ScoreKeeperNormal::HandleComboInternal(
 
 void ScoreKeeperNormal::HandleRowComboInternal(
     TapNoteScore tns, int iNumTapsInRow, int iRow) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleRowComboInternal")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleRowComboInternal")) {
     return;
   }
   if (!IsRowTapNoteScore(tns)) {
@@ -1179,7 +1157,7 @@ void ScoreKeeperNormal::GetRowCounts(
 }
 
 void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleTapRowScore")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleTapRowScore")) {
     return;
   }
   if (iRow < 0 || iRow > MAX_NOTE_ROW) {
@@ -1305,7 +1283,7 @@ void ScoreKeeperNormal::HandleTapRowScore(const NoteData& nd, int iRow) {
 }
 
 void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
-  if (!HasScoringState("ScoreKeeperNormal::HandleHoldScore")) {
+  if (!CanMutateScore("ScoreKeeperNormal::HandleHoldScore")) {
     return;
   }
   HoldNoteScore holdScore = tn.HoldResult.hns;
@@ -1317,13 +1295,11 @@ void ScoreKeeperNormal::HandleHoldScore(const TapNote& tn) {
   }
 
   // update dance points totals
-  if (!m_pPlayerStageStats->m_bFailed) {
-    m_pPlayerStageStats->m_iActualDancePoints =
-        AddDancePointsClampedNonNegative(
-            m_pPlayerStageStats->m_iActualDancePoints,
-            HoldNoteScoreToDancePoints(holdScore),
-            "ScoreKeeperNormal::HandleHoldScore actual dance points");
-  }
+  m_pPlayerStageStats->m_iActualDancePoints =
+      AddDancePointsClampedNonNegative(
+          m_pPlayerStageStats->m_iActualDancePoints,
+          HoldNoteScoreToDancePoints(holdScore),
+          "ScoreKeeperNormal::HandleHoldScore actual dance points");
   // increment the current total possible dance score
   m_pPlayerStageStats->m_iCurPossibleDancePoints = AddNonNegativeIntSaturated(
       m_pPlayerStageStats->m_iCurPossibleDancePoints,
