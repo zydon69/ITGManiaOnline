@@ -11,6 +11,21 @@ local lobbyModel = assert(dofile(
 local roomPolicy = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomPolicy.lua"
 ))
+local localIdentity = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLocalIdentity.lua"
+))
+local scoreTransport = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineScoreTransport.lua"
+))
+local readinessCoordinator = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineReadinessCoordinator.lua"
+))
+local realtimeEventRouter = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRealtimeEventRouter.lua"
+))
+local roomStateMachine = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomStateMachine.lua"
+))
 
 local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
@@ -36,6 +51,78 @@ equal(versus.coordinatorSide, "P1", "two-player coordinator")
 equal(versus.twoPlayer, true, "two-player mode")
 equal(party.role_for_side(versus, "P1"), "coordinator", "P1 two-player role")
 equal(party.role_for_side(versus, "P2"), "companion", "P2 two-player role")
+local p1Identity = localIdentity.describe("P1", "P1", "P2", versus)
+local p2Identity = localIdentity.describe("P2", "P1", "P2", versus)
+equal(p1Identity.isPrimary, true, "P1 identity owns room coordination")
+equal(p2Identity.isPrimary, false, "P2 identity remains the local companion")
+equal(p2Identity.role, "companion", "P2 identity role")
+local scorePayload = scoreTransport.payload(p2Identity, {
+	score = 420000,
+	displayed_percent = 42,
+	final = false,
+	judgments = { Fantastic = 10 },
+})
+equal(scorePayload.score, 420000, "shared score payload keeps score")
+equal(scorePayload.compact_response, true, "live score payload is compact for every identity")
+equal(scorePayload.final, false, "shared score payload normalizes final state")
+local scoreRuntime = scoreTransport.new_runtime(p2Identity, "round-1")
+equal(scoreRuntime.localPlayer, "P2", "score runtime is bound to its local identity")
+scoreTransport.queue_final(scoreRuntime, function() end)
+local finalQueued, finalCallbacks = scoreTransport.take_pending_final(scoreRuntime)
+equal(finalQueued, true, "final score is queued behind an in-flight local score")
+equal(#finalCallbacks, 1, "queued final callbacks are preserved")
+local readyPayload = readinessCoordinator.payload(p2Identity, {
+	clientActionId = "action-1",
+	selectionId = "selection-1",
+	phase = "config_ready",
+	isReady = true,
+	options = { stepchart = "Hard 8" },
+})
+equal(readyPayload.is_ready, true, "shared readiness payload normalizes ready state")
+equal(readinessCoordinator.local_party_action(versus, true, false), "companion_barrier",
+	"two-player ready requires the companion barrier")
+equal(readinessCoordinator.local_party_action(versus, false, false), "companion_fanout",
+	"two-player not-ready fans out to the companion")
+local routed = assert(realtimeEventRouter.route({
+	id = "12",
+	event = "room.score_updated",
+	payload = {},
+}))
+equal(routed.category, "score", "score events use the score route")
+local rejectedRoute, rejectedReason = realtimeEventRouter.route({
+	event = "room.updated",
+	payload = {},
+})
+equal(rejectedRoute, nil, "idless room events are rejected")
+equal(rejectedReason, "idless_non_control", "idless event rejection reason")
+equal(roomStateMachine.normalize_phase("PLAYING"), "playing", "room phase normalization")
+equal(roomStateMachine.phase_regresses("playing", "config", {
+	sameRoom = true,
+	sameRound = true,
+}), true, "same-round room snapshots cannot regress without an authorized transition")
+equal(roomStateMachine.phase_regresses("results", "lobby", {
+	sameRoom = true,
+	sameRound = true,
+	allowRegression = true,
+}), false, "authorized room reset can return to the lobby")
+local roomContractOk = roomStateMachine.validate_room_contract({
+	members = {},
+})
+equal(roomContractOk, true, "current room contract is accepted")
+local obsoleteContractOk, obsoleteContractReason =
+	roomStateMachine.validate_room_contract({})
+equal(obsoleteContractOk, false, "room snapshots without the current contract are rejected")
+equal(obsoleteContractReason, "missing_room_members",
+	"missing room contract requests an explicit resynchronization")
+local availabilityOk = roomStateMachine.validate_song_availability({
+	song_availability = { missing = false },
+}, false)
+equal(availabilityOk, true, "authoritative song availability is accepted")
+local availabilityMissing, availabilityReason =
+	roomStateMachine.validate_song_availability({ song_availability = {} }, false)
+equal(availabilityMissing, false, "missing availability state is rejected")
+equal(availabilityReason, "missing_song_availability_state",
+	"missing availability state cannot be reconstructed locally")
 equal(party.all_local_finals_accepted(versus, { P1 = true, P2 = false }), false,
 	"two-player evaluation must wait for P2's accepted final")
 equal(party.all_local_finals_accepted(versus, { P1 = true, P2 = true }), true,
@@ -234,6 +321,33 @@ local evaluationPanesSource = read_source(
 local onlineLobbyScreenSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
 )
+assert(clientSource:find("ITGOnlineLocalIdentity.describe", 1, true),
+	"local P1/P2 behavior must be parameterized by one identity contract")
+assert(clientSource:find("ITGOnlineScoreTransport.payload", 1, true),
+	"P1 and P2 scores must share one transport payload contract")
+assert(clientSource:find("ITGOnlineReadinessCoordinator.payload", 1, true),
+	"P1 and P2 readiness must share one coordinator")
+assert(clientSource:find("ITGOnlineRealtimeEventRouter.route", 1, true),
+	"realtime schema validation and classification must be routed centrally")
+assert(clientSource:find("ITGOnlineRoomStateMachine.validate_room_contract", 1, true),
+	"room snapshots must pass through the room state machine")
+assert(not clientSource:find("annotate_song_availability_result", 1, true),
+	"missing song availability fields must never be reconstructed locally")
+local lobbyStateStart = assert(clientSource:find("function ITGOnline:LobbyStatePayload", 1, true))
+local lobbyStateSource = clientSource:sub(lobbyStateStart)
+assert(not lobbyStateSource:find("cachedLobbySearchPayload", 1, true),
+	"room-local party relations must never fall back to the global presence cache")
+for _, deadMethod in ipairs({
+	"SaveConfig",
+	"SuppressLobbyRefresh",
+	"SuppressAutomaticLobbyRefresh",
+	"Register",
+	"ResendVerification",
+	"ForgotPassword",
+}) do
+	assert(not clientSource:find("function ITGOnline:" .. deadMethod, 1, true),
+		"dead public method must stay removed: " .. deadMethod)
+end
 assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
 	"new installations must enable online network diagnostics by default")
 assert(not clientSource:find("forceOnlineFlowLogging", 1, true),
@@ -261,7 +375,7 @@ assert(clientSource:find("function ITGOnline:OptionsReadyDeadlineBlockedByPackSy
 assert(clientSource:find("function ITGOnline:SongAvailabilityProjectionIncludesCompanion", 1, true)
 	and clientSource:find("reason=server_projection_confirmed", 1, true)
 	and clientSource:find("reason=server_projection_unavailable", 1, true),
-	"availability must prefer server-side local-party projection with a legacy fallback")
+	"availability must use server projection or an authenticated companion request")
 assert(onlineLobbyScreenSource:find(
 	"Display_sync_skipped reason=authoritative_current_room",
 	1,
@@ -313,10 +427,8 @@ assert(clientSource:find("function ITGOnline:RequiredLocalPlayers", 1, true),
 	"critical online requests must use the captured local party")
 assert(clientSource:find("companion_ready_barrier_result", 1, true),
 	"Player 1 ready must wait for the companion ready response")
-assert(clientSource:find("should_submit_companion_ready", 1, true),
-	"the paired readiness barrier must use the tested local-party policy")
-assert(clientSource:find("should_fan_out_companion_not_ready", 1, true),
-	"clearing paired readiness must use the tested local-party policy")
+assert(clientSource:find("ITGOnlineReadinessCoordinator.local_party_action", 1, true),
+	"both readiness paths must use the identity-aware coordinator")
 assert(clientSource:find("companion_ready_snapshot_membership_unconfirmed", 1, true),
 	"a partial local room snapshot must not prevent the companion ready request")
 local companionReadyStart = assert(clientSource:find("function ITGOnline:SetCompanionReady", 1, true),
@@ -444,9 +556,9 @@ assert(primaryScoreSource:find("self:UpdatePlayStateFromResponse(decoded)", 1, t
 	"Player 1 must apply the authoritative final-score HTTP play-state fallback")
 assert(companionScoreSource:find("self:UpdatePlayStateFromResponse(decoded)", 1, true),
 	"Player 2 must apply the authoritative final-score HTTP play-state fallback")
-assert(primaryScoreSource:find("compact_response = not final", 1, true)
-	and companionScoreSource:find("compact_response = not final", 1, true),
-	"both local players must request compact HTTP acknowledgements for live score ticks")
+assert(primaryScoreSource:find("ITGOnlineScoreTransport.payload", 1, true)
+	and companionScoreSource:find("ITGOnlineScoreTransport.payload", 1, true),
+	"both local players must use the shared score payload contract")
 local localFailureStart = assert(
 	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", 1, true),
 	"early failure finalization must route by local player identity")

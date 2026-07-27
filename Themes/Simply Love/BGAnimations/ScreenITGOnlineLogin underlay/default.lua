@@ -16,10 +16,6 @@ local function player_key(player)
 	return player == PLAYER_2 and "P2" or "P1"
 end
 
-local function player_from_key(key)
-	return key == "P2" and PLAYER_2 or PLAYER_1
-end
-
 local function player_is_required(player)
 	for _, requiredPlayer in ipairs(required_players()) do
 		if requiredPlayer == player then return true end
