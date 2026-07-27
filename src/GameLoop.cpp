@@ -1,5 +1,6 @@
 #include "GameLoop.h"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -85,6 +86,14 @@ struct LoopPerfSnapshot {
 
 static LoopPerfSnapshot g_LastLoopPerf;
 static bool g_HasLastLoopPerf = false;
+struct TimedLoopPerfSnapshot {
+  LoopPerfSnapshot snapshot;
+  uint64_t capturedAtUsec = 0;
+  bool available = false;
+};
+
+static TimedLoopPerfSnapshot g_CurrentFpsWindowWorst;
+static TimedLoopPerfSnapshot g_PreviousFpsWindowWorst;
 static uint64_t g_LastLoopPerfTraceUsec = 0;
 static uint64_t g_LastFpsSampleUsec = 0;
 static uint64_t g_LastLowFpsTraceUsec = 0;
@@ -92,6 +101,43 @@ static int g_ConsecutiveLowFpsSamples = 0;
 
 static float TimerMs(RageTimer& timer) {
   return timer.GetDeltaTime() * 1000.0f;
+}
+
+static float LoopPerfCostMs(const LoopPerfSnapshot& snapshot) {
+  return std::max(
+      snapshot.incomingDeltaSeconds * 1000.0f,
+      snapshot.totalUpdateMs + snapshot.drawMs);
+}
+
+static void ObserveFpsDiagnosticSnapshot(
+    const LoopPerfSnapshot& snapshot, uint64_t nowUsec) {
+  if (!g_CurrentFpsWindowWorst.available ||
+      LoopPerfCostMs(snapshot) >
+          LoopPerfCostMs(g_CurrentFpsWindowWorst.snapshot)) {
+    g_CurrentFpsWindowWorst = {snapshot, nowUsec, true};
+  }
+}
+
+struct FpsDiagnosticCause {
+  TimedLoopPerfSnapshot timed;
+  const char* window = "unavailable";
+};
+
+static FpsDiagnosticCause RotateFpsDiagnosticWindows() {
+  FpsDiagnosticCause cause;
+  if (g_CurrentFpsWindowWorst.available) {
+    cause = {g_CurrentFpsWindowWorst, "current"};
+  }
+  if (g_PreviousFpsWindowWorst.available &&
+      (!cause.timed.available ||
+       LoopPerfCostMs(g_PreviousFpsWindowWorst.snapshot) >
+           LoopPerfCostMs(cause.timed.snapshot))) {
+    cause = {g_PreviousFpsWindowWorst, "previous"};
+  }
+
+  g_PreviousFpsWindowWorst = g_CurrentFpsWindowWorst;
+  g_CurrentFpsWindowWorst = {};
+  return cause;
 }
 
 static std::string GetTopScreenNameForPerf() {
@@ -193,6 +239,7 @@ static void TraceFpsDrop() {
     return;
   }
   g_LastFpsSampleUsec = nowUsec;
+  const FpsDiagnosticCause cause = RotateFpsDiagnosticWindows();
 
   const int fps = DISPLAY->GetFPS();
   const ActualVideoModeParams mode = DISPLAY->GetActualVideoModeParams();
@@ -210,23 +257,41 @@ static void TraceFpsDrop() {
   }
   g_LastLowFpsTraceUsec = nowUsec;
 
+  const LoopPerfSnapshot* snapshot =
+      cause.timed.available ? &cause.timed.snapshot : nullptr;
+  const bool causedByIncomingDelta =
+      snapshot &&
+      snapshot->incomingDeltaSeconds >= kPerfTraceFrameHitchSeconds &&
+      snapshot->incomingDeltaSeconds * 1000.0f >=
+          snapshot->totalUpdateMs + snapshot->drawMs;
   const char* classification =
-      g_HasLastLoopPerf
-          ? ClassifyLoopPerfSnapshot("fps_drop", g_LastLoopPerf)
+      snapshot
+          ? ClassifyLoopPerfSnapshot(
+                causedByIncomingDelta ? "incoming_delta_hitch" : "fps_drop",
+                *snapshot)
           : "unavailable";
+  const float causeAgeMs =
+      cause.timed.available && nowUsec >= cause.timed.capturedAtUsec
+          ? static_cast<float>(nowUsec - cause.timed.capturedAtUsec) / 1000.0f
+          : 0.0f;
   LOG->Trace(
       "PERF_TRACE: fps_drop fps=%d refresh_hz=%d threshold_fps=%d "
-      "samples=%d renderer=%s vsync=%d screen=%s update_ms=%.3f draw_ms=%.3f "
-      "network_ms=%.3f screen_ms=%.3f texture_ms=%.3f classification=%s",
+      "samples=%d renderer=%s vsync=%d screen=%s incoming_delta=%.6f "
+      "update_ms=%.3f draw_ms=%.3f network_ms=%.3f screen_ms=%.3f "
+      "texture_ms=%.3f classification=%s cause_window=%s cause_age_ms=%.3f "
+      "cause_start_screen=%s cause_end_screen=%s",
       fps, refreshRate, lowFpsThreshold, g_ConsecutiveLowFpsSamples,
       DISPLAY->GetApiDescription().c_str(), mode.vsync ? 1 : 0,
       GetTopScreenNameForPerf().c_str(),
-      g_HasLastLoopPerf ? g_LastLoopPerf.totalUpdateMs : 0.0f,
-      g_HasLastLoopPerf ? g_LastLoopPerf.drawMs : 0.0f,
-      g_HasLastLoopPerf ? g_LastLoopPerf.networkMs : 0.0f,
-      g_HasLastLoopPerf ? g_LastLoopPerf.screenMs : 0.0f,
-      g_HasLastLoopPerf ? g_LastLoopPerf.textureMs : 0.0f,
-      classification);
+      snapshot ? snapshot->incomingDeltaSeconds : 0.0f,
+      snapshot ? snapshot->totalUpdateMs : 0.0f,
+      snapshot ? snapshot->drawMs : 0.0f,
+      snapshot ? snapshot->networkMs : 0.0f,
+      snapshot ? snapshot->screenMs : 0.0f,
+      snapshot ? snapshot->textureMs : 0.0f,
+      classification, cause.window, causeAgeMs,
+      snapshot ? snapshot->startScreen.c_str() : "NoScreen",
+      snapshot ? snapshot->endScreen.c_str() : "NoScreen");
 }
 }  // namespace
 
@@ -572,6 +637,8 @@ void GameLoop::RunGameLoop() {
     SCREENMAN->Draw();
     const float drawMs = TimerMs(drawTimer);
     g_LastLoopPerf.drawMs = drawMs;
+    ObserveFpsDiagnosticSnapshot(
+        g_LastLoopPerf, RageTimer::GetTimeSinceStartMicroseconds());
     if (drawMs >= kPerfTraceSlowDrawMs) {
       LogLoopPerfSnapshot("slow_draw", g_LastLoopPerf);
     }
