@@ -178,6 +178,9 @@ inline void LoadAllCommandsAndSetXYAndOnCommand(
 // Return a Sprite, BitmapText, or Model depending on the file type
 Actor* LoadFromNode(const XNode* pNode, Actor* pParentActor = nullptr);
 Actor* MakeActor(const std::string& sPath, Actor* pParentActor = nullptr);
+Actor* MakeActorFromLuaWithParams(
+    const std::string& sPath, Lua* L, int iParamsIndex,
+    Actor* pParentActor = nullptr);
 std::string GetSourcePath(const XNode* pNode);
 std::string GetWhere(const XNode* pNode);
 bool GetAttrPath(

@@ -2,6 +2,7 @@ local t = ...
 local preview_path = THEME:GetPathB("", "_modules/NoteSkinPreview.lua")
 local choices = CustomOptionRow("NoteSkin").Choices
 local loaded_previews = {}
+local selected_previews = {}
 local variant_count = 0
 
 local function add_preview(noteskin)
@@ -17,19 +18,24 @@ local function add_preview(noteskin)
 	variant_count = variant_count + 1
 end
 
--- Option rows cannot add actors after the overlay has loaded.  Preload every
--- selectable variant so changing the base NoteSkin on this screen always has
--- a matching proxy target instead of silently falling back to the base skin.
-for noteskin in ivalues(choices) do
-	local variants = NOTESKIN:GetVariantNamesForNoteSkin(noteskin)
-	if variants then
-		for _, variant in ipairs(variants) do
-			add_preview(variant)
-		end
+for player in ivalues(GAMESTATE:GetHumanPlayers()) do
+	local pn = ToEnumShortString(player)
+	local mods = SL[pn] and SL[pn].ActiveModifiers
+	local selected_variant = mods and (mods.NoteSkinVariant or mods.NoteSkin)
+	if selected_variant and selected_variant ~= "" then
+		selected_previews[selected_variant] = true
 	end
 end
 
+if next(selected_previews) == nil and choices[1] then
+	selected_previews[choices[1]] = true
+end
+
+for noteskin in pairs(selected_previews) do
+	add_preview(noteskin)
+end
+
 if Trace then
-	Trace(("ScreenPlayerOptions previews: NoteSkinVariant variants=%d preloaded_all=true")
+	Trace(("ScreenPlayerOptions previews: NoteSkinVariant loaded=%d deferred=true")
 		:format(variant_count))
 end

@@ -5795,14 +5795,7 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source, c
 		.. " title=" .. tostring(selectedSong.title or selectedSong.folder_name or selectedSong.song_hash or "unknown")
 		.. " selectedAt=" .. tostring(selectedSong.selected_at or selectedSong.selectedAt or "nil"))
 
-	self:ConfirmSelectedSongAvailability("room_song_selected_auto", function(availabilityOk, availabilityDecoded, availabilityResponse)
-		online_flow_trace("song_selected_auto_ready_availability_result key=" .. tostring(key)
-			.. " ok=" .. tostring(availabilityOk == true)
-			.. " status=" .. tostring(availabilityResponse and availabilityResponse.statusCode or "nil")
-			.. " hasRoom=" .. tostring(availabilityDecoded and availabilityDecoded.room ~= nil)
-			.. " phase=" .. tostring(availabilityDecoded and availabilityDecoded.room and availabilityDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
-			.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.errorMessage or "nil"))
-
+	local function continueWithLobbyReady(availabilityDecoded, availabilityResponse)
 		if self.songSelectedAutoReadyInFlightKey ~= key
 			or self.songSelectedAutoReadyGeneration ~= autoReadyGeneration
 		then
@@ -5810,14 +5803,6 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source, c
 				.. " key=" .. tostring(key)
 				.. " requestGeneration=" .. tostring(autoReadyGeneration)
 				.. " currentGeneration=" .. tostring(self.songSelectedAutoReadyGeneration))
-			return
-		end
-
-		if not availabilityOk then
-			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
-				.. " step=availability"
-				.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
-			finish(false, availabilityDecoded, availabilityResponse)
 			return
 		end
 
@@ -5884,6 +5869,58 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source, c
 				.. " message=" .. tostring(response_message(readyResponse, readyDecoded, "ready failed")))
 			finish(false, readyDecoded, readyResponse)
 		end)
+	end
+
+	-- Selecting a song already confirms the manager on the server.  Reposting
+	-- availability here only acquires the room lock a second time.  Keep the
+	-- normal barrier for local two-player sessions because P2 must still confirm
+	-- its own chart before the room can become ready.
+	local managerSelectionAlreadyConfirmed =
+		self:IsCurrentUserRoomManager(room)
+		and not (self.IsLocalTwoPlayerSession and self:IsLocalTwoPlayerSession())
+		and self:CurrentUserConfirmedSelectedSong(room) == true
+	if managerSelectionAlreadyConfirmed then
+		online_flow_trace("song_selected_auto_ready_availability_skipped key=" .. tostring(key)
+			.. " reason=manager_selection_already_confirmed")
+		continueWithLobbyReady({
+			room = self.currentRoom,
+			song_availability = {
+				applied = true,
+				duplicate = true,
+			},
+		}, {
+			duplicate = true,
+		})
+		return
+	end
+
+	self:ConfirmSelectedSongAvailability("room_song_selected_auto", function(availabilityOk, availabilityDecoded, availabilityResponse)
+		online_flow_trace("song_selected_auto_ready_availability_result key=" .. tostring(key)
+			.. " ok=" .. tostring(availabilityOk == true)
+			.. " status=" .. tostring(availabilityResponse and availabilityResponse.statusCode or "nil")
+			.. " hasRoom=" .. tostring(availabilityDecoded and availabilityDecoded.room ~= nil)
+			.. " phase=" .. tostring(availabilityDecoded and availabilityDecoded.room and availabilityDecoded.room.phase or self.currentRoom and self.currentRoom.phase or "nil")
+			.. " error=" .. tostring(availabilityDecoded and availabilityDecoded.error_code or availabilityResponse and availabilityResponse.errorMessage or "nil"))
+
+		if self.songSelectedAutoReadyInFlightKey ~= key
+			or self.songSelectedAutoReadyGeneration ~= autoReadyGeneration
+		then
+			online_flow_trace("song_selected_auto_ready_aborted reason=stale_inflight"
+				.. " key=" .. tostring(key)
+				.. " requestGeneration=" .. tostring(autoReadyGeneration)
+				.. " currentGeneration=" .. tostring(self.songSelectedAutoReadyGeneration))
+			return
+		end
+
+		if not availabilityOk then
+			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
+				.. " step=availability"
+				.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
+			finish(false, availabilityDecoded, availabilityResponse)
+			return
+		end
+
+		continueWithLobbyReady(availabilityDecoded, availabilityResponse)
 	end)
 end
 

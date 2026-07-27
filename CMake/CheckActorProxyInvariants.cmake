@@ -33,6 +33,11 @@ read_source(
   "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/NoteSkinVariant.lua"
   noteskin_variant_previews)
 read_source(
+  "Themes/Simply Love/Graphics/OptionRow Frame.lua"
+  option_row_frame)
+read_source("src/ActorFrame.cpp" actor_frame_cpp)
+read_source("src/ActorUtil.cpp" actor_util_cpp)
+read_source(
   "Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/default.lua"
   player_options_overlay)
 
@@ -143,14 +148,30 @@ require_contains(
   "if (!TryGetPointerFromStack(L, sType, iArg, pRet))"
   "LuaBinding throwing lookup remains layered on the non-throwing path")
 
-require_contains(
-  "${noteskin_variant_previews}"
-  "preloaded_all=true"
-  "all selectable noteskin variants have proxy targets")
 require_not_contains(
   "${noteskin_variant_previews}"
-  "active_noteskins[noteskin]"
-  "variant previews must not depend on the skin active at overlay load")
+  "preloaded_all=true"
+  "variant previews must not synchronously load every selectable noteskin")
+require_contains(
+  "${noteskin_variant_previews}"
+  "deferred=true"
+  "unselected noteskin variants are explicitly deferred")
+require_contains(
+  "${option_row_frame}"
+  "TryLoadDeferredNoteSkin"
+  "selectable noteskins retain an on-demand preview loader")
+require_contains(
+  "${option_row_frame}"
+  "AddChildFromLuaPathWithParams"
+  "deferred noteskin previews preserve their Lua parameters")
+require_contains(
+  "${actor_frame_cpp}"
+  "ADD_METHOD(AddChildFromLuaPathWithParams);"
+  "ActorFrame exposes parameterized deferred Lua actors")
+require_contains(
+  "${actor_util_cpp}"
+  "Actor* ActorUtil::MakeActorFromLuaWithParams("
+  "ActorUtil implements parameterized deferred Lua actors")
 require_contains(
   "${player_options_overlay}"
   "Name=\"NoteSkin\",\n\t\t\t\t\t\tValue=current_noteskin"

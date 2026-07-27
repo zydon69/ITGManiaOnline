@@ -374,6 +374,51 @@ XNode* LoadXNodeFromLuaShowErrors(const std::string& sFile) {
 }
 }  // namespace
 
+Actor* ActorUtil::MakeActorFromLuaWithParams(
+    const std::string& sPath, Lua* L, int iParamsIndex, Actor* pParentActor) {
+  if (L == nullptr || !lua_istable(L, iParamsIndex)) {
+    WarnActorUtilSafety(
+        "ActorUtil refused a parameterized Lua actor without a params table.");
+    return nullptr;
+  }
+  if (GetFileType(sPath) != FT_Lua) {
+    WarnActorUtilSafety("ActorUtil refused parameters for a non-Lua actor.");
+    return nullptr;
+  }
+
+  std::string script;
+  if (!GetFileContents(sPath, script)) {
+    WarnActorUtilSafety("ActorUtil could not read a parameterized Lua actor.");
+    return nullptr;
+  }
+
+  // Lua 5.1 has no lua_absindex(). Preserve the caller's table across the
+  // script load by resolving negative indexes before pushing a copy.
+  const int paramsIndex =
+      iParamsIndex > 0 ? iParamsIndex : lua_gettop(L) + iParamsIndex + 1;
+  lua_pushvalue(L, paramsIndex);
+
+  std::string error = "Lua runtime error: ";
+  if (!LuaHelpers::RunScript(L, script, "@" + sPath, error, 1, 1, true)) {
+    lua_pop(L, 1);  // nil supplied by RunScript on failure
+    return nullptr;
+  }
+  if (!lua_istable(L, -1)) {
+    lua_pop(L, 1);
+    LuaHelpers::ReportScriptError(
+        sPath + ": parameterized Lua actor must return a table.");
+    return nullptr;
+  }
+
+  std::unique_ptr<XNode> node(XmlFileUtil::XNodeFromTable(L));
+  lua_pop(L, 1);
+  if (node == nullptr) {
+    return nullptr;
+  }
+
+  return ActorUtil::LoadFromNode(node.get(), pParentActor);
+}
+
 /* Run the function at the top of the stack, which returns an actor description
  * table.  If the table was returned, return true and leave it on the stack.
  * If not, display an error, return false, and leave nothing on the stack. */

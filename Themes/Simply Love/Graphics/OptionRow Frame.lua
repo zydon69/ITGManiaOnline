@@ -115,6 +115,7 @@ t[#t+1] = Def.Quad {
 -- -----------------------------------------------------------------------
 
 local rows_with_proxies = { "NoteSkin", "NoteSkinVariant", "JudgmentGraphic", "ComboFont", "HoldJudgment", "MusicRate" }
+local noteskin_preview_path = THEME:GetPathB("", "_modules/NoteSkinPreview.lua")
 
 local function GetJudgmentGraphicPath(stripped_name)
 	if not stripped_name then return end
@@ -140,6 +141,35 @@ local function TryLoadDeferredJudgmentGraphic(overlay, actor_name, stripped_name
 	local actor = overlay:GetChild(actor_name)
 	if actor then
 		actor:visible(false):animate(false)
+		if Trace then
+			Trace(("ScreenPlayerOptions deferred preview loaded: %s"):format(actor_name))
+		end
+	end
+
+	return actor
+end
+
+local function TryLoadDeferredNoteSkin(overlay, actor_name, noteskin_name, using_variant)
+	if not overlay or not noteskin_name or noteskin_name == "" then return end
+	if type(overlay.AddChildFromLuaPathWithParams) ~= "function" then return end
+
+	local ok, added = pcall(function()
+		return overlay:AddChildFromLuaPathWithParams(
+			noteskin_preview_path,
+			actor_name,
+			{
+				noteskin_name=noteskin_name,
+				using_variant=using_variant == true,
+				preview_zoom=0.80,
+				freeze_preview=false,
+			}
+		)
+	end)
+	if not (ok and added) then return end
+
+	local actor = overlay:GetChild(actor_name)
+	if actor then
+		actor:visible(false)
 		if Trace then
 			Trace(("ScreenPlayerOptions deferred preview loaded: %s"):format(actor_name))
 		end
@@ -176,22 +206,39 @@ for player in ivalues( GAMESTATE:GetHumanPlayers() ) do
 		if optrow and optrow:GetName() == params.Name then
 
 			local offscreen_actor_name
-				if params.Name=="ComboFont" or params.Name=="MusicRate" then
-					-- the BitmapTexts for ComboFont and MusicRate helper text need to be able to
-					-- display different values per-player, so I prefixed the relevant Actors in
-					--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/ComboFont.lua
-					--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/MusicRate.lua
-					-- with "P1_" or "P2_"
-					offscreen_actor_name = ("%s_%s_%s"):format(pn, params.Name, params.Value)
-				else
-					offscreen_actor_name = ("%s_%s"):format(params.Name, params.Value)
-				end
-				-- attempt to find the offscreen actor added by ./BGAnimations/ScreenPlayerOptions overlay.lua
-				local top_screen = SCREENMAN and SCREENMAN:GetTopScreen()
-				if not (top_screen and type(top_screen.GetChild) == "function") then return end
-				local overlay = top_screen:GetChild("Overlay")
-				if not (overlay and type(overlay.GetChild) == "function") then return end
-				local offscreen_actor = overlay:GetChild(offscreen_actor_name)
+			if params.Name=="ComboFont" or params.Name=="MusicRate" then
+				-- the BitmapTexts for ComboFont and MusicRate helper text need to be able to
+				-- display different values per-player, so I prefixed the relevant Actors in
+				--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/ComboFont.lua
+				--     ./BGA/ScreenPlayerOptions overlay/OptionRowPreviews/MusicRate.lua
+				-- with "P1_" or "P2_"
+				offscreen_actor_name = ("%s_%s_%s"):format(pn, params.Name, params.Value)
+			else
+				offscreen_actor_name = ("%s_%s"):format(params.Name, params.Value)
+			end
+
+			-- attempt to find the offscreen actor added by ./BGAnimations/ScreenPlayerOptions overlay.lua
+			local top_screen = SCREENMAN and SCREENMAN:GetTopScreen()
+			if not (top_screen and type(top_screen.GetChild) == "function") then return end
+			local overlay = top_screen:GetChild("Overlay")
+			if not (overlay and type(overlay.GetChild) == "function") then return end
+			local offscreen_actor = overlay:GetChild(offscreen_actor_name)
+			if not offscreen_actor and params.Name=="NoteSkin" then
+				offscreen_actor = TryLoadDeferredNoteSkin(
+					overlay,
+					offscreen_actor_name,
+					params.Value,
+					false
+				)
+			end
+			if not offscreen_actor and params.Name=="NoteSkinVariant" then
+				offscreen_actor = TryLoadDeferredNoteSkin(
+					overlay,
+					offscreen_actor_name,
+					params.Value,
+					true
+				)
+			end
 			if not offscreen_actor and params.Name=="JudgmentGraphic" and overlay then
 				offscreen_actor = TryLoadDeferredJudgmentGraphic(overlay, offscreen_actor_name, params.Value)
 			end

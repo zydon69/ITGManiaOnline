@@ -451,6 +451,11 @@ local autoReadyEnd = assert(clientSource:find("function ITGOnline:ApplyDecodedRo
 local autoReadySource = clientSource:sub(autoReadyStart, autoReadyEnd - 1)
 assert(autoReadySource:find("self:ConfirmSelectedSongAvailability", 1, true),
 	"readiness must begin with the local availability barrier")
+assert(autoReadySource:find("managerSelectionAlreadyConfirmed", 1, true)
+	and autoReadySource:find("song_selected_auto_ready_availability_skipped", 1, true),
+	"a preconfirmed single-player manager must skip the redundant availability request")
+assert(autoReadySource:find("self.IsLocalTwoPlayerSession", 1, true),
+	"the manager availability fast path must preserve the local Player 2 barrier")
 assert(autoReadySource:find('self:SetReady("lobby_ready", true', 1, true),
 	"a successful availability barrier must progress to ready")
 assert(clientSource:find("song_availability_confirm_selected_deferred", 1, true),
@@ -459,7 +464,12 @@ assert(autoReadySource:find("songSelectedAutoReadyInFlightCallbacks", 1, true),
 	"every caller for one selected-song round must join the same ready transaction")
 assert(autoReadySource:find("ready_snapshot_applied_by_availability", 1, true),
 	"an authoritative ready snapshot must prevent a duplicate ready request")
-assert(not autoReadySource:find("CurrentUserConfirmedSelectedSong", 1, true),
+local continueReadyStart = assert(autoReadySource:find("local function continueWithLobbyReady", 1, true),
+	"the post-availability ready flow must remain isolated")
+local managerFastPathStart = assert(autoReadySource:find("local managerSelectionAlreadyConfirmed", continueReadyStart, true),
+	"the manager fast path boundary must remain identifiable")
+local continueReadySource = autoReadySource:sub(continueReadyStart, managerFastPathStart - 1)
+assert(not continueReadySource:find("CurrentUserConfirmedSelectedSong", 1, true),
 	"a stale room snapshot must not prevent a ready request after availability succeeds")
 assert(not autoReadySource:find("local_party_room_incomplete", 1, true),
 	"the ready flow must not retain the obsolete local-party recovery branch")
@@ -521,6 +531,14 @@ local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerO
 local judgmentPreviewSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/JudgmentGraphic.lua"
 )
+local noteSkinPreviewSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/NoteSkin.lua"
+)
+local noteSkinVariantPreviewSource = read_source(
+	"Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/NoteSkinVariant.lua"
+)
+local optionRowFrameSource = read_source("Themes/Simply Love/Graphics/OptionRow Frame.lua")
+local actorFrameSource = read_source("src/ActorFrame.cpp")
 local themeMetricsSource = read_source("Themes/Simply Love/metrics.ini")
 local onlineLobbyMetrics = ini_section(themeMetricsSource, "ScreenOnlineLobbies")
 equal(onlineLobbyMetrics.PrepareScreens,
@@ -532,6 +550,20 @@ assert(not judgmentPreviewSource:find("or selected_count == 0", 1, true),
 	"a transient missing player context must not cold-load every judgment graphic")
 assert(judgmentPreviewSource:find("remember_selected_judgment(judgment_filename)", 1, true),
 	"the judgment preview must retain a deterministic cold-start fallback")
+assert(noteSkinPreviewSource:find("deferred=%d", 1, true),
+	"the options screen must preload only selected NoteSkin previews")
+assert(not noteSkinVariantPreviewSource:find("preloaded_all=true", 1, true),
+	"the options screen must not cold-load every NoteSkin variant")
+assert(optionRowFrameSource:find("TryLoadDeferredNoteSkin", 1, true),
+	"an unselected NoteSkin preview must remain available through on-demand loading")
+assert(optionRowFrameSource:find("AddChildFromLuaPathWithParams", 1, true),
+	"deferred NoteSkin previews must retain their required Lua parameters")
+assert(actorFrameSource:find("ADD_METHOD(AddChildFromLuaPathWithParams)", 1, true),
+	"the engine must expose parameterized dynamic Lua actors to the theme")
+assert(onlinePackSyncSource:find("server_confirms_single_player_manager_selection", 1, true),
+	"a manager selection already confirmed by the server must avoid redundant pack-sync reports")
+assert(onlinePackSyncSource:find("manager_selection_already_confirmed", 1, true),
+	"the manager fast path must remain explicit and diagnosable")
 equal(onlineLobbyMetrics.PersistScreens, "",
 	"stateful online screens must be reconstructed between rounds")
 assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),

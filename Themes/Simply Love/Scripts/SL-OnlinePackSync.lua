@@ -440,6 +440,26 @@ local function local_member_pack_status(room)
 	return ""
 end
 
+local function server_confirms_single_player_manager_selection()
+	if not (ITGOnline
+		and ITGOnline.currentRoom
+		and ITGOnline.IsCurrentUserRoomManager
+		and ITGOnline.CurrentUserConfirmedSelectedSong) then
+		return false
+	end
+	if ITGOnline.IsLocalTwoPlayerSession
+		and ITGOnline:IsLocalTwoPlayerSession() then
+		-- P1 being the manager does not prove that the distinct P2 account has
+		-- confirmed the selected chart. Keep the local-party availability barrier.
+		return false
+	end
+	if not ITGOnline:IsCurrentUserRoomManager(ITGOnline.currentRoom) then
+		return false
+	end
+
+	return ITGOnline:CurrentUserConfirmedSelectedSong(ITGOnline.currentRoom) == true
+end
+
 trace("Loaded script version=" .. tostring(PackSync.scriptVersion))
 
 local function download_already_in_progress_message()
@@ -2137,6 +2157,20 @@ function PackSync:FinalizeDownloadedSelectedSongAvailability(songInfo, source, r
 		return true
 	end
 
+	if tostring(source or "") == "local_chart_match_found"
+		and server_confirms_single_player_manager_selection() then
+		-- Song selection is already an authoritative availability confirmation
+		-- for a single-player manager, and FindLocalMatch just revalidated the
+		-- same local chart. Reposting availability and READY only contends with
+		-- the other members' first reports and creates redundant room snapshots.
+		trace("Selected availability finalization skipped reason=manager_selection_already_confirmed"
+			.. " selected_at=" .. tostring(selected_at(songInfo)))
+		self:ApplyLocalStatus(self.status.Ready, readyMessage)
+		self:ClearSelectedAvailabilityRetry("manager_selection_already_confirmed")
+		self:MarkLobbyReadyForSelectedSong("manager_selection_already_confirmed")
+		return true
+	end
+
 	self.selectedAvailabilityInFlight = true
 	self.pendingSelectedAvailabilitySongInfo = songInfo
 	trace("Selected availability finalization begin source=" .. tostring(source or "unknown")
@@ -2606,6 +2640,10 @@ function PackSync:FindLocalMatch(songInfo)
 	trace("Searching local charts title=" .. selected_title(songInfo) .. " pack=" .. selected_pack(songInfo))
 	if self.validatingPostReload == true then
 		self:ApplyLocalStatus(self.status.ValidatingDownload)
+	elseif server_confirms_single_player_manager_selection() then
+		-- The selection command already made this manager READY on the
+		-- server. Keep the transient scan local while validating the chart.
+		self:ApplyLocalStatus(self.status.SearchingLocalCharts)
 	else
 		self:UpdateStatus(self.status.SearchingLocalCharts, nil)
 	end

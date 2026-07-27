@@ -1067,6 +1067,19 @@ class LunaActorFrame : public Luna<ActorFrame> {
     return 1;
   }
 
+  static int AddChildFromLuaPathWithParams(T* p, lua_State* L) {
+    luaL_checktype(L, 3, LUA_TTABLE);
+    Actor* pActor = ActorUtil::MakeActorFromLuaWithParams(SArg(1), L, 3, p);
+    if (pActor == nullptr) {
+      lua_pushboolean(L, 0);
+      return 1;
+    }
+    pActor->SetName(SArg(2));
+    p->AddChild(pActor);
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+
   static int RemoveChild(T* p, lua_State* L) {
     Actor* child = p->GetChild(SArg(1));
     if (child) {
@@ -1106,6 +1119,7 @@ class LunaActorFrame : public Luna<ActorFrame> {
     ADD_METHOD(SetLightDirection);
     ADD_METHOD(AddChildFromPath);
     ADD_METHOD(AddChildFromPathWithName);
+    ADD_METHOD(AddChildFromLuaPathWithParams);
     ADD_METHOD(RemoveChild);
     ADD_METHOD(RemoveAllChildren);
   }
