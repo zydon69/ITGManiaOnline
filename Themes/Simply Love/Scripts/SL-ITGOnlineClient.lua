@@ -5911,9 +5911,17 @@ end
 
 function ITGOnline:ResynchronizeRequiredRoomContract(reason)
 	local now = GetTimeSinceStart()
+	local nextAllowedAt = tonumber(self.roomContractResyncNextAllowedAt) or 0
 	if self.roomContractResyncInFlight == true
-		or now - (tonumber(self.lastRoomContractResyncAt) or 0) < 1.0
+		or now < nextAllowedAt
 	then
+		online_flow_trace_throttled("room_contract_resync_deferred", 1.0,
+			"room_contract_resync_deferred"
+				.. " reason=" .. tostring(reason or "unknown")
+				.. " inFlight=" .. tostring(self.roomContractResyncInFlight == true)
+				.. " retryAfter=" .. string.format("%.3f", math.max(0, nextAllowedAt - now))
+				.. " failures=" .. tostring(self.roomContractResyncFailureCount or 0)
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
 		return false
 	end
 	self.lastRoomContractResyncAt = now
@@ -5923,9 +5931,22 @@ function ITGOnline:ResynchronizeRequiredRoomContract(reason)
 		.. " room=" .. tostring(self.currentRoomId or "nil"))
 	local finish = function(ok)
 		self.roomContractResyncInFlight = false
+		local retrySeconds = 0
+		if ok == true then
+			self.roomContractResyncFailureCount = 0
+			self.roomContractResyncNextAllowedAt = GetTimeSinceStart() + 1.0
+		else
+			local failures = math.min(6,
+				(tonumber(self.roomContractResyncFailureCount) or 0) + 1)
+			self.roomContractResyncFailureCount = failures
+			retrySeconds = math.min(30, 2 ^ (failures - 1))
+			self.roomContractResyncNextAllowedAt = GetTimeSinceStart() + retrySeconds
+		end
 		online_flow_trace("room_contract_resync_complete"
 			.. " reason=" .. tostring(reason or "unknown")
-			.. " ok=" .. tostring(ok == true))
+			.. " ok=" .. tostring(ok == true)
+			.. " failures=" .. tostring(self.roomContractResyncFailureCount or 0)
+			.. " retrySeconds=" .. tostring(retrySeconds))
 	end
 	if self.currentRoomId and self.FetchRoom then
 		self:FetchRoom(self.currentRoomId, function(ok)
@@ -5939,6 +5960,17 @@ function ITGOnline:ResynchronizeRequiredRoomContract(reason)
 		finish(false)
 	end
 	return true
+end
+
+function ITGOnline:RequiredRoomContractContext()
+	if not self:IsLocalTwoPlayerSession() then return nil end
+	local primary = self:UserForLocalPlayer(PLAYER_1)
+	local companion = self:UserForLocalPlayer(PLAYER_2)
+	return {
+		localPartyRequired = true,
+		firstUserId = online_user_identifier(primary),
+		secondUserId = online_user_identifier(companion),
+	}
 end
 
 function ITGOnline:ApplyRoomSnapshot(room, source)
@@ -6035,10 +6067,15 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		return nil
 	end
 	local contractOk, contractError =
-		ITGOnlineRoomStateMachine.validate_room_contract(room)
+		ITGOnlineRoomStateMachine.validate_room_contract(
+			room,
+			self:RequiredRoomContractContext()
+		)
 	if not contractOk then
 		online_flow_trace("room_snapshot_rejected source=" .. tostring(source or "unknown")
-			.. " reason=" .. tostring(contractError))
+			.. " reason=" .. tostring(contractError)
+			.. " localPartyRelations="
+			.. tostring(ITGOnlineRoomStateMachine.local_party_relation_signature(room)))
 		self:ResynchronizeRequiredRoomContract(contractError)
 		return nil
 	end
@@ -20986,25 +21023,6 @@ function ITGOnline:LobbyStatePayload(room)
 			partyByUserId[tostring(memberId)] = companion
 		end
 	end
-	if self:IsLocalTwoPlayerSession() then
-		local localPrimary = self:UserForLocalPlayer(PLAYER_1)
-		local localCompanion = self:UserForLocalPlayer(PLAYER_2)
-		local primaryId = online_user_identifier(localPrimary)
-		local companionId = online_user_identifier(localCompanion)
-		local relationOk, relationError =
-			ITGOnlineRoomStateMachine.validate_local_party_relation(
-				room,
-				primaryId,
-				companionId
-			)
-		if not relationOk then
-			online_flow_trace("room_local_party_contract_rejected"
-				.. " room=" .. tostring(room.id or self.currentRoomId or "nil")
-				.. " reason=" .. tostring(relationError))
-			self:ResynchronizeRequiredRoomContract(relationError)
-		end
-	end
-
 	local screenName = "ScreenOnlineLobbies"
 	if room.phase == "config" then
 		screenName = "ScreenPlayerOptions"

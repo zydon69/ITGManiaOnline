@@ -114,6 +114,39 @@ local obsoleteContractOk, obsoleteContractReason =
 equal(obsoleteContractOk, false, "room snapshots without the current contract are rejected")
 equal(obsoleteContractReason, "missing_room_members",
 	"missing room contract requests an explicit resynchronization")
+local localPartyContractOk = roomStateMachine.validate_room_contract({
+	members = {
+		{ id = "3", local_party = { companion = { id = "4" } } },
+		{ id = "4", local_party = { companion = { id = "3" } } },
+	},
+}, {
+	localPartyRequired = true,
+	firstUserId = "3",
+	secondUserId = "4",
+})
+equal(localPartyContractOk, true,
+	"current room snapshots expose the verified local party in both directions")
+local missingLocalPartyContract, missingLocalPartyReason =
+	roomStateMachine.validate_room_contract({
+		members = {
+			{ id = "3" },
+			{ id = "4" },
+		},
+	}, {
+		localPartyRequired = true,
+		firstUserId = "3",
+		secondUserId = "4",
+	})
+equal(missingLocalPartyContract, false,
+	"realtime snapshots cannot erase the verified local party relation")
+equal(missingLocalPartyReason, "missing_local_party_relation",
+	"missing local party metadata requests an explicit authoritative resynchronization")
+equal(roomStateMachine.local_party_relation_signature({
+	members = {
+		{ id = "4", local_party = { companion = { id = "3" } } },
+		{ id = "3", local_party = { companion = { id = "4" } } },
+	},
+}), "3>4,4>3", "local party diagnostics are stable and omit the private party UUID")
 local availabilityOk = roomStateMachine.validate_song_availability({
 	song_availability = { missing = false },
 }, false)

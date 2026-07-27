@@ -25,9 +25,33 @@ function StateMachine.normalize_phase(value)
 	return phases[phase] and phase or "unknown"
 end
 
-function StateMachine.validate_room_contract(room)
+local function local_party_companions_by_user_id(room)
+	local companions = {}
+	for _, member in ipairs(type(room) == "table" and room.members or {}) do
+		local user = type(member.user) == "table" and member.user or member
+		local userId = tostring(member.user_id or user.id or member.id or "")
+		local party = type(member.local_party) == "table" and member.local_party
+			or type(user.local_party) == "table" and user.local_party
+			or nil
+		local companion = party and party.companion or nil
+		if userId ~= "" and type(companion) == "table" then
+			companions[userId] = tostring(companion.id or companion.user_id or "")
+		end
+	end
+	return companions
+end
+
+function StateMachine.validate_room_contract(room, context)
 	if type(room) ~= "table" then return false, "missing_room_snapshot" end
 	if type(room.members) ~= "table" then return false, "missing_room_members" end
+	context = type(context) == "table" and context or {}
+	if context.localPartyRequired == true then
+		return StateMachine.validate_local_party_relation(
+			room,
+			context.firstUserId,
+			context.secondUserId
+		)
+	end
 	return true
 end
 
@@ -37,23 +61,21 @@ function StateMachine.validate_local_party_relation(room, firstUserId, secondUse
 	if firstUserId == "" or secondUserId == "" then
 		return false, "missing_local_party_identity"
 	end
-	local companionByUserId = {}
-	for _, member in ipairs(type(room) == "table" and room.members or {}) do
-		local user = type(member.user) == "table" and member.user or member
-		local userId = tostring(member.user_id or user.id or member.id or "")
-		local party = type(member.local_party) == "table" and member.local_party
-			or type(user.local_party) == "table" and user.local_party
-			or nil
-		local companion = party and party.companion or nil
-		if userId ~= "" and type(companion) == "table" then
-			companionByUserId[userId] = tostring(companion.id or companion.user_id or "")
-		end
-	end
+	local companionByUserId = local_party_companions_by_user_id(room)
 	if companionByUserId[firstUserId] ~= secondUserId
 		or companionByUserId[secondUserId] ~= firstUserId then
 		return false, "missing_local_party_relation"
 	end
 	return true
+end
+
+function StateMachine.local_party_relation_signature(room)
+	local relations = {}
+	for userId, companionId in pairs(local_party_companions_by_user_id(room)) do
+		relations[#relations + 1] = tostring(userId) .. ">" .. tostring(companionId)
+	end
+	table.sort(relations)
+	return #relations > 0 and table.concat(relations, ",") or "none"
 end
 
 function StateMachine.validate_song_availability(decoded, expectedMissing)
