@@ -261,6 +261,21 @@ equal(party.gameplay_completion_needs_progress("", "", "round-1"), false,
 	"an early local failure cannot finalize the companion before song end")
 equal(party.gameplay_completion_needs_progress("round-1", "round-1", "round-1"), false,
 	"an accepted terminal transition stops the completion watchdog")
+local terminalSnapshot = { displayedPercent = 21.30 }
+local previousLiveSnapshot = { displayedPercent = 21.47 }
+equal(party.terminal_score_snapshot(terminalSnapshot, previousLiveSnapshot), terminalSnapshot,
+	"the terminal engine score must replace a higher previous live score")
+equal(party.terminal_score_snapshot(nil, previousLiveSnapshot), previousLiveSnapshot,
+	"the previous live score is only a fallback when terminal stats are unavailable")
+equal(party.returned_to_lobby_needs_reconciliation(
+	"results", true, "round-1", "", "round-1"
+), true, "a confirmed evaluation exit must be replayed after reconnection")
+equal(party.returned_to_lobby_needs_reconciliation(
+	"results", false, "round-1", "", "round-1"
+), false, "remaining on evaluation must never report a lobby return")
+equal(party.returned_to_lobby_needs_reconciliation(
+	"results", true, "round-1", "round-1", "round-1"
+), false, "an accepted lobby return must not be replayed")
 equal(party.should_preserve_local_chart_choice("lobby", "ScreenSelectMusic"), true,
 	"the wheel choice must survive the initial server song application")
 equal(party.should_preserve_local_chart_choice("lobby_ready", "ScreenOnlineLobbies"), true,
@@ -396,6 +411,20 @@ end
 
 local clientSource = read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua")
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
+local realtimeDeadmanSource = assert(onlineHelpersSource:match(
+	"RealtimeDeadmanCommand=function%b()%s*(.-)%s*ActorOperationWatchdogCommand=function"
+), "online handler must expose the realtime deadman loop")
+assert(realtimeDeadmanSource:match(
+	"end%s+%-%- Maintenance must also run while disconnected.-MaintainRealtimeAndRoomSync"
+), "realtime maintenance must run outside the connected-socket guard")
+assert(realtimeDeadmanSource:match(
+	"end%s+%-%- Pack transfers.-PackSync:WatchdogTick"
+), "the pack watchdog must run outside the connected-socket guard")
+assert(realtimeDeadmanSource:find(
+	'schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")',
+	1,
+	true
+), "the realtime deadman loop must always re-arm itself")
 local onlineScorePushSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackOnlineScorePush.lua"
 )
@@ -418,6 +447,8 @@ assert(clientSource:find("ITGOnlineRealtimeEventRouter.route", 1, true),
 	"realtime schema validation and classification must be routed centrally")
 assert(clientSource:find("ITGOnlineRoomStateMachine.validate_room_contract", 1, true),
 	"room snapshots must pass through the room state machine")
+assert(clientSource:find("ITGOnlineLocalParty.returned_to_lobby_needs_reconciliation", 1, true),
+	"realtime recovery must replay a confirmed evaluation exit")
 assert(not clientSource:find("annotate_song_availability_result", 1, true),
 	"missing song availability fields must never be reconstructed locally")
 local lobbyStateStart = assert(clientSource:find("function ITGOnline:LobbyStatePayload", 1, true))

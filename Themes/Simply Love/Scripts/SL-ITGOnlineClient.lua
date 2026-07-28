@@ -3199,6 +3199,47 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 			didWork = true
 		end
 	end
+
+	-- A player may leave evaluation while HTTP and realtime are both down.
+	-- Once realtime is healthy again, replay that idempotent P1/P2 lifecycle
+	-- intent so the server cannot keep this cabinet in results indefinitely.
+	if self:RealtimeIsConnected() and self.currentRoomId and self.currentRoom then
+		local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+		local roundKey = tostring(self:CanonicalGameplayRoundKey(
+			"returned_to_lobby_reconciliation"
+		) or "")
+		local isLobbyScreen = self:IsOnlineLobbyScreen(screenName)
+		local shouldReconcile = phase == "results"
+			and isLobbyScreen
+			and self:PlayStateKeyIsValid(roundKey)
+			and tostring(self.onlineGameplayEvaluationShownKey or "") == roundKey
+			and tostring(self.onlineGameplayReturnedKey or "") ~= roundKey
+		if ITGOnlineLocalParty
+			and ITGOnlineLocalParty.returned_to_lobby_needs_reconciliation
+		then
+			shouldReconcile =
+				ITGOnlineLocalParty.returned_to_lobby_needs_reconciliation(
+					phase,
+					isLobbyScreen,
+					self.onlineGameplayEvaluationShownKey,
+					self.onlineGameplayReturnedKey,
+					roundKey
+				)
+		end
+		if shouldReconcile then
+			online_flow_trace_throttled(
+				"returned_to_lobby_reconciliation",
+				1.0,
+				"returned_to_lobby_reconciliation"
+					.. " room=" .. tostring(self.currentRoomId)
+					.. " roundKey=" .. roundKey
+					.. " screen=" .. screenName
+			)
+			self:MarkReturnedToLobby()
+			didWork = true
+		end
+	end
+
 	if self.BroadcastRealtimeHealth then
 		self:BroadcastRealtimeHealth(source)
 	end
@@ -14053,12 +14094,21 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		if type(state.failedSnapshot) == "table" then
 			snapshot = state.failedSnapshot
 		else
-			local selected = snapshot
-			if type(state.lastSnapshot) == "table"
-				and (self:ScoreSnapshotDisplayedPercent(state.lastSnapshot) or 0)
-					> (self:ScoreSnapshotDisplayedPercent(snapshot) or 0)
-			then
-				selected = state.lastSnapshot
+			local selected
+			if ITGOnlineLocalParty and ITGOnlineLocalParty.terminal_score_snapshot then
+				selected = ITGOnlineLocalParty.terminal_score_snapshot(
+					snapshot,
+					state.lastSnapshot
+				)
+			else
+				selected = snapshot or state.lastSnapshot
+			end
+			if type(selected) ~= "table" then
+				finish(false, nil, {
+					error_code = "missing_terminal_score_snapshot",
+					errorMessage = "Player 2 terminal score is not available.",
+				})
+				return
 			end
 			local frozen = {}
 			for key, value in pairs(selected) do frozen[key] = value end

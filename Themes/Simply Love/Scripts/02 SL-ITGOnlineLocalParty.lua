@@ -137,6 +137,31 @@ function Party.gameplay_completion_needs_progress(engineEndedKey, evaluationMark
 		and tostring(evaluationMarkKey or "") ~= roundKey
 end
 
+-- A score can legitimately decrease on the judgment that causes failure.
+-- Therefore the terminal engine snapshot is authoritative even when the last
+-- live snapshot had a higher percentage. The live cache is only a recovery
+-- fallback when the engine no longer exposes a terminal snapshot.
+function Party.terminal_score_snapshot(currentSnapshot, lastLiveSnapshot)
+	if type(currentSnapshot) == "table" then return currentSnapshot end
+	if type(lastLiveSnapshot) == "table" then return lastLiveSnapshot end
+	return nil
+end
+
+function Party.returned_to_lobby_needs_reconciliation(
+	phase,
+	isLobbyScreen,
+	evaluationShownKey,
+	returnedKey,
+	roundKey
+)
+	roundKey = tostring(roundKey or "")
+	return tostring(phase or "") == "results"
+		and isLobbyScreen == true
+		and roundKey ~= ""
+		and tostring(evaluationShownKey or "") == roundKey
+		and tostring(returnedKey or "") ~= roundKey
+end
+
 function Party.should_preserve_local_chart_choice(phase, screenName)
 	phase = tostring(phase or ""):lower()
 	screenName = tostring(screenName or "")

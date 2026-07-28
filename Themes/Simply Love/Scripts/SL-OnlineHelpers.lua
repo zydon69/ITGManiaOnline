@@ -3075,48 +3075,51 @@ CreateOnlineHandler = function()
 							return
 						end
 
-					if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.lastRealtimeMessageAt then
-						local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
-						online_flow_trace_throttled("realtime_deadman_tick", 10.0,
-							"realtime_deadman_tick idle=" .. tostring(idle)
-							.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15)
-							.. " connected=" .. tostring(self.connected == true)
-							.. " socket=" .. tostring(self.socket ~= nil))
-						if idle > (self.deadmanTimeoutSeconds or 15) then
-							if online_trace then
-								online_trace("FLOW realtime_deadman_timeout idle=" .. tostring(idle)
-									.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15))
-							end
-							if ITGOnline and ITGOnline.ForceRealtimeReconnect then
-								ITGOnline:ForceRealtimeReconnect("handler_deadman_timeout")
-							else
-								self.connected = false
-								if ITGOnline and ITGOnline.socket then
-									ITGOnline.socket:Close()
+						if self.connected and self.socket ~= nil and ITGOnline and ITGOnline.lastRealtimeMessageAt then
+							local idle = GetTimeSinceStart() - ITGOnline.lastRealtimeMessageAt
+							online_flow_trace_throttled("realtime_deadman_tick", 10.0,
+								"realtime_deadman_tick idle=" .. tostring(idle)
+								.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15)
+								.. " connected=" .. tostring(self.connected == true)
+								.. " socket=" .. tostring(self.socket ~= nil))
+							if idle > (self.deadmanTimeoutSeconds or 15) then
+								if online_trace then
+									online_trace("FLOW realtime_deadman_timeout idle=" .. tostring(idle)
+										.. " timeout=" .. tostring(self.deadmanTimeoutSeconds or 15))
 								end
-								self.socket = nil
-							end
-							safe_broadcast("OnlineResponseStatus", {
-								event="websocket",
-								success=false,
-								message=online_lobby_text("RealtimeConnectionTimeout", "Realtime connection timed out. Reconnecting...")
+								if ITGOnline and ITGOnline.ForceRealtimeReconnect then
+									ITGOnline:ForceRealtimeReconnect("handler_deadman_timeout")
+								else
+									self.connected = false
+									if ITGOnline and ITGOnline.socket then
+										ITGOnline.socket:Close()
+									end
+									self.socket = nil
+								end
+								safe_broadcast("OnlineResponseStatus", {
+									event="websocket",
+									success=false,
+									message=online_lobby_text("RealtimeConnectionTimeout", "Realtime connection timed out. Reconnecting...")
 								})
 								self:playcommand("ReconnectOnline")
 							end
 						end
 
-					if ITGOnline and ITGOnline.MaintainRealtimeAndRoomSync then
-						ITGOnline:MaintainRealtimeAndRoomSync("realtime_deadman_tick")
-					end
-					-- Pack transfers run from lobby/config screens, where gameplay timers
-					-- are deliberately stopped.  Keep their heartbeat/watchdog on the
-					-- connection timer so slow archives cannot be declared dead merely
-					-- because no new percentage was emitted for thirty seconds.
-					if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
-						ITGOnline.PackSync:WatchdogTick()
-					end
+						-- Maintenance must also run while disconnected: it owns the
+						-- reconnect backoff for both local identities.
+						if ITGOnline and ITGOnline.MaintainRealtimeAndRoomSync then
+							ITGOnline:MaintainRealtimeAndRoomSync("realtime_deadman_tick")
+						end
+						-- Pack transfers run from lobby/config screens, where gameplay
+						-- timers are deliberately stopped. Their watchdog must survive a
+						-- realtime outage while the HTTP download is still active.
+						if ITGOnline and ITGOnline.PackSync and ITGOnline.PackSync.WatchdogTick then
+							ITGOnline.PackSync:WatchdogTick()
+						end
 
-							schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")
+						-- Always re-arm the timer. A disconnected socket is precisely
+						-- when the next maintenance tick is required.
+						schedule_named_timer(self, "RealtimeDeadmanTimer", 1, "Fire")
 						end,
 						ActorOperationWatchdogCommand=function(self)
 							if onlineHandlerShuttingDown then return end
