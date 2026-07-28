@@ -7106,7 +7106,18 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 		.. " lastFinalScoreKey=" .. tostring(self.lastFinalScoreKey or "")
 		.. " finalInFlightKey=" .. tostring(self.lastFinalScoreInFlightKey or ""))
 
-	if failed then
+	local primaryFinalAccepted = tostring(self.lastFinalScoreKey or "") == roundKey
+		or self:CurrentUserHasFinalResult(self.currentRoom) == true
+	local primaryFinalRequiresStabilization = failed and not primaryFinalAccepted
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.primary_final_requires_stabilization then
+		primaryFinalRequiresStabilization =
+			ITGOnlineLocalParty.primary_final_requires_stabilization(
+				failed,
+				primaryFinalAccepted
+			)
+	end
+
+	if primaryFinalRequiresStabilization then
 		local now = GetTimeSinceStart()
 		local stabilizeSeconds = tonumber(self.failedFinalScoreStabilizeSeconds) or 0.35
 		local stabilizeKey = tostring(self.failedFinalScoreStabilizeKey or "")
@@ -7147,6 +7158,12 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 			.. " candidateDisplayed=" .. tostring(candidateDisplayed or "nil")
 			.. " hadDisplayedSnapshot=" .. tostring(self.lastDisplayedScoreSnapshot ~= nil)
 			.. " currentPlayState=" .. tostring(currentPlayState or "nil"))
+	elseif failed and primaryFinalAccepted then
+		online_flow_trace("mark_terminal_failed_final_stabilization_skipped"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " reason=primary_final_already_accepted")
 	end
 
 	if phase == "results" then
@@ -7357,6 +7374,32 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	end
 
 	return true
+end
+
+-- ScreenGameplay initiates this state once the engine reaches the natural song
+-- end.  The theme watchdog can then resume retries independently from the
+-- engine's SM_LeaveGameplay queue, without finalizing P2 when P1 merely failed
+-- early and the song is still running.
+function ITGOnline:GameplayCompletionNeedsProgress()
+	if not self.currentRoomId or not self.currentRoom then return false end
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if phase ~= "playing" and phase ~= "results" then return false end
+
+	local roundKey = self:CanonicalGameplayRoundKey("gameplay_completion_watchdog")
+	if not (self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)) then
+		return false
+	end
+
+	if ITGOnlineLocalParty and ITGOnlineLocalParty.gameplay_completion_needs_progress then
+		return ITGOnlineLocalParty.gameplay_completion_needs_progress(
+			self.onlineGameplayEngineEndedKey,
+			self.onlineGameplayEvaluationMarkKey,
+			roundKey
+		)
+	end
+
+	return tostring(self.onlineGameplayEngineEndedKey or "") == tostring(roundKey)
+		and tostring(self.onlineGameplayEvaluationMarkKey or "") ~= tostring(roundKey)
 end
 
 function ITGOnline:ShouldHoldGameplayForEvaluation()

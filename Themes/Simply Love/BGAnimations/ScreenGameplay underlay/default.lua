@@ -143,6 +143,13 @@ local t = Def.ActorFrame{
 		end
 	end,
 	OnlinePhaseCheckCommand=function(self)
+		if ITGOnline
+			and ITGOnline.GameplayCompletionNeedsProgress
+			and ITGOnline:GameplayCompletionNeedsProgress()
+			and ITGOnline.MarkGameplayCompleteForEvaluation
+		then
+			ITGOnline:MarkGameplayCompleteForEvaluation("gameplay_completion_watchdog")
+		end
 		if online_gameplay_should_route_to_evaluation() then
 			route_online_gameplay_to_evaluation()
 			return

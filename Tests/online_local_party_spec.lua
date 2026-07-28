@@ -249,6 +249,18 @@ equal(party.companion_live_score_should_send(true, false, true), true,
 	"real companion progress must resume live score publication")
 equal(party.companion_live_score_should_send(true, true, false), true,
 	"a final companion snapshot must never be suppressed")
+equal(party.primary_final_requires_stabilization(true, false), true,
+	"an unaccepted failed primary final must stabilize before submission")
+equal(party.primary_final_requires_stabilization(true, true), false,
+	"an accepted failed primary final must not block the companion at song end")
+equal(party.primary_final_requires_stabilization(false, false), false,
+	"a completed primary score never uses failed-score stabilization")
+equal(party.gameplay_completion_needs_progress("round-1", "", "round-1"), true,
+	"natural engine completion keeps terminal retries alive")
+equal(party.gameplay_completion_needs_progress("", "", "round-1"), false,
+	"an early local failure cannot finalize the companion before song end")
+equal(party.gameplay_completion_needs_progress("round-1", "round-1", "round-1"), false,
+	"an accepted terminal transition stops the completion watchdog")
 equal(party.should_preserve_local_chart_choice("lobby", "ScreenSelectMusic"), true,
 	"the wheel choice must survive the initial server song application")
 equal(party.should_preserve_local_chart_choice("lobby_ready", "ScreenOnlineLobbies"), true,

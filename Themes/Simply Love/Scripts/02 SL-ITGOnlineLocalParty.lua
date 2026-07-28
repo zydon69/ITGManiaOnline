@@ -123,6 +123,20 @@ function Party.companion_live_score_should_send(zeroLiveAccepted, final, hasLive
 	return zeroLiveAccepted ~= true
 end
 
+-- Failed-score stabilization protects a final snapshot that has not reached
+-- the server yet.  Re-running it after the primary final was already accepted
+-- blocks the companion final behind an unnecessary timer at natural song end.
+function Party.primary_final_requires_stabilization(failed, primaryFinalAccepted)
+	return failed == true and primaryFinalAccepted ~= true
+end
+
+function Party.gameplay_completion_needs_progress(engineEndedKey, evaluationMarkKey, roundKey)
+	roundKey = tostring(roundKey or "")
+	return roundKey ~= ""
+		and tostring(engineEndedKey or "") == roundKey
+		and tostring(evaluationMarkKey or "") ~= roundKey
+end
+
 function Party.should_preserve_local_chart_choice(phase, screenName)
 	phase = tostring(phase or ""):lower()
 	screenName = tostring(screenName or "")
