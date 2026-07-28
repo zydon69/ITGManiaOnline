@@ -3572,6 +3572,55 @@ function ITGOnline:CurrentRoomConflictCode(decoded, response)
 	return "", nil
 end
 
+function ITGOnline:HandleAuthoritativeNotRoomMember(record, decoded, response)
+	if response_error_code(response, decoded) ~= "not_room_member" then
+		return false
+	end
+
+	local path = tostring(record and record.path or "")
+	local roomId = path:match("^/rooms/(%d+)")
+	if roomId == nil then
+		online_flow_trace("not_room_member_ignored reason=non_room_scoped_request"
+			.. " path=" .. path)
+		return false
+	end
+
+	local activeRoomId = self.currentRoomId or self.pendingJoinRoomId
+	if activeRoomId == nil and not self:ShouldIgnoreRoomEvents(roomId) then
+		online_flow_trace("not_room_member_ignored reason=no_matching_local_room"
+			.. " room=" .. tostring(roomId)
+			.. " path=" .. path)
+		return false
+	end
+	if activeRoomId ~= nil and not online_room_ids_match(roomId, activeRoomId) then
+		online_flow_trace("not_room_member_ignored reason=room_mismatch"
+			.. " room=" .. tostring(roomId)
+			.. " activeRoom=" .. tostring(activeRoomId)
+			.. " path=" .. path)
+		return false
+	end
+
+	local applied, result = self:ApplyAuthoritativeRoomExit(
+		roomId,
+		"not_room_member",
+		"http_not_room_member:" .. path
+	)
+	online_flow_trace("not_room_member_authoritative"
+		.. " room=" .. tostring(roomId)
+		.. " path=" .. path
+		.. " localPlayer=" .. tostring(record and record.localPlayer or "nil")
+		.. " applied=" .. tostring(applied == true)
+		.. " result=" .. tostring(result or "unknown"))
+	if applied then
+		self:QueuePostRoomExitLobbyRefresh("not_room_member", 0.20)
+	end
+
+	-- A duplicate response for the room is still authoritative. Returning true
+	-- prevents callbacks from repopulating transport queues after room state was
+	-- already purged by an earlier response.
+	return applied == true or result == "already_applied"
+end
+
 function ITGOnline:SetCurrentRoomBlocked(errorCode, openRoomCount, source)
 	errorCode = tostring(errorCode or "")
 	if errorCode == "" then return false end
@@ -3921,7 +3970,17 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 					response.errorMessage = "Authentication expired; retry the action after reconnecting."
 				end
 
+				local authoritativeRoomExit = false
+				if not ok then
+					authoritativeRoomExit = self:HandleAuthoritativeNotRoomMember(record, decoded, response)
+				end
 				safe_callback(callback, ok, decoded, response)
+				if authoritativeRoomExit then
+					-- Some legacy callbacks schedule their next score/play-state
+					-- attempt synchronously. Cancel anything recreated after the
+					-- authoritative room exit so not_room_member cannot loop.
+					self:CancelPendingRequests()
+				end
 		end,
 	}
 	end)
