@@ -148,6 +148,9 @@ ITGOnline.lastScoreSongPosition = ITGOnline.lastScoreSongPosition or 0
 ITGOnline.lastAcceptedScoreSongPosition = ITGOnline.lastAcceptedScoreSongPosition or 0
 ITGOnline.lastAcceptedScoreFingerprint = ITGOnline.lastAcceptedScoreFingerprint or nil
 ITGOnline.scoreInFlightFingerprint = ITGOnline.scoreInFlightFingerprint or nil
+ITGOnline.scoreContractRejectedRoundKey = ITGOnline.scoreContractRejectedRoundKey or ""
+ITGOnline.scoreContractRejectedContextKey = ITGOnline.scoreContractRejectedContextKey or ""
+ITGOnline.scoreContractRejectedNoticeKey = ITGOnline.scoreContractRejectedNoticeKey or ""
 ITGOnline.lastDisplayedScoreSnapshot = ITGOnline.lastDisplayedScoreSnapshot or nil
 ITGOnline.lastDisplayedScoreSnapshotAt = ITGOnline.lastDisplayedScoreSnapshotAt or 0
 ITGOnline.liveScoreQueueTraceAccepted = ITGOnline.liveScoreQueueTraceAccepted or 0
@@ -260,6 +263,7 @@ ITGOnline.onlineGameplayTerminalInFlightKey = ITGOnline.onlineGameplayTerminalIn
 ITGOnline.onlineGameplayTerminalState = ITGOnline.onlineGameplayTerminalState or ""
 ITGOnline.onlineGameplayFailedEarlyKey = ITGOnline.onlineGameplayFailedEarlyKey or ""
 ITGOnline.onlineGameplayFailedEarlyInFlightKey = ITGOnline.onlineGameplayFailedEarlyInFlightKey or ""
+ITGOnline.onlineGameplayEngineEndedKey = ITGOnline.onlineGameplayEngineEndedKey or ""
 ITGOnline.onlineGameplayEndedKey = ITGOnline.onlineGameplayEndedKey or ""
 ITGOnline.onlineGameplayEvaluationMarkKey = ITGOnline.onlineGameplayEvaluationMarkKey or ""
 ITGOnline.onlineGameplayEvaluationMarkInFlightKey = ITGOnline.onlineGameplayEvaluationMarkInFlightKey or ""
@@ -2878,6 +2882,9 @@ function ITGOnline:ResetRealtimeState()
 	self.lastFinalScoreKey = ""
 	self.lastFinalScoreInFlightKey = ""
 	self.scoreClientActionIdsByKey = {}
+	self.scoreContractRejectedRoundKey = ""
+	self.scoreContractRejectedContextKey = ""
+	self.scoreContractRejectedNoticeKey = ""
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
@@ -4051,18 +4058,22 @@ function ITGOnline:ConsumeNeedsSyncAfterScreenCancel()
 	return true
 end
 
-function ITGOnline:RoomContainsLocalPlayer(room, player)
-	if type(room) ~= "table" or not player then return false end
+function ITGOnline:RoomMemberForLocalPlayer(room, player)
+	if type(room) ~= "table" or not player then return nil end
 	local userId = online_user_identifier(self:UserForLocalPlayer(player))
-	if userId == "" then return false end
+	if userId == "" then return nil end
 	for _, member in ipairs(room.members or {}) do
 		local memberUser = type(member.user) == "table" and member.user or {}
-		local memberUserId = member.user_id or member.userId or memberUser.id
+		local memberUserId = member.user_id or member.userId or memberUser.id or member.id
 		if memberUserId ~= nil and online_protocol_ids_match(memberUserId, userId) then
-			return true
+			return member
 		end
 	end
-	return false
+	return nil
+end
+
+function ITGOnline:RoomContainsLocalPlayer(room, player)
+	return self:RoomMemberForLocalPlayer(room, player) ~= nil
 end
 
 function ITGOnline:LocalPartyRoomComplete(room)
@@ -5181,6 +5192,7 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.onlineGameplayTerminalState = ""
 	self.onlineGameplayFailedEarlyKey = ""
 	self.onlineGameplayFailedEarlyInFlightKey = ""
+	self.onlineGameplayEngineEndedKey = ""
 	self.onlineGameplayEndedKey = ""
 	self.onlineGameplayEvaluationMarkKey = ""
 	self.onlineGameplayEvaluationMarkInFlightKey = ""
@@ -5211,6 +5223,9 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.scoreClientActionIdsByKey = {}
 	self.lastAcceptedScoreFingerprint = nil
 	self.scoreInFlightFingerprint = nil
+	self.scoreContractRejectedRoundKey = ""
+	self.scoreContractRejectedContextKey = ""
+	self.scoreContractRejectedNoticeKey = ""
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
@@ -6878,6 +6893,8 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("results_wait")
 	local localRoundEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 		and self.onlineGameplayEndedKey == roundKey
+	local localEngineEnded = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
+		and self.onlineGameplayEngineEndedKey == roundKey
 	local localRoundEnding = self.PlayStateKeyIsValid and self:PlayStateKeyIsValid(roundKey)
 		and self.onlineGameplayEvaluationMarkInFlightKey == roundKey
 
@@ -6890,12 +6907,13 @@ function ITGOnline:ShouldWaitForOnlineResults(room)
 			.. " roundKeySource=" .. tostring(roundKeySource))
 		return true
 	end
-	if not localRoundEnded and not self:IsTerminalPlayState(state) then
+	if not localRoundEnded and not localEngineEnded and not self:IsTerminalPlayState(state) then
 		online_flow_trace_throttled("results_wait_local_not_terminal", 1.0,
 			"results_wait_decision wait=false reason=local_not_terminal"
 			.. " phase=" .. tostring(phase)
 			.. " state=" .. tostring(state or "nil")
 			.. " localRoundEnded=" .. tostring(localRoundEnded == true)
+			.. " localEngineEnded=" .. tostring(localEngineEnded == true)
 			.. " roundKey=" .. tostring(roundKey)
 			.. " roundKeySource=" .. tostring(roundKeySource))
 		return false
@@ -7055,6 +7073,7 @@ function ITGOnline:MarkGameplayCompleteForEvaluation(source)
 	if self.onlineGameplayEvaluationMarkKey == roundKey then
 		return true
 	end
+	self.onlineGameplayEngineEndedKey = roundKey
 	if self.onlineGameplayEvaluationMarkInFlightKey == roundKey then
 		return true
 	end
@@ -9824,6 +9843,7 @@ function ITGOnline:Disconnect(options)
 	self.onlineGameplayTerminalState = ""
 	self.onlineGameplayFailedEarlyKey = ""
 	self.onlineGameplayFailedEarlyInFlightKey = ""
+	self.onlineGameplayEngineEndedKey = ""
 	self.onlineGameplayEndedKey = ""
 	self.onlineGameplayEvaluationMarkKey = ""
 	self.onlineGameplayEvaluationMarkInFlightKey = ""
@@ -9842,6 +9862,9 @@ function ITGOnline:Disconnect(options)
 	self.lastFinalScoreKey = ""
 	self.lastFinalScoreInFlightKey = ""
 	self.scoreClientActionIdsByKey = {}
+	self.scoreContractRejectedRoundKey = ""
+	self.scoreContractRejectedContextKey = ""
+	self.scoreContractRejectedNoticeKey = ""
 	self.syncInFlight = false
 	self.syncQueued = false
 	self.syncCallbacks = {}
@@ -13136,6 +13159,75 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	if IsRoutine and IsRoutine() then
 		player = online_score_source_player()
 	end
+	local scoreChartContext, scoreContextError = self:CurrentOnlineScoreContext(
+		player,
+		scoreSongPayload
+	)
+	if not scoreChartContext then
+		online_flow_trace("send_score_failed reason=invalid_player_score_context"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " localPlayer=" .. tostring(local_player_key(player))
+			.. " error=" .. tostring(scoreContextError or "unknown")
+			.. " selectedSongHash="
+				.. tostring(scoreSongPayload.song_hash or scoreSongPayload.songHash or ""):sub(1, 12)
+			.. " contextSource=room_member_options")
+		local invalidContextKey = tostring(roundKey)
+			.. "|" .. tostring(scoreContextError or "unknown")
+		if tostring(self.scoreContractRejectedNoticeKey or "") ~= invalidContextKey then
+			self.scoreContractRejectedNoticeKey = invalidContextKey
+			if self.FetchRoom then
+				self:FetchRoom(self.currentRoomId)
+			end
+		end
+		finish(false, nil, {
+			error_code = "invalid_player_score_context",
+			errorCode = "invalid_player_score_context",
+			errorMessage = "Local player chart metadata is not ready.",
+			context_error = scoreContextError,
+			terminal = true,
+		})
+		return
+	end
+	local scoreContractContextKey = ITGOnlineScoreTransport.context_key(
+		roundKey,
+		scoreChartContext
+	)
+	if traceScoreTransport then
+		online_score_transport_trace(final, "send_score_player_context"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " localPlayer=" .. tostring(local_player_key(player))
+			.. " source=" .. tostring(scoreChartContext.source or "unknown")
+			.. " songHash=" .. tostring(scoreChartContext.song_hash or ""):sub(1, 12)
+			.. " chartHash=" .. tostring(scoreChartContext.chart_hash or ""):sub(1, 12)
+			.. " notes=" .. tostring(scoreChartContext.chart_note_count or "nil")
+			.. " maxScore=" .. tostring(scoreChartContext.max_score or "nil"))
+	end
+	if tostring(self.scoreContractRejectedRoundKey or "") == tostring(roundKey)
+		and tostring(self.scoreContractRejectedContextKey or "") == scoreContractContextKey
+	then
+		if self.StopLiveScoreFlush then
+			self:StopLiveScoreFlush("score_contract_rejected:" .. tostring(roundKey))
+		end
+		finish(false, nil, {
+			error_code = "score_contract_rejected",
+			errorCode = "score_contract_rejected",
+			errorMessage = "The server rejected this player's chart metadata.",
+			dropped = true,
+			terminal = true,
+		})
+		return
+	elseif tostring(self.scoreContractRejectedRoundKey or "") == tostring(roundKey) then
+		online_flow_trace("score_contract_recovered"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " previousContext=" .. tostring(self.scoreContractRejectedContextKey or "")
+			.. " currentContext=" .. tostring(scoreContractContextKey))
+		self.scoreContractRejectedRoundKey = ""
+		self.scoreContractRejectedContextKey = ""
+		self.scoreContractRejectedNoticeKey = ""
+	end
 	local stats = online_stage_stats_for_score(player)
 	local failedOk, failedValue = stats ~= nil and pcall(function() return stats:GetFailed() end) or false, false
 	local statsFailed = failedOk and failedValue == true or false
@@ -13176,8 +13268,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	end
 	local positionKey = table.concat({
 		tostring(roundKey or ""),
-		tostring(scoreSongPayload.song_hash or scoreSongPayload.songHash or ""),
-		tostring(scoreSongPayload.chart_hash or scoreSongPayload.chartHash or ""),
+		tostring(scoreChartContext.song_hash or ""),
+		tostring(scoreChartContext.chart_hash or ""),
 		tostring(scoreSongPayload.selected_at or scoreSongPayload.selectedAt or ""),
 		tostring(scoreSongPayload.start_at or scoreSongPayload.startAt or self.currentRoom and (self.currentRoom.start_at_ms or self.currentRoom.start_at) or ""),
 	}, "|")
@@ -13196,7 +13288,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		-- Keep client position coherent with server clock to avoid "behind_server_clock" rejects.
 		songPosition = math.max(songPosition, math.max(0, estimatedPosition - 0.5))
 	end
-	local chartDuration = tonumber(scoreSongPayload.chart_duration_seconds) or tonumber(scoreSongPayload.music_length_seconds)
+	local chartDuration = tonumber(scoreChartContext.chart_duration_seconds)
+		or tonumber(scoreChartContext.music_length_seconds)
 	local lastKnownSongPosition = math.max(
 		tonumber(self.lastScoreSongPosition) or 0,
 		tonumber(self.lastAcceptedScoreSongPosition) or 0
@@ -13225,7 +13318,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	local failed = snapshot and (snapshot.failed == true or snapshot.Failed == true)
 		or statsFailed
 
-	local selectedMaxScore = tonumber(scoreSongPayload.max_score) or server_max_score_for_note_count(scoreSongPayload.chart_note_count)
+	local selectedMaxScore = tonumber(scoreChartContext.max_score)
+		or server_max_score_for_note_count(scoreChartContext.chart_note_count)
 	local itgScorePercent = math.max(0, math.min(100, (tonumber(dancePoints) or 0) * 100))
 	local exScorePercent = tonumber(snapshot and (snapshot.exScorePercent or snapshot.ExScorePercent)) or tonumber(exScore) or 0
 	local hardExScorePercent = tonumber(snapshot and (snapshot.hardExScorePercent or snapshot.HardExScorePercent)) or tonumber(hardExScore) or 0
@@ -13569,25 +13663,24 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 	local scorePayload = ITGOnlineScoreTransport.payload(
 		scoreIdentity,
 		{
-		selection_id = self:CurrentSelectionId(),
-		score = outgoingScore,
-		score_percent = displayedScorePercent,
-		displayed_percent = displayedScorePercent,
-		itg_score_percent = itgScorePercent,
-		ex_score_percent = exScorePercent,
-		hard_ex_score_percent = hardExScorePercent,
-		combo = outgoingCombo,
-		max_combo = outgoingMaxCombo,
-		accuracy = accuracy,
-		song_position_seconds = songPosition,
-		song_hash = scoreSongPayload.song_hash,
-		chart_hash = scoreSongPayload.chart_hash,
-		failed = outgoingFailed,
-		final = final and true or false,
-		score_mode = scoreMode,
-		judgments = judgments,
-		client_action_id = finalActionId,
-		}
+			selection_id = self:CurrentSelectionId(),
+			score = outgoingScore,
+			score_percent = displayedScorePercent,
+			displayed_percent = displayedScorePercent,
+			itg_score_percent = itgScorePercent,
+			ex_score_percent = exScorePercent,
+			hard_ex_score_percent = hardExScorePercent,
+			combo = outgoingCombo,
+			max_combo = outgoingMaxCombo,
+			accuracy = accuracy,
+			song_position_seconds = songPosition,
+			failed = outgoingFailed,
+			final = final and true or false,
+			score_mode = scoreMode,
+			judgments = judgments,
+			client_action_id = finalActionId,
+		},
+		scoreChartContext
 	)
 	ITGOnlineScoreTransport.send(
 		self,
@@ -13665,6 +13758,35 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 					.. " song_pos=" .. tostring(songPosition)
 					.. " status=" .. tostring(response and response.statusCode or "nil"))
 			end
+		elseif ITGOnlineScoreTransport.is_contract_error(errorCode) then
+			self.scoreContractRejectedRoundKey = tostring(roundKey or "")
+			self.scoreContractRejectedContextKey = scoreContractContextKey
+			if self.StopLiveScoreFlush then
+				self:StopLiveScoreFlush("score_contract_rejected:" .. tostring(roundKey))
+			end
+			if tostring(self.scoreContractRejectedNoticeKey or "") ~= scoreContractContextKey then
+				self.scoreContractRejectedNoticeKey = scoreContractContextKey
+				online_flow_trace("score_contract_rejected"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(roundKey)
+					.. " localPlayer=" .. tostring(local_player_key(player))
+					.. " songHash=" .. tostring(scoreChartContext.song_hash or ""):sub(1, 12)
+					.. " chartHash=" .. tostring(scoreChartContext.chart_hash or ""):sub(1, 12)
+					.. " errorCode=" .. tostring(errorCode or "nil")
+					.. " decision=stop_round_transport_and_resynchronize")
+				safe_broadcast("OnlineResponseStatus", {
+					event = "scoreContract",
+					success = false,
+					message = response_message(
+						response,
+						decoded,
+						"The server rejected this player's chart metadata."
+					),
+				})
+				if self.FetchRoom then
+					self:FetchRoom(self.currentRoomId)
+				end
+			end
 		elseif self.debugScoreTrace == true then
 			online_score_trace("score-nack room=" .. tostring(self.currentRoomId or "")
 				.. " round=" .. tostring(roundKey)
@@ -13707,7 +13829,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		if not ok and errorCode == "room_not_playing" then
 			self:HandleRoomNotPlayingScoreReject(final, decoded)
 		end
-		if not ok and final then
+		if not ok and final and not ITGOnlineScoreTransport.is_contract_error(errorCode) then
 			safe_broadcast("OnlineResponseStatus", {
 				event = final and "finalScore" or "score",
 				success = false,
@@ -13966,14 +14088,57 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 	end
 	state.lastSnapshot = {}
 	for key, value in pairs(snapshot) do state.lastSnapshot[key] = value end
-	local optionSummary = self:CurrentOnlineOptionSummary(player)
 	local song = self:CurrentSelectedSongPayload()
-	if not song or not optionSummary.chart_hash then
+	local scoreChartContext, scoreContextError = self:CurrentOnlineScoreContext(
+		player,
+		song
+	)
+	if not scoreChartContext then
+		local invalidContextKey = tostring(roundKey)
+			.. "|" .. tostring(scoreContextError or "unknown")
+		if tostring(state.invalidContextNoticeKey or "") ~= invalidContextKey then
+			state.invalidContextNoticeKey = invalidContextKey
+			online_flow_trace("companion_score_context_missing"
+				.. " localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " error=" .. tostring(scoreContextError or "unknown")
+				.. " decision=resynchronize")
+			if self.FetchRoom then
+				self:FetchRoom(self.currentRoomId)
+			end
+		end
 		finish(false, nil, {
-			error_code = "missing_companion_chart",
+			error_code = "invalid_player_score_context",
 			errorMessage = "Player 2 chart metadata is not available.",
+			context_error = scoreContextError,
+			terminal = true,
 		})
 		return
+	end
+	state.invalidContextNoticeKey = nil
+	local scoreContractContextKey = ITGOnlineScoreTransport.context_key(
+		roundKey,
+		scoreChartContext
+	)
+	if tostring(state.contractRejectedContextKey or "") == scoreContractContextKey then
+		finish(false, nil, {
+			error_code = "score_contract_rejected",
+			errorCode = "score_contract_rejected",
+			errorMessage = "The server rejected Player 2 chart metadata.",
+			dropped = true,
+			terminal = true,
+		})
+		return
+	elseif tostring(state.contractRejectedContextKey or "") ~= "" then
+		online_flow_trace("companion_score_contract_recovered"
+			.. " localPlayer=P2"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(roundKey)
+			.. " previousContext=" .. tostring(state.contractRejectedContextKey)
+			.. " currentContext=" .. tostring(scoreContractContextKey))
+		state.contractRejectedContextKey = nil
+		state.contractRejectedNoticeShown = nil
 	end
 
 	local scoreMode = tostring(snapshot.scoreMode or (self:CurrentGlobalOptions() or {}).score_mode or "itg")
@@ -13985,11 +14150,8 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 		tonumber(snapshot.exScorePercent or snapshot.ExScorePercent) or 0))
 	local hardExScorePercent = math.max(0, math.min(100,
 		tonumber(snapshot.hardExScorePercent or snapshot.HardExScorePercent) or 0))
-	local maxScore = tonumber(optionSummary.max_score)
-		or server_max_score_for_note_count(optionSummary.chart_note_count)
-		or tonumber(song.max_score)
-		or server_max_score_for_note_count(song.chart_note_count)
-		or 1000000
+	local maxScore = tonumber(scoreChartContext.max_score)
+		or server_max_score_for_note_count(scoreChartContext.chart_note_count)
 	local outgoingScore = math.max(0, math.floor((displayedPercent / 100) * maxScore + 0.5))
 
 	local judgments = {}
@@ -14037,14 +14199,15 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 	songPosition = math.max(0, songPosition, tonumber(state.lastAcceptedSongPosition) or 0)
 	local startAtMs = tonumber(self.currentRoom.start_at_ms or "") or iso_utc_milliseconds(self.currentRoom.start_at)
 	if not snapshotFrozen and startAtMs and self.serverClockOffsetSeconds then
-		local rate = math.max(0.25, math.min(3, tonumber(song.rate) or 1))
+		local rate = math.max(0.25, math.min(3, tonumber(scoreChartContext.rate) or 1))
 		local serverNow = GetTimeSinceStart() + self.serverClockOffsetSeconds
 		songPosition = math.max(songPosition, math.max(0, (serverNow - (startAtMs / 1000)) * rate - 0.5))
 	end
 	if final and not failed then
-		local duration = tonumber(song.chart_duration_seconds) or tonumber(song.music_length_seconds)
+		local duration = tonumber(scoreChartContext.chart_duration_seconds)
+			or tonumber(scoreChartContext.music_length_seconds)
 		if duration then
-			local rate = math.max(0.25, math.min(3, tonumber(song.rate) or 1))
+			local rate = math.max(0.25, math.min(3, tonumber(scoreChartContext.rate) or 1))
 			songPosition = math.max(songPosition, duration / rate)
 		end
 	end
@@ -14060,25 +14223,24 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 	local payload = ITGOnlineScoreTransport.payload(
 		scoreIdentity,
 		{
-		selection_id = self:CurrentSelectionId(),
-		score = outgoingScore,
-		score_percent = displayedPercent,
-		displayed_percent = displayedPercent,
-		itg_score_percent = itgScorePercent,
-		ex_score_percent = exScorePercent,
-		hard_ex_score_percent = hardExScorePercent,
-		combo = combo,
-		max_combo = maxCombo,
-		accuracy = accuracy,
-		song_position_seconds = songPosition,
-		song_hash = song.song_hash,
-		chart_hash = optionSummary.chart_hash,
-		failed = failed,
-		final = final == true,
-		score_mode = scoreMode,
-		judgments = judgments,
-		client_action_id = final and state.finalActionId or nil,
-		}
+			selection_id = self:CurrentSelectionId(),
+			score = outgoingScore,
+			score_percent = displayedPercent,
+			displayed_percent = displayedPercent,
+			itg_score_percent = itgScorePercent,
+			ex_score_percent = exScorePercent,
+			hard_ex_score_percent = hardExScorePercent,
+			combo = combo,
+			max_combo = maxCombo,
+			accuracy = accuracy,
+			song_position_seconds = songPosition,
+			failed = failed,
+			final = final == true,
+			score_mode = scoreMode,
+			judgments = judgments,
+			client_action_id = final and state.finalActionId or nil,
+		},
+		scoreChartContext
 	)
 
 	state.inFlight = true
@@ -14091,7 +14253,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			.. " failed=" .. tostring(failed)
 			.. " score=" .. tostring(outgoingScore)
 			.. " displayedPercent=" .. tostring(displayedPercent)
-			.. " chartHash=" .. tostring(optionSummary.chart_hash):sub(1, 12)
+			.. " chartHash=" .. tostring(scoreChartContext.chart_hash):sub(1, 12)
 			.. " songPosition=" .. tostring(songPosition)
 			.. " judgments=" .. tostring(self:JudgmentTotal(judgments)))
 	end
@@ -14153,6 +14315,31 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			elseif final and errorCode == "score_already_finalized" then
 				state.finalAccepted = true
 				ok = true
+			elseif ITGOnlineScoreTransport.is_contract_error(errorCode) then
+				state.contractRejectedContextKey = scoreContractContextKey
+				if state.contractRejectedNoticeShown ~= true then
+					state.contractRejectedNoticeShown = true
+					online_flow_trace("companion_score_contract_rejected"
+						.. " localPlayer=P2"
+						.. " room=" .. tostring(self.currentRoomId or "nil")
+						.. " roundKey=" .. tostring(roundKey)
+						.. " songHash=" .. tostring(scoreChartContext.song_hash):sub(1, 12)
+						.. " chartHash=" .. tostring(scoreChartContext.chart_hash):sub(1, 12)
+						.. " errorCode=" .. tostring(errorCode or "nil")
+						.. " decision=stop_player_transport_and_resynchronize")
+					safe_broadcast("OnlineResponseStatus", {
+						event = "scoreContractP2",
+						success = false,
+						message = response_message(
+							response,
+							decoded,
+							"The server rejected Player 2 chart metadata."
+						),
+					})
+					if self.FetchRoom then
+						self:FetchRoom(self.currentRoomId)
+					end
+				end
 			end
 			if final == true or not ok or self.debugScoreTrace == true then
 				online_score_transport_trace(final or not ok, "companion_score_response localPlayer=P2"
@@ -14163,7 +14350,10 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 					.. " status=" .. tostring(response and response.statusCode or "nil")
 					.. " errorCode=" .. tostring(errorCode or "nil"))
 			end
-			if not ok and final then
+			if not ok
+				and final
+				and not ITGOnlineScoreTransport.is_contract_error(errorCode)
+			then
 				safe_broadcast("OnlineResponseStatus", {
 					event = "finalScoreP2",
 					success = false,
@@ -15038,6 +15228,32 @@ function ITGOnline:CurrentOnlineOptionSummary(player)
 				or useLegacyRememberedState and self.pendingOnlineOptionStepsAt) or 0))
 	)
 	return summary
+end
+
+function ITGOnline:CurrentOnlineScoreContext(player, selectedSong)
+	player = player or first_enabled_player()
+	selectedSong = type(selectedSong) == "table"
+		and selectedSong
+		or self:CurrentSelectedSongPayload()
+	local member = self:RoomMemberForLocalPlayer(self.currentRoom, player)
+	if type(member) ~= "table" then
+		return nil, "missing_authoritative_room_member"
+	end
+
+	local options = type(member.options) == "table" and member.options or nil
+	if options == nil then
+		return nil, "missing_authoritative_member_options"
+	end
+
+	local context, errorCode = ITGOnlineScoreTransport.score_context(
+		selectedSong,
+		options
+	)
+	if context == nil then
+		return nil, errorCode
+	end
+	context.source = "room_member_options"
+	return context, nil
 end
 
 function ITGOnline:MarkConfigReady(callback)

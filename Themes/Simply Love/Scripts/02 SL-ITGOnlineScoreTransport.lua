@@ -39,7 +39,7 @@ function Transport.new_runtime(identity, roundKey)
 	}
 end
 
-function Transport.payload(identity, values)
+function Transport.payload(identity, values, context)
 	identity = type(identity) == "table" and identity or {}
 	values = type(values) == "table" and values or {}
 	assert(identity.side == "P1" or identity.side == "P2", "local score identity is required")
@@ -51,7 +51,64 @@ function Transport.payload(identity, values)
 	payload.final = values.final == true
 	payload.compact_response = values.final ~= true
 	payload.judgments = type(values.judgments) == "table" and values.judgments or {}
+	if type(context) == "table" then
+		assert(tostring(context.song_hash or "") ~= "", "score song context is required")
+		assert(tostring(context.chart_hash or "") ~= "", "score chart context is required")
+		payload.song_hash = context.song_hash
+		payload.chart_hash = context.chart_hash
+	end
 	return payload
+end
+
+function Transport.score_context(song, options)
+	song = type(song) == "table" and song or {}
+	options = type(options) == "table" and options or {}
+
+	local selectedSongHash = tostring(song.song_hash or song.songHash or ""):lower()
+	local optionSongHash = tostring(options.song_hash or options.songHash or ""):lower()
+	local chartHash = tostring(options.chart_hash or options.chartHash or ""):lower()
+	if selectedSongHash == "" then
+		return nil, "missing_selected_song_hash"
+	end
+	if optionSongHash ~= "" and optionSongHash ~= selectedSongHash then
+		return nil, "player_song_hash_mismatch"
+	end
+	if chartHash == "" then
+		return nil, "missing_player_chart_hash"
+	end
+	local chartNoteCount = tonumber(options.chart_note_count or options.chartNoteCount)
+	local maxScore = tonumber(options.max_score or options.maxScore)
+	if maxScore == nil and chartNoteCount == nil then
+		return nil, "missing_player_chart_score_basis"
+	end
+
+	return {
+		song_hash = selectedSongHash,
+		chart_hash = chartHash,
+		chart_note_count = chartNoteCount,
+		max_score = maxScore,
+		rate = tonumber(song.rate) or 1,
+		chart_duration_seconds = tonumber(song.chart_duration_seconds),
+		music_length_seconds = tonumber(song.music_length_seconds),
+	}, nil
+end
+
+function Transport.is_contract_error(errorCode)
+	errorCode = tostring(errorCode or "")
+	return errorCode == "score_song_mismatch"
+		or errorCode == "invalid_player_score_context"
+		or errorCode == "score_contract_rejected"
+end
+
+function Transport.context_key(roundKey, context)
+	context = type(context) == "table" and context or {}
+	return table.concat({
+		tostring(roundKey or ""),
+		tostring(context.song_hash or ""),
+		tostring(context.chart_hash or ""),
+		tostring(context.chart_note_count or ""),
+		tostring(context.max_score or ""),
+	}, "|")
 end
 
 function Transport.queue_final(runtime, callback)

@@ -65,6 +65,48 @@ local scorePayload = scoreTransport.payload(p2Identity, {
 equal(scorePayload.score, 420000, "shared score payload keeps score")
 equal(scorePayload.compact_response, true, "live score payload is compact for every identity")
 equal(scorePayload.final, false, "shared score payload normalizes final state")
+local scoreContext = assert(scoreTransport.score_context({
+	song_hash = "AAAA",
+	chart_hash = "room-chart",
+	max_score = 973000,
+}, {
+	song_hash = "aaaa",
+	chart_hash = "PLAYER-CHART",
+	chart_note_count = 210,
+	max_score = 210000,
+}))
+equal(scoreContext.song_hash, "aaaa", "score context keeps the authoritative song")
+equal(scoreContext.chart_hash, "player-chart",
+	"score context always uses the local player's ready chart")
+equal(scoreContext.max_score, 210000,
+	"score context never reuses the manager chart maximum for another chart")
+local contextualPayload = scoreTransport.payload(p1Identity, {
+	score = 100000,
+	song_hash = "room-song",
+	chart_hash = "room-chart",
+}, scoreContext)
+equal(contextualPayload.song_hash, "aaaa",
+	"score payload always uses the validated player song context")
+equal(contextualPayload.chart_hash, "player-chart",
+	"score payload cannot fall back to the manager chart")
+equal(
+	scoreTransport.context_key("round-1", scoreContext),
+	"round-1|aaaa|player-chart|210|210000",
+	"score contract identity is stable and player-specific"
+)
+local invalidScoreContext, invalidScoreContextReason = scoreTransport.score_context({
+	song_hash = "song-a",
+}, {
+	song_hash = "song-b",
+	chart_hash = "chart-b",
+})
+equal(invalidScoreContext, nil, "score context rejects a stale player song")
+equal(invalidScoreContextReason, "player_song_hash_mismatch",
+	"stale score context exposes a stable diagnostic")
+equal(scoreTransport.is_contract_error("score_song_mismatch"), true,
+	"server chart contract rejects stop the current score transport")
+equal(scoreTransport.is_contract_error("temporary_server_error"), false,
+	"transient score failures remain retryable")
 local scoreRuntime = scoreTransport.new_runtime(p2Identity, "round-1")
 equal(scoreRuntime.localPlayer, "P2", "score runtime is bound to its local identity")
 scoreTransport.queue_final(scoreRuntime, function() end)
