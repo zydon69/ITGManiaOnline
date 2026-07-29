@@ -904,6 +904,16 @@ InputHandler = function(event)
 	if not event then return false end
 	local topScreen = current_top_screen()
 	if topScreen and isWaiting and event.PlayerNumber then
+		local topScreenName = screen_name(topScreen)
+		if topScreenName == "ScreenGameplay"
+			and ITGOnline and ITGOnline.currentRoomId
+			and (event.GameButton == "Start" or event.GameButton == "Back")
+		then
+			-- ScreenGameplay's dedicated handler owns online voluntary exits.
+			-- In particular, never run the legacy five-second disconnect timer
+			-- after a two-player exit was intentionally refused.
+			return false
+		end
 		local okPn, pn = safe_online_call("normalize waiting input player", function()
 			return ToEnumShortString(event.PlayerNumber)
 		end)
@@ -913,7 +923,6 @@ InputHandler = function(event)
 				"waiting_input_ignored reason=invalid_player player=" .. tostring(pn))
 			return true
 		end
-		local topScreenName = screen_name(topScreen)
 		if event.type == "InputEventType_FirstPress" and event.GameButton == "Back" then
 			if ITGOnline and ITGOnline.ShouldBlockEvaluationExit and ITGOnline:ShouldBlockEvaluationExit("sync_input_back") then
 				if online_trace then

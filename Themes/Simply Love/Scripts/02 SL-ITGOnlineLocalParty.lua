@@ -97,6 +97,29 @@ function Party.failed_player_route(plan, side)
 	return nil
 end
 
+-- A shared ScreenGameplay cannot return only one local side to the lobby.
+-- The requesting side may therefore leave only after every *other* local side
+-- already owns an authoritative final result.  A one-player machine has no
+-- companion to wait for.
+function Party.gameplay_exit_allowed(plan, requestingSide, finalizedBySide)
+	if type(plan) ~= "table" or type(finalizedBySide) ~= "table" then
+		return false
+	end
+
+	local requester = normalized_side(requestingSide)
+	if Party.role_for_side(plan, requester) == nil then return false end
+	if plan.twoPlayer ~= true then return true end
+
+	for _, side in ipairs(plan.requiredSides or {}) do
+		side = normalized_side(side)
+		if side ~= requester and finalizedBySide[side] ~= true then
+			return false
+		end
+	end
+
+	return true
+end
+
 function Party.should_submit_companion_ready(plan, isReady, companionReadyAlready)
 	return type(plan) == "table"
 		and plan.twoPlayer == true

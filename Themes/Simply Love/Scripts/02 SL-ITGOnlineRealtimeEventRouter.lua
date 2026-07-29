@@ -12,6 +12,7 @@ local idlessControlEvents = {
 }
 
 local lobbyEvents = {
+	["room.kicked"] = true,
 	["room.left"] = true,
 	["lobby.updated"] = true,
 	["room.invitation.created"] = true,
@@ -69,6 +70,7 @@ function Router.requires_non_room_policy(route)
 	if type(route) ~= "table" then return false end
 	local name = tostring(route.name or "")
 	return not name:match("^room%.")
+		or name == "room.kicked"
 		or name == "room.left"
 		or name == "room.invitation.created"
 		or name == "room.join_request.declined"

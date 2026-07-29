@@ -35,6 +35,16 @@ local function equal(actual, expected, label)
 		.. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
 
+local kickedRoute = assert(realtimeEventRouter.route({
+	id = 42,
+	event = "room.kicked",
+	payload = { room_id = 7, reason = "kicked_by_manager" },
+}, tostring))
+equal(kickedRoute.category, "lobby",
+	"room.kicked must use the immediate local-exit route, not generic room refresh")
+equal(realtimeEventRouter.requires_non_room_policy(kickedRoute), true,
+	"room.kicked must be handled by the authoritative non-room exit policy")
+
 local soloP1 = party.session_plan({ "P1" })
 equal(soloP1.requiredCount, 1, "P1 solo required identity count")
 equal(soloP1.coordinatorSide, "P1", "P1 solo coordinator")
@@ -257,6 +267,16 @@ equal(party.failed_player_route(soloP2, "P2"), "primary",
 	"a solo P2 session must use its coordinator identity")
 equal(party.failed_player_route(versus, "P3"), nil,
 	"an unknown local side must not be routed")
+equal(party.gameplay_exit_allowed(versus, "P1", { P1 = false, P2 = false }), false,
+	"P1 cannot leave a shared gameplay screen while P2 is still active")
+equal(party.gameplay_exit_allowed(versus, "P2", { P1 = false, P2 = false }), false,
+	"P2 cannot leave a shared gameplay screen while P1 is still active")
+equal(party.gameplay_exit_allowed(versus, "P1", { P1 = false, P2 = true }), true,
+	"P1 may freeze and leave once P2 already owns a final result")
+equal(party.gameplay_exit_allowed(versus, "P2", { P1 = true, P2 = false }), true,
+	"P2 may freeze and leave once P1 already owns a final result")
+equal(party.gameplay_exit_allowed(soloP1, "P1", { P1 = false }), true,
+	"a one-player machine may leave gameplay immediately")
 
 equal(party.should_submit_companion_ready(versus, true, false), true,
 	"P2 must be submitted before P1 becomes ready")
@@ -723,6 +743,18 @@ assert(localFailureSource:find("self:SendCompanionScore(true, true", 1, true),
 	"an early Player 2 failure must use the companion score pipeline")
 assert(not localFailureSource:find("self:SendScore(", 1, true),
 	"the Player 2 failure route must not directly use the primary score pipeline")
+local gameplayExitStart = assert(
+	clientSource:find("function ITGOnline:ProgressGameplayExit", 1, true),
+	"the client must expose one idempotent voluntary gameplay exit coordinator")
+local gameplayExitEnd = assert(
+	clientSource:find("function ITGOnline:MarkLocalPlayerFailedEarly", gameplayExitStart, true),
+	"the gameplay exit coordinator boundary must remain identifiable")
+local gameplayExitSource = clientSource:sub(gameplayExitStart, gameplayExitEnd - 1)
+assert(gameplayExitSource:find("self:MarkLocalPlayerFailedEarly", 1, true)
+	and gameplayExitSource:find("self:MarkReturnedToLobby", 1, true),
+	"a gameplay exit must finalize the failed snapshot before confirming lobby return")
+assert(gameplayExitSource:find("self.onlineGameplayVoluntaryExitKey = intent.roundKey", 1, true),
+	"navigation must remain blocked until the server accepts the returned-to-lobby command")
 assert(clientSource:find('normalizedHealth == "Dead"', 1, true),
 	"early failure detection must recognize the health enum representation used by the theme")
 local companionLifecycleStart = assert(clientSource:find("function ITGOnline:RequestCompanionLifecycleAction", 1, true),

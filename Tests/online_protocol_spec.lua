@@ -437,6 +437,12 @@ local roomLeftHandler = assert(
 )
 assert(roomLeftHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
 	"room.left and heartbeat removal must share the idempotent authoritative exit path")
+local roomKickedHandler = assert(
+	onlineClientContent:match('elseif name == "room%.kicked" then(.-)%s*elseif name == "room%.left"'),
+	"missing immediate room.kicked handler"
+)
+assert(roomKickedHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"room.kicked must clear the local room immediately without waiting for heartbeat reconciliation")
 
 local packSyncPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-OnlinePackSync.lua"
 local packSyncFile = assert(io.open(packSyncPath, "rb"), "missing online pack-sync source: " .. packSyncPath)

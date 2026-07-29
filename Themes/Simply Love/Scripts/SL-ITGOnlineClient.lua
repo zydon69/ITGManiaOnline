@@ -278,6 +278,8 @@ ITGOnline.onlineGameplayEvaluationNavigationKey = ITGOnline.onlineGameplayEvalua
 ITGOnline.onlineGameplayEvaluationNavigationAt = ITGOnline.onlineGameplayEvaluationNavigationAt or 0
 ITGOnline.onlineGameplayEvaluationShownKey = ITGOnline.onlineGameplayEvaluationShownKey or ""
 ITGOnline.onlineGameplayEvaluationReturnedKey = ITGOnline.onlineGameplayEvaluationReturnedKey or ""
+ITGOnline.onlineGameplayVoluntaryExitKey = ITGOnline.onlineGameplayVoluntaryExitKey or ""
+ITGOnline.onlineGameplayExitIntent = ITGOnline.onlineGameplayExitIntent or nil
 ITGOnline.onlineGameplayAllTerminalHoldKey = ITGOnline.onlineGameplayAllTerminalHoldKey or ""
 ITGOnline.onlineGameplayAllTerminalHoldUntil = ITGOnline.onlineGameplayAllTerminalHoldUntil or 0
 ITGOnline.onlineGameplayReleaseLoggedKey = ITGOnline.onlineGameplayReleaseLoggedKey or ""
@@ -5336,6 +5338,8 @@ function ITGOnline:ClearActiveGameplayRound(source)
 	self.onlineGameplayEvaluationNavigationAt = 0
 	self.onlineGameplayEvaluationShownKey = ""
 	self.onlineGameplayEvaluationReturnedKey = ""
+	self.onlineGameplayVoluntaryExitKey = ""
+	self.onlineGameplayExitIntent = nil
 end
 
 function ITGOnline:InvalidateSongAvailabilityRequests(reason)
@@ -5432,6 +5436,8 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self.onlineGameplayEvaluationNavigationAt = 0
 	self.onlineGameplayEvaluationShownKey = ""
 	self.onlineGameplayEvaluationReturnedKey = ""
+	self.onlineGameplayVoluntaryExitKey = ""
+	self.onlineGameplayExitIntent = nil
 	self.onlineGameplayEvaluationHoldStartedKey = ""
 	self.onlineGameplayEvaluationMinimumHoldUntil = 0
 	self.onlineGameplayAllTerminalHoldKey = ""
@@ -7636,6 +7642,16 @@ function ITGOnline:ShouldHoldGameplayForEvaluation()
 	if not self:IsOnlineGameplayScreen(screenName) then return false end
 	local phase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase)
 	local roundKey = self.CanonicalGameplayRoundKey and self:CanonicalGameplayRoundKey("evaluation_guard") or (self.PlayStateKey and self:PlayStateKey() or "")
+	if self:PlayStateKeyIsValid(roundKey)
+		and tostring(self.onlineGameplayVoluntaryExitKey or "") == tostring(roundKey)
+	then
+		online_flow_trace_throttled("gameplay_voluntary_exit_release:" .. tostring(roundKey), 1.0,
+			"hold_gameplay_release reason=voluntary_gameplay_exit"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " phase=" .. tostring(phase)
+			.. " roundKey=" .. tostring(roundKey))
+		return false
+	end
 	if self.LocalPartyReadyForEvaluation
 		and self:LocalPartyReadyForEvaluation(self.currentRoom, roundKey)
 	then
@@ -8002,6 +8018,14 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "playing" then
 		if self:IsOnlineGameplayScreen(screenName) then
+			if self:PlayStateKeyIsValid(roundKey)
+				and tostring(self.onlineGameplayVoluntaryExitKey or "") == tostring(roundKey)
+			then
+				online_flow_trace("preferred=lobby reason=voluntary_gameplay_exit"
+					.. " playState=" .. tostring(playState)
+					.. " roundKey=" .. tostring(roundKey))
+				return "lobby"
+			end
 			if playState == "returned_to_lobby" or playState == "disconnected" then
 				online_flow_trace("preferred=lobby reason=gameplay_user_left_song playState=" .. tostring(playState))
 				return "lobby"
@@ -8031,6 +8055,14 @@ function ITGOnline:PreferredScreenForRoomPhase(screenName)
 
 	if phase == "results" then
 		if self:IsOnlineGameplayScreen(screenName) then
+			if self:PlayStateKeyIsValid(roundKey)
+				and tostring(self.onlineGameplayVoluntaryExitKey or "") == tostring(roundKey)
+			then
+				online_flow_trace("preferred=lobby reason=voluntary_gameplay_exit_results"
+					.. " playState=" .. tostring(playState)
+					.. " roundKey=" .. tostring(roundKey))
+				return "lobby"
+			end
 			local summary = self.PlayStateSummary and self:PlayStateSummary(self.currentRoom) or nil
 			if summary and summary.players > 0 and summary.finalResultsReady ~= true then
 				online_flow_trace_throttled("preferred_results_incomplete_hold_gameplay", 1.0,
@@ -8323,6 +8355,30 @@ function ITGOnline:ApplyPreferredRoomScreen(topScreen, preferred)
 	end
 	if preferred == "gameplay" and self.ApplyResolvedLocalGameplaySteps then
 		self:ApplyResolvedLocalGameplaySteps("navigate_to_gameplay")
+	end
+	if preferred == "lobby"
+		and self:IsOnlineGameplayScreen(topScreen:GetName())
+		and self:PlayStateKeyIsValid(roundKey)
+		and tostring(self.onlineGameplayVoluntaryExitKey or "") == tostring(roundKey)
+	then
+		-- ScreenGameplay must run its normal teardown.  Directly replacing the
+		-- screen while its music/input actors are alive caused the apparent crash
+		-- observed after holding Start.
+		local ok = safe_call("navigate_gameplay_voluntary_exit", function()
+			topScreen:SetNextScreenName(target)
+			if topScreen.PostScreenMessage then
+				topScreen:PostScreenMessage("SM_LeaveGameplay", 0)
+			else
+				topScreen:StartTransitioningScreen("SM_GoToNextScreen")
+			end
+		end)
+		if not ok then return false end
+		commit_navigation("navigate_gameplay_voluntary_exit")
+		online_flow_trace("navigate_via_gameplay_message message=SM_LeaveGameplay"
+			.. " target=" .. tostring(target)
+			.. " reason=voluntary_gameplay_exit"
+			.. " roundKey=" .. tostring(roundKey))
+		return true
 	end
 	if preferred == "evaluation" and self:IsOnlineGameplayScreen(topScreen:GetName()) then
 		-- Let ScreenGameplay perform its normal end-of-song cleanup instead of
@@ -16457,14 +16513,18 @@ function ITGOnline:MarkPlayEntered(callback, companionSynchronized)
 	end)
 end
 
-function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized)
+function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized, options)
+	options = type(options) == "table" and options or {}
 	if not self.currentRoomId then
 		online_flow_trace("mark_returned_to_lobby_failed reason=no_current_room")
 		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
 		return
 	end
 	local roomPhase = self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase or self.currentRoomPhase)
-	if roomPhase ~= "results" then
+	local allowDuringGameplay = options.allowDuringGameplay == true
+	if roomPhase ~= "results"
+		and not (allowDuringGameplay and roomPhase == "playing")
+	then
 		online_flow_trace("mark_returned_to_lobby_skipped reason=room_not_results"
 			.. " room=" .. tostring(self.currentRoomId)
 			.. " phase=" .. tostring(roomPhase)
@@ -16473,6 +16533,21 @@ function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized)
 		return
 	end
 	local key = self:PlayStateKey()
+	if allowDuringGameplay and roomPhase == "playing" then
+		local primaryFinalAccepted = self:CurrentUserHasFinalResult(self.currentRoom)
+			or tostring(self.lastFinalScoreKey or "") == tostring(key or "")
+		if not primaryFinalAccepted then
+			online_flow_trace("mark_returned_to_lobby_skipped reason=final_score_not_accepted"
+				.. " room=" .. tostring(self.currentRoomId)
+				.. " phase=" .. tostring(roomPhase)
+				.. " roundKey=" .. tostring(key))
+			safe_callback(callback, false, nil, {
+				error_code = "final_score_not_accepted",
+				errorMessage = "The final failed score must be accepted before returning to the lobby.",
+			})
+			return
+		end
+	end
 	if self:PlayStateKeyIsValid(key) and self.onlineGameplayReturnedKey == key then
 		online_flow_trace("mark_returned_to_lobby_skipped reason=already_returned"
 			.. " room=" .. tostring(self.currentRoomId)
@@ -16492,7 +16567,7 @@ function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized)
 			selection_id = self:CurrentSelectionId(),
 		}, function(ok, decoded, response)
 			if ok then
-				self:MarkReturnedToLobby(callback, true)
+				self:MarkReturnedToLobby(callback, true, options)
 			else
 				safe_callback(callback, false, decoded, response)
 			end
@@ -16761,6 +16836,149 @@ end
 function ITGOnline:MarkPlayFailed(callback)
 	online_flow_trace("mark_play_failed_invoked room=" .. tostring(self.currentRoomId or "nil"))
 	self:MarkPlayTerminal("/play/failed", "failed", callback)
+end
+
+function ITGOnline:LocalGameplayExitAllowed(player, roundKey)
+	local finalizedBySide = {}
+	for _, localPlayer in ipairs(self:RequiredLocalPlayers()) do
+		local side = local_player_key(localPlayer)
+		local accepted = self:LocalPlayerHasFinalResult(self.currentRoom, localPlayer)
+		if self:IsPrimaryLocalPlayer(localPlayer) then
+			accepted = accepted
+				or tostring(self.lastFinalScoreKey or "") == tostring(roundKey or "")
+		else
+			accepted = accepted
+				or self:CompanionScoreState(roundKey).finalAccepted == true
+		end
+		finalizedBySide[side] = accepted == true
+	end
+
+	return ITGOnlineLocalParty.gameplay_exit_allowed(
+		self:LocalPartyPlan(),
+		local_player_key(player),
+		finalizedBySide
+	), finalizedBySide
+end
+
+function ITGOnline:ProgressGameplayExit()
+	local intent = self.onlineGameplayExitIntent
+	if type(intent) ~= "table" or intent.busy == true then return false end
+	if GetTimeSinceStart() < (tonumber(intent.nextAttemptAt) or 0) then return false end
+
+	local roundKey = self:CanonicalGameplayRoundKey("progress_gameplay_exit")
+	if not self:PlayStateKeyIsValid(roundKey)
+		or tostring(roundKey) ~= tostring(intent.roundKey)
+	then
+		online_flow_trace("gameplay_exit_cancelled reason=round_changed"
+			.. " expected=" .. tostring(intent.roundKey or "")
+			.. " current=" .. tostring(roundKey or ""))
+		self.onlineGameplayExitIntent = nil
+		return false
+	end
+
+	local function retry_or_cancel(stage, decoded, response)
+		if self.onlineGameplayExitIntent ~= intent then return end
+		intent.busy = false
+		local retryAfter = tonumber(response and response.retryAfter) or 0
+		local errorCode = response_error_code(response, decoded)
+		if retryAfter > 0 or errorCode == nil or errorCode == "" then
+			intent.nextAttemptAt = GetTimeSinceStart() + math.max(0.25, retryAfter)
+			online_flow_trace("gameplay_exit_retry"
+				.. " stage=" .. tostring(stage)
+				.. " roundKey=" .. tostring(intent.roundKey)
+				.. " retryIn=" .. tostring(math.max(0.25, retryAfter)))
+			return
+		end
+		online_flow_trace("gameplay_exit_cancelled"
+			.. " stage=" .. tostring(stage)
+			.. " roundKey=" .. tostring(intent.roundKey)
+			.. " errorCode=" .. tostring(errorCode))
+		self.onlineGameplayExitIntent = nil
+	end
+
+	local function return_to_lobby()
+		if self.onlineGameplayExitIntent ~= intent then return end
+		intent.stage = "returning"
+		intent.busy = true
+		self:MarkReturnedToLobby(function(ok, decoded, response)
+			if self.onlineGameplayExitIntent ~= intent then return end
+			if not ok then
+				retry_or_cancel("returned_to_lobby", decoded, response)
+				return
+			end
+
+			self.onlineGameplayVoluntaryExitKey = intent.roundKey
+			self.onlineGameplayEvaluationReturnedKey = intent.roundKey
+			self.onlineGameplayExitIntent = nil
+			online_flow_trace("gameplay_exit_confirmed"
+				.. " localPlayer=" .. tostring(intent.playerKey)
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(intent.roundKey))
+			local screen = top_screen()
+			if screen and self:IsOnlineGameplayScreen(screen:GetName()) then
+				self:ApplyPreferredRoomScreen(screen, "lobby")
+			end
+		end, false, { allowDuringGameplay = true })
+	end
+
+	if intent.stage == "returning" then
+		return_to_lobby()
+		return true
+	end
+
+	intent.busy = true
+	self:MarkLocalPlayerFailedEarly(intent.player, intent.source, function(ok, decoded, response)
+		if self.onlineGameplayExitIntent ~= intent then return end
+		if not ok then
+			retry_or_cancel("final_failed_score", decoded, response)
+			return
+		end
+		intent.busy = false
+		return_to_lobby()
+	end)
+	return true
+end
+
+function ITGOnline:RequestGameplayExit(player, source)
+	if not self.currentRoomId or not self.currentRoom then return false, "no_room" end
+	local phase = self:NormalizeRoomPhase(self.currentRoom.phase)
+	if phase ~= "playing" and phase ~= "results" then
+		return false, "room_not_playing"
+	end
+
+	local roundKey = self:CanonicalGameplayRoundKey("request_gameplay_exit")
+	if not self:PlayStateKeyIsValid(roundKey) then return false, "invalid_round" end
+	local allowed, finalizedBySide = self:LocalGameplayExitAllowed(player, roundKey)
+	if not allowed then
+		online_flow_trace("gameplay_exit_blocked reason=other_local_player_not_failed"
+			.. " localPlayer=" .. tostring(local_player_key(player))
+			.. " roundKey=" .. tostring(roundKey)
+			.. " P1Final=" .. tostring(finalizedBySide.P1 == true)
+			.. " P2Final=" .. tostring(finalizedBySide.P2 == true))
+		return false, "other_local_player_not_failed"
+	end
+
+	local existing = self.onlineGameplayExitIntent
+	if type(existing) == "table" and tostring(existing.roundKey) == tostring(roundKey) then
+		return true, "already_in_progress"
+	end
+
+	self.onlineGameplayExitIntent = {
+		player = player,
+		playerKey = local_player_key(player),
+		source = tostring(source or "gameplay_input"),
+		roundKey = roundKey,
+		stage = "finalizing",
+		busy = false,
+		nextAttemptAt = 0,
+	}
+	online_flow_trace("gameplay_exit_requested"
+		.. " localPlayer=" .. tostring(local_player_key(player))
+		.. " source=" .. tostring(source or "gameplay_input")
+		.. " room=" .. tostring(self.currentRoomId)
+		.. " roundKey=" .. tostring(roundKey))
+	self:ProgressGameplayExit()
+	return true, "started"
 end
 
 function ITGOnline:MarkLocalPlayerFailedEarly(player, source, callback)
@@ -19826,6 +20044,7 @@ function ITGOnline:ClearCurrentRoomState(source)
 	local sourceKey = tostring(source or "")
 	if sourceKey:find("leave", 1, true)
 		or sourceKey:find("left", 1, true)
+		or sourceKey:find("kick", 1, true)
 		or sourceKey:find("timeout", 1, true)
 		or sourceKey:find("deleted", 1, true) then
 		self:ResetPostRoomExitLobbyRefreshState(sourceKey)
@@ -20346,6 +20565,10 @@ function ITGOnline:RealtimeNonRoomEventPolicy(name)
 			action = "leave_current_room_if_matching",
 			reason = "server_confirms_local_room_exit_or_ejection",
 		},
+		["room.kicked"] = {
+			action = "leave_current_room_if_matching",
+			reason = "server_confirms_local_room_ejection",
+		},
 		["lobby.updated"] = {
 			action = "apply_presence_cache_then_refresh_lobby",
 			reason = "lobby_presence_or_room_list_changed",
@@ -20741,6 +20964,25 @@ elseif name == "client.error" then
 		-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
 		online_flow_trace("presence_pruned_refresh_requested")
 		self:QueueLobbyRefresh({ reason = "presence_pruned" })
+		return
+	elseif name == "room.kicked" then
+		local roomId = payload.room_id
+		local reason = tostring(payload.reason or "kicked_by_manager")
+		local applied, result = self:ApplyAuthoritativeRoomExit(roomId, reason, "room.kicked")
+		online_flow_trace("room_kicked_event"
+			.. " room=" .. tostring(roomId or "nil")
+			.. " applied=" .. tostring(applied == true)
+			.. " result=" .. tostring(result or "nil")
+			.. " reason=" .. tostring(reason))
+		if applied then
+			safe_broadcast("OnlineResponseStatus", {
+				event = "leaveLobby",
+				success = false,
+				errorCode = "room_kicked",
+				message = online_client_text("KickedFromLobby", "You were removed from the lobby by its manager."),
+			})
+			self:QueueLobbyRefresh({ reason = "room_kicked" })
+		end
 		return
 	elseif name == "room.left" then
 		local roomId = payload.room_id

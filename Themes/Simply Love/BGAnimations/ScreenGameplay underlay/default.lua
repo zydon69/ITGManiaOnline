@@ -26,35 +26,22 @@ local function trace_online_restart_block(reason)
 	end
 end
 
-local function online_gameplay_routes_back_to_lobby()
-	local phase = online_gameplay_phase()
-	return ITGOnline
-		and ITGOnline.currentRoomId
-		and (phase == "starting" or phase == "playing")
-end
-
-local function route_online_gameplay_to_lobby()
-	if online_gameplay_phase() == "playing" or online_gameplay_phase() == "starting" then
-		if type(online_flow_trace) == "function" then
-			online_flow_trace("gameplay_lobby_route_blocked reason=round_in_progress room="
-				.. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-				.. " phase=" .. tostring(online_gameplay_phase()))
-		end
-		return
+local function route_online_gameplay_to_lobby(player, button)
+	if not (ITGOnline and ITGOnline.RequestGameplayExit) then return false end
+	local accepted, reason = ITGOnline:RequestGameplayExit(
+		player,
+		"gameplay_" .. string.lower(tostring(button or "input"))
+	)
+	if type(online_flow_trace) == "function" then
+		online_flow_trace("gameplay_exit_input"
+			.. " button=" .. tostring(button or "nil")
+			.. " player=" .. tostring(player or "nil")
+			.. " accepted=" .. tostring(accepted == true)
+			.. " reason=" .. tostring(reason or "nil")
+			.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(online_gameplay_phase()))
 	end
-	if ITGOnline and ITGOnline.MarkReturnedToLobby then
-		ITGOnline:MarkReturnedToLobby()
-	end
-	local topScreen = SCREENMAN:GetTopScreen()
-	if not topScreen then return end
-
-	topScreen:SetPrevScreenName("ScreenOnlineLobbies")
-	topScreen:SetNextScreenName("ScreenOnlineLobbies")
-	if topScreen.begin_backing_out then
-		topScreen:begin_backing_out()
-	else
-		topScreen:StartTransitioningScreen("SM_GoToNextScreen")
-	end
+	return accepted
 end
 
 local function online_gameplay_should_route_to_evaluation()
@@ -91,17 +78,27 @@ end
 
 local RestartHandler = function(event)
 	if not event then return end
+	local isOnlineExitButton = ITGOnline and ITGOnline.currentRoomId
+		and (event.GameButton == "Start" or event.GameButton == "Back")
+
+	-- Consume the complete press/repeat/release sequence.  Letting Repeat reach
+	-- ScreenGameplay starts the engine's legacy hold-to-give-up timer and can
+	-- tear down both local players at once.
+	if isOnlineExitButton then
+		if event.type == "InputEventType_FirstPress" then
+			route_online_gameplay_to_lobby(
+				event.PlayerNumber or GAMESTATE:GetMasterPlayerNumber(),
+				event.GameButton
+			)
+		end
+		return true
+	end
 
 	if event.type == "InputEventType_FirstPress" then
 		if event.GameButton == "Back" and online_gameplay_phase() == "results" then
 			if online_gameplay_should_route_to_evaluation() then
 				route_online_gameplay_to_evaluation()
 			end
-			return true
-		end
-
-		if event.GameButton == "Back" and online_gameplay_routes_back_to_lobby() then
-			route_online_gameplay_to_lobby()
 			return true
 		end
 
@@ -143,6 +140,9 @@ local t = Def.ActorFrame{
 		end
 	end,
 	OnlinePhaseCheckCommand=function(self)
+		if ITGOnline and ITGOnline.ProgressGameplayExit then
+			ITGOnline:ProgressGameplayExit()
+		end
 		if ITGOnline
 			and ITGOnline.GameplayCompletionNeedsProgress
 			and ITGOnline:GameplayCompletionNeedsProgress()
