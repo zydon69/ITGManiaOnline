@@ -786,8 +786,10 @@ local function safe_folder_name(value)
 	return limit_safe_name(value)
 end
 
-local function pack_quarantine_path(packId, packName)
-	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId) .. "_" .. tostring(packName or "pack"))
+local function pack_quarantine_path(packId, packName, generation)
+	local folderName = safe_folder_name("__OnlineDownload_" .. tostring(packId)
+		.. "_" .. tostring(packName or "pack")
+		.. "_g" .. tostring(math.max(1, math.floor(tonumber(generation) or 1))))
 	return "/Songs/" .. folderName .. "/"
 end
 
@@ -1050,21 +1052,24 @@ local function chart_hash_for_steps(steps)
 end
 
 local function song_count_key()
-	if not SONGMAN or not SONGMAN.GetAllSongs then return "" end
-	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
-	if not ok or type(songs) ~= "table" then return "" end
-	return tostring(#songs)
+	if not SONGMAN or not SONGMAN.GetNumSongs then return "" end
+	local ok, count = pcall(function() return SONGMAN:GetNumSongs() end)
+	if not ok or not tonumber(count) then return "" end
+	return tostring(math.max(0, math.floor(tonumber(count))))
 end
 
 local function local_song_library_key()
-	if not SONGMAN or not SONGMAN.GetAllSongs then return "" end
-	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
-	if not ok or type(songs) ~= "table" then return "" end
-	if PackSync.localSongLibraryFingerprint ~= ""
-		and PackSync.localSongLibraryFingerprintCount == #songs
+	if not SONGMAN or not SONGMAN.GetAllSongs or not SONGMAN.GetNumSongs then return "" end
+	local countOk, count = pcall(function() return SONGMAN:GetNumSongs() end)
+	count = countOk and math.max(0, math.floor(tonumber(count) or -1)) or -1
+	if count >= 0
+		and PackSync.localSongLibraryFingerprint ~= ""
+		and PackSync.localSongLibraryFingerprintCount == count
 	then
 		return PackSync.localSongLibraryFingerprint
 	end
+	local ok, songs = pcall(function() return SONGMAN:GetAllSongs() end)
+	if not ok or type(songs) ~= "table" then return "" end
 	local dirs = {}
 	for song in ivalues(songs) do
 		local dir = song and song.GetSongDir and tostring(song:GetSongDir() or "") or ""
@@ -1829,42 +1834,10 @@ function PackSync:UpdateStatus(status, message, progress, callback, options)
 		end
 	end
 
-	if ITGOnline.IsLocalTwoPlayerSession
-		and ITGOnline:IsLocalTwoPlayerSession()
-		and ITGOnline.LocalPartyRoomComplete
-		and ITGOnline:LocalPartyRoomComplete(ITGOnline.currentRoom)
-		and ITGOnline.RequestAsLocalPlayer
-	then
-		local companionPayload = {}
-		for key, value in pairs(payload) do companionPayload[key] = value end
-		companionPayload.client_action_id = ITGOnline:NewClientActionId("p2-pack-status")
-		trace("Status companion request localPlayer=P2"
-			.. " status=" .. tostring(status)
-			.. " room=" .. tostring(requestRoomId)
-			.. " sequence=" .. tostring(requestSequence)
-			.. " selected_at=" .. tostring(requestSelectedAt))
-		ITGOnline:RequestAsLocalPlayer(PLAYER_2, "POST",
-			"/rooms/" .. requestRoomId .. "/pack-sync-status",
-			companionPayload, function(ok, decoded, response)
-				trace("Status companion response localPlayer=P2"
-					.. " status=" .. tostring(status)
-					.. " room=" .. tostring(requestRoomId)
-					.. " ok=" .. tostring(ok == true)
-					.. " statusCode=" .. tostring(response and response.statusCode or "nil")
-					.. " error=" .. tostring(decoded and decoded.error_code
-						or response and response.errorMessage or "nil"))
-				if ok and decoded and decoded.room and ITGOnline.ApplyRoomSnapshot then
-					ITGOnline:ApplyRoomSnapshot(decoded.room, "pack_sync_status_p2")
-					MESSAGEMAN:Broadcast("OnlineLobbyState", ITGOnline:LobbyStatePayload(decoded.room))
-				elseif not ok then
-					MESSAGEMAN:Broadcast("ITGOnlineLocalPartyPackSyncFailed", {
-						localPlayer = "P2",
-						status = status,
-						errorCode = decoded and decoded.error_code or nil,
-					})
-				end
-			end)
-	end
+	-- Pack state belongs to the physical machine. The authenticated coordinator
+	-- submits it once; LocalPartyPackSyncProjector locks and updates P1/P2 in the
+	-- same server transaction. A second client request used to create two
+	-- independent sequences and could leave the pair on different states.
 
 	ITGOnline:Request("POST", "/rooms/" .. requestRoomId .. "/pack-sync-status", payload, function(ok, decoded, response)
 		local ownsActiveRequest = tonumber(self.statusPostActiveRequestToken) == tonumber(requestToken)
@@ -2655,7 +2628,7 @@ function PackSync:FindLocalMatch(songInfo)
 				.. " selected_at=" .. selected_at(songInfo))
 			return { ok = false, status = "missing", reason = "chart_hash_mismatch" }
 		end
-		if not (SONGMAN and SONGMAN.FindSong and SONGMAN.GetAllSongs) then
+		if not (SONGMAN and SONGMAN.FindSong) then
 			trace("Local chart scan failed reason=songman_unavailable title=" .. selected_title(songInfo)
 				.. " pack=" .. selected_pack(songInfo)
 				.. " selected_at=" .. selected_at(songInfo))
@@ -2698,6 +2671,32 @@ function PackSync:FindLocalMatch(songInfo)
 		trace("Candidate local song_dir=" .. tostring(song and song.GetSongDir and song:GetSongDir() or ""))
 		trace("Candidate local chart_hash=" .. tostring(chart_hash_for_steps(steps) or ""))
 		local payload = build_payload(song, steps)
+		if not payload and ITGOnline and ITGOnline.PrepareSongFileHashes then
+			local preparationKey = table.concat({
+				tostring(selected_at(songInfo)),
+				tostring(song and song.GetSongDir and song:GetSongDir() or ""),
+				tostring(chart_hash_for_steps(steps) or ""),
+			}, "|")
+			self.hashPreparationInFlight = self.hashPreparationInFlight or {}
+			if self.hashPreparationInFlight[preparationKey] ~= true then
+				self.hashPreparationInFlight[preparationKey] = true
+				ITGOnline:PrepareSongFileHashes(song, function(ok, errorCode)
+					self.hashPreparationInFlight[preparationKey] = nil
+					if selected_at(self.currentSongInfo) ~= selected_at(songInfo) then return end
+					trace("Candidate hash preparation complete key=" .. tostring(preparationKey)
+						.. " ok=" .. tostring(ok == true)
+						.. " error=" .. tostring(errorCode or "nil"))
+					if ok then self:ApplySelectedChart(songInfo) end
+				end)
+			end
+			return {
+				ok = false,
+				deferred = true,
+				traceEmitted = true,
+				status = "hashing_local_files",
+				reason = "hashing_local_files",
+			}
+		end
 		local payloadOk, reason = payload_matches_selected(payload, songInfo)
 		if payload then
 			trace("Candidate payload chart_hash=" .. tostring(payload.chart_hash or "")
@@ -2725,15 +2724,6 @@ function PackSync:FindLocalMatch(songInfo)
 		if result then return result end
 	end
 
-		local okSongs, allSongs = pcall(function() return SONGMAN:GetAllSongs() end)
-		allSongs = okSongs and type(allSongs) == "table" and allSongs or {}
-		for song in ivalues(allSongs) do
-			if song ~= exactSong and song_matches_text_prefilter(song, songInfo) then
-				local result = evaluate_candidate(song)
-			if result then return result end
-		end
-	end
-
 	local indexedCandidates = {}
 	if SONGMAN.FindStepsByOnlineChartHash then
 		local okCandidates, candidates = pcall(function()
@@ -2752,22 +2742,10 @@ function PackSync:FindLocalMatch(songInfo)
 	trace("Local chart hash index candidates hash=" .. tostring(expectedChartHash)
 		.. " count=" .. tostring(#indexedCandidates))
 	for candidate in ivalues(indexedCandidates) do
-		if candidate.song ~= exactSong and not song_matches_text_prefilter(candidate.song, songInfo) then
+		if candidate.song ~= exactSong then
 			trace("Candidate chart found via hash index " .. tostring(candidate.song:GetSongDir()))
-			local payload = build_payload(candidate.song, candidate.steps)
-			local payloadOk, reason = payload_matches_selected(payload, songInfo)
-			if payloadOk then
-				trace("Matching local chart found via hash index " .. tostring(candidate.song:GetSongDir()))
-				local matchMessage = pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
-				self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
-				local result = { ok = true, status = "matched", song = candidate.song, steps = candidate.steps, payload = payload, matchSource = "alternate_pack", matchMessage = matchMessage }
-				self.localScanCache[scanKey] = result
-				return result
-			end
-			trace("Candidate hash index mismatch dir=" .. tostring(candidate.song:GetSongDir())
-				.. " reason=" .. tostring(reason or "unknown")
-				.. " expectedSongHash=" .. tostring(selected_song_hash(songInfo)))
-			mismatchReason = mismatchReason or reason or "chart_mismatch"
+			local result = evaluate_candidate(candidate.song, "alternate pack")
+			if result then return result end
 		end
 	end
 
@@ -3694,9 +3672,14 @@ function PackSync:DownloadPackByCandidate(songInfo, pack, callback, options)
 	end
 		local downloadGeneration = tonumber(options.downloadGeneration)
 			or self:NextDownloadGeneration(browseOnly and "browse_candidate_start" or "selected_candidate_start")
-			local fileName = "itg-online-" .. tostring(packId) .. "_" .. safe_file_name(packName)
+			-- Every transfer owns immutable staging paths. A late callback from a
+			-- cancelled generation can therefore clean up only its own archive and
+			-- quarantine, never the replacement transfer for the same pack.
+			local fileName = "itg-online-" .. tostring(packId)
+				.. "_g" .. tostring(downloadGeneration)
+				.. "_" .. safe_file_name(packName)
 			local zipPath = "/Downloads/" .. fileName
-			local quarantinePath = pack_quarantine_path(packId, packName)
+			local quarantinePath = pack_quarantine_path(packId, packName, downloadGeneration)
 		local maxDownloadBytes = tonumber(self.maxDownloadBytes) or (5 * 1024 * 1024 * 1024)
 		local defaultMaxDownloadBytes = 5 * 1024 * 1024 * 1024
 		local maximumDownloadBytes = 5 * 1024 * 1024 * 1024

@@ -888,7 +888,7 @@ assert(not packReadySource:find("ITGOnline:SetReady", 1, true),
 	"pack synchronization must not issue an independent lobby-ready request")
 assert(onlinePackSyncSource:find("apply_selected_chart_cached", 1, true),
 	"repeated room snapshots must not rescan and rehash an already applied local chart")
-assert(onlinePackSyncSource:find("localSongLibraryFingerprintCount == #songs", 1, true),
+assert(onlinePackSyncSource:find("localSongLibraryFingerprintCount == count", 1, true),
 	"the unchanged local song library must reuse its directory fingerprint")
 assert(lobbySource:find("local_companion_read_only", 1, true),
 	"Player 2 lobby controls must remain read-only")

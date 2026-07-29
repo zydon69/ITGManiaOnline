@@ -179,6 +179,8 @@ ITGOnline.lastUnversionedPlayStateFetchAt = ITGOnline.lastUnversionedPlayStateFe
 ITGOnline.lastRoomNotPlayingScoreRejectAt = ITGOnline.lastRoomNotPlayingScoreRejectAt or 0
 ITGOnline.processedRealtimeEventIds = ITGOnline.processedRealtimeEventIds or {}
 ITGOnline.processedRealtimeEventOrder = ITGOnline.processedRealtimeEventOrder or {}
+ITGOnline.processedRealtimeEventHead = math.max(1,
+	math.floor(tonumber(ITGOnline.processedRealtimeEventHead) or 1))
 ITGOnline.processedRealtimeEventLimit = math.max(4096, tonumber(ITGOnline.processedRealtimeEventLimit) or 0)
 ITGOnline.deletedRoomIds = ITGOnline.deletedRoomIds or {}
 ITGOnline.leavingRoomIds = ITGOnline.leavingRoomIds or {}
@@ -742,9 +744,12 @@ end
 
 local function local_player_key(player)
 	if ITGOnlineLocalIdentity and ITGOnlineLocalIdentity.side then
-		return ITGOnlineLocalIdentity.side(player, PLAYER_1, PLAYER_2) or "P1"
+		local side = ITGOnlineLocalIdentity.side(player, PLAYER_1, PLAYER_2)
+		if side then return side end
 	end
-	return player == PLAYER_2 and "P2" or "P1"
+	if player == PLAYER_1 then return "P1" end
+	if player == PLAYER_2 then return "P2" end
+	error("invalid local player identity")
 end
 
 local function local_player_session(player)
@@ -1597,16 +1602,73 @@ local function sha256_hex(value)
 	return hexOk and tostring(hex or ""):lower() or ""
 end
 
+local onlineSongFileHashCache = {}
+local onlineSongFileHashInFlight = {}
+
+local function song_file_signature(path)
+	path = tostring(path or "")
+	if path == "" then return nil end
+	local size = FILEMAN and FILEMAN.GetFileSizeBytes and FILEMAN:GetFileSizeBytes(path) or -1
+	local fileHash = FILEMAN and FILEMAN.GetHashForFile and FILEMAN:GetHashForFile(path) or -1
+	if tonumber(size) == nil or tonumber(size) < 0 then return nil end
+	return table.concat({ path, tostring(size), tostring(fileHash) }, "|")
+end
+
 local function sha256_file_hex(path)
-	if not path or path == "" or not CRYPTMAN or not CRYPTMAN.SHA256File then return nil end
-	local ok, digest = safe_call("sha256_file", function() return CRYPTMAN:SHA256File(path) end)
-	if ok and digest and digest ~= "" then
-		local hexOk, hex = safe_call("binary_to_hex:file", function()
-			return BinaryToHex(digest)
-		end)
-		return hexOk and tostring(hex or ""):lower() or nil
+	local signature = song_file_signature(path)
+	return signature and onlineSongFileHashCache[signature] or nil
+end
+
+local function prepare_song_file_hash(path, callback)
+	local signature = song_file_signature(path)
+	if not signature then
+		safe_callback(callback, false, nil, "file_unavailable")
+		return
 	end
-	return nil
+	if onlineSongFileHashCache[signature] then
+		safe_callback(callback, true, onlineSongFileHashCache[signature])
+		return
+	end
+	if onlineSongFileHashInFlight[signature] then
+		onlineSongFileHashInFlight[signature][#onlineSongFileHashInFlight[signature] + 1] = callback
+		return
+	end
+	if not (NETWORK and NETWORK.HashOnlineSongFile) then
+		safe_callback(callback, false, nil, "hash_worker_unavailable")
+		return
+	end
+
+	onlineSongFileHashInFlight[signature] = { callback }
+	local queued, futureOrError = pcall(function()
+		return NETWORK:HashOnlineSongFile({
+			path = path,
+			onComplete = function(result)
+				local callbacks = onlineSongFileHashInFlight[signature] or {}
+				onlineSongFileHashInFlight[signature] = nil
+				result = type(result) == "table" and result or {}
+				local currentSignature = song_file_signature(path)
+				local digest = tostring(result.sha256 or ""):lower()
+				local ok = result.ok == true and currentSignature == signature
+					and digest:match("^[a-f0-9]+$") ~= nil and #digest == 64
+				if ok then onlineSongFileHashCache[signature] = digest end
+				for _, pendingCallback in ipairs(callbacks) do
+					safe_callback(
+						pendingCallback,
+						ok,
+						ok and digest or nil,
+						result.errorCode or (currentSignature ~= signature and "file_changed" or "hash_failed")
+					)
+				end
+			end,
+		})
+	end)
+	if not queued then
+		local callbacks = onlineSongFileHashInFlight[signature] or {}
+		onlineSongFileHashInFlight[signature] = nil
+		for _, pendingCallback in ipairs(callbacks) do
+			safe_callback(pendingCallback, false, nil, tostring(futureOrError))
+		end
+	end
 end
 
 local function manifest_file_name(path)
@@ -2189,12 +2251,16 @@ function ITGOnline:LocalPlayerKey(player)
 end
 
 function ITGOnline:LocalIdentity(player)
-	local identity = ITGOnlineLocalIdentity.describe(
+	local identity, identityError = ITGOnlineLocalIdentity.describe(
 		player,
 		PLAYER_1,
 		PLAYER_2,
 		self:LocalPartyPlan()
 	)
+	if not identity then
+		error("ITG Online local identity contract violation: "
+			.. tostring(identityError or "invalid_local_identity"))
+	end
 	identity.user = self:UserForLocalPlayer(identity.player)
 	return identity
 end
@@ -2239,7 +2305,11 @@ function ITGOnline:RequiredLocalPlayers()
 	local players = {}
 	for _, side in ipairs(plan.requiredSides or {}) do
 		if ITGOnlineLocalIdentity and ITGOnlineLocalIdentity.player then
-			players[#players + 1] = ITGOnlineLocalIdentity.player(side, PLAYER_1, PLAYER_2)
+			local player = ITGOnlineLocalIdentity.player(side, PLAYER_1, PLAYER_2)
+			if not player then
+				error("ITG Online local party plan contains an invalid side: " .. tostring(side))
+			end
+			players[#players + 1] = player
 		else
 			players[#players + 1] = tostring(side) == "P2" and PLAYER_2 or PLAYER_1
 		end
@@ -2269,12 +2339,13 @@ function ITGOnline:IsPrimaryLocalPlayer(player)
 	if not player then return false end
 	local plan = self:LocalPartyPlan()
 	if ITGOnlineLocalIdentity and ITGOnlineLocalIdentity.describe then
-		return ITGOnlineLocalIdentity.describe(
+		local identity = ITGOnlineLocalIdentity.describe(
 			player,
 			PLAYER_1,
 			PLAYER_2,
 			plan
-		).isPrimary == true
+		)
+		return identity ~= nil and identity.isPrimary == true
 	end
 	return local_player_key(player) == tostring(plan.coordinatorSide or "")
 end
@@ -2589,6 +2660,7 @@ function ITGOnline:InvalidateAuthenticatedSession(reason, payload)
 	end
 	self.socket = nil
 	self.realtimeConnecting = false
+	self.realtimeConnectStartedAt = 0
 	self.realtimeConnected = false
 	self.pendingRealtimeConnectCallbacks = {}
 	self.activeRealtimeCallbacks = nil
@@ -3072,6 +3144,7 @@ function ITGOnline:ForceRealtimeReconnect(reason)
 	self.socket = nil
 	self.realtimeConnected = false
 	self.realtimeConnecting = false
+	self.realtimeConnectStartedAt = 0
 	self.activeRealtimeCallbacks = nil
 	self.pendingRealtimeConnectCallbacks = {}
 
@@ -3148,6 +3221,67 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 
 	local didWork = false
+	local expiredRequestIds = {}
+	for requestId, record in pairs(self.requests or {}) do
+		local requestStartedAt = tonumber(record.startedAt) or now
+		local timeoutSeconds = tonumber(record.watchdogTimeoutSeconds) or 50
+		if now - requestStartedAt >= timeoutSeconds then
+			expiredRequestIds[#expiredRequestIds + 1] = requestId
+		end
+	end
+	for _, requestId in ipairs(expiredRequestIds) do
+		local record = self.requests and self.requests[requestId] or nil
+		if record then
+			self.requests[requestId] = nil
+			if record.future and record.future.Cancel then
+				safe_call("http_request_watchdog_cancel", function() record.future:Cancel() end)
+			end
+			online_flow_trace("http_request_watchdog_timeout id=" .. tostring(requestId)
+				.. " method=" .. tostring(record.method or "nil")
+				.. " path=" .. tostring(record.path or "nil"))
+			safe_callback(record.callback, false, nil, {
+				error = "request_watchdog_timeout",
+				error_code = "request_watchdog_timeout",
+				errorMessage = "The server request timed out.",
+			})
+			didWork = true
+		end
+	end
+
+	local connectTimeout = tonumber(self.realtimeConnectTimeoutSeconds) or 20
+	if self.realtimeConnecting
+		and now - (tonumber(self.realtimeConnectStartedAt) or now) >= connectTimeout
+	then
+		online_flow_trace("realtime_connect_watchdog_timeout age="
+			.. tostring(now - (tonumber(self.realtimeConnectStartedAt) or now)))
+		self.realtimeConnecting = false
+		self.realtimeConnected = false
+		self.realtimeConnectStartedAt = 0
+		if self.socket then safe_call("socket_close:connect_watchdog", function() self.socket:Close() end) end
+		self.socket = nil
+		self:FlushRealtimeConnectCallbacks("error", "Realtime connection timed out.")
+		self:ScheduleRealtimeReconnect("connect_watchdog_timeout")
+		didWork = true
+	end
+	for _, context in pairs(self.localPartyRealtime or {}) do
+		if type(context) == "table"
+			and context.connecting == true
+			and now - (tonumber(context.connectStartedAt) or now) >= connectTimeout
+		then
+			context.connecting = false
+			context.connected = false
+			context.connectStartedAt = 0
+			if context.socket then
+				safe_call("companion_socket_close:connect_watchdog", function() context.socket:Close() end)
+			end
+			context.socket = nil
+			if self.ScheduleCompanionRealtimeReconnect then
+				self:ScheduleCompanionRealtimeReconnect(context, "connect_watchdog_timeout")
+			end
+			didWork = true
+		end
+	end
+
 	if self.MaintainCompanionRealtime and self:MaintainCompanionRealtime(source) then
 		didWork = true
 	end
@@ -3775,6 +3909,8 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 		cancelGeneration = self.requestCancelGeneration,
 		callback = callback,
 		localPlayer = tostring(options.localPlayer or local_player_key(active_online_player())),
+		startedAt = GetTimeSinceStart(),
+		watchdogTimeoutSeconds = math.max(5, tonumber(options.watchdogTimeoutSeconds) or 50),
 	}
 
 	local headers = {
@@ -8950,6 +9086,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 	end
 
 	self.realtimeConnecting = true
+	self.realtimeConnectStartedAt = GetTimeSinceStart()
 	self:RememberRealtimeConnectCallbacks(callbacks)
 	online_flow_trace("connect_websocket_ticket_request generation=" .. tostring(self.realtimeGeneration or "nil")
 		.. " hasToken=" .. tostring(tostring(sessionAccessToken or "") ~= "")
@@ -8976,6 +9113,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 		})
 		if not ok or not decoded or not decoded.ticket then
 			self.realtimeConnecting = false
+			self.realtimeConnectStartedAt = 0
 			self.realtimeConnected = false
 			self:FlushRealtimeConnectCallbacks(
 				"error",
@@ -9027,6 +9165,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 					if msgType == "Open" then
 						self.lastRealtimeMessageAt = GetTimeSinceStart()
 						self.realtimeConnecting = false
+						self.realtimeConnectStartedAt = 0
 						self.realtimeConnected = true
 						online_flow_trace("realtime_socket_open generation=" .. tostring(generation)
 							.. " room=" .. tostring(self.currentRoomId or "nil")
@@ -9113,10 +9252,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 								.. " name=" .. eventName
 								.. " error=" .. tostring(err or "unknown"))
 						end
-						-- Older servers did not expose requires_ack. Preserve compatibility
-						-- during a staggered rollout, while avoiding ACK traffic for events
-						-- that explicitly declare themselves volatile.
-						local requiresAck = normalizedPayload and normalizedPayload.requires_ack ~= false
+						local requiresAck = normalizedPayload and normalizedPayload.requires_ack == true
 						if handled and normalizedPayload and normalizedPayload.id and requiresAck
 							and not normalizedPayload._itgOnlineAckHandled then
 							online_flow_trace("realtime_ack_begin id=" .. tostring(normalizedPayload.id)
@@ -9149,6 +9285,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						end
 						elseif msgType == "Close" then
 							self.realtimeConnecting = false
+							self.realtimeConnectStartedAt = 0
 							self.realtimeConnected = false
 							if self.socket == socket then self.socket = nil end
 						online_flow_trace("realtime_socket_close reason=" .. tostring(msg.reason or "")
@@ -9177,6 +9314,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 						end
 						elseif msgType == "Error" then
 							self.realtimeConnecting = false
+							self.realtimeConnectStartedAt = 0
 							self.realtimeConnected = false
 							if self.socket == socket then self.socket = nil end
 						online_flow_trace("realtime_socket_error reason=" .. tostring(msg.reason or "")
@@ -9209,6 +9347,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 		end)
 		if not socketOk or not socketOrError then
 			self.realtimeConnecting = false
+			self.realtimeConnectStartedAt = 0
 			self.realtimeConnected = false
 			self.socket = nil
 			self:FlushRealtimeConnectCallbacks("error", "WebSocket could not be opened.")
@@ -9469,6 +9608,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 	end
 
 	context.connecting = true
+	context.connectStartedAt = GetTimeSinceStart()
 	context.pendingCallbacks = context.pendingCallbacks or {}
 	append_coalesced_callback(context.pendingCallbacks, callbacks, "companion_realtime", function(bundle)
 		safe_callback(bundle and bundle.error, "Too many companion realtime subscribers.")
@@ -9480,6 +9620,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 	}, function(ok, decoded, response)
 		if not ok or not decoded or not decoded.ticket then
 			context.connecting = false
+			context.connectStartedAt = 0
 			context.connected = false
 			local pending = context.pendingCallbacks or {}
 			context.pendingCallbacks = {}
@@ -9492,6 +9633,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 
 		self:CloseCompanionRealtime(player, "replace")
 		context.connecting = true
+		context.connectStartedAt = GetTimeSinceStart()
 		context.generation = (tonumber(context.generation) or 0) + 1
 		local generation = context.generation
 		local socket
@@ -9511,6 +9653,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 					local messageType = ToEnumShortString(message.type)
 					if messageType == "Open" then
 						context.connecting = false
+						context.connectStartedAt = 0
 						context.connected = true
 						context.lastMessageAt = GetTimeSinceStart()
 						context.reconnectAttempt = 0
@@ -9530,7 +9673,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 								.. " reason=" .. tostring(handleError or "unknown"))
 							return
 						end
-						local requiresAck = normalized and normalized.requires_ack ~= false
+						local requiresAck = normalized and normalized.requires_ack == true
 						if requiresAck and normalized and normalized.id then
 							local encodedOk, encoded = pcall(JsonEncode, {
 								action = "ack",
@@ -9547,6 +9690,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 						end
 					elseif messageType == "Close" or messageType == "Error" then
 						context.connecting = false
+						context.connectStartedAt = 0
 						context.connected = false
 						if context.socket == socket then context.socket = nil end
 						local pending = context.pendingCallbacks or {}
@@ -9567,6 +9711,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 		end)
 		if not socketOk or not socketOrError then
 			context.connecting = false
+			context.connectStartedAt = 0
 			context.connected = false
 			context.socket = nil
 			local pending = context.pendingCallbacks or {}
@@ -9899,6 +10044,7 @@ function ITGOnline:Disconnect(options)
 	end
 	self.socket = nil
 	self.realtimeConnecting = false
+	self.realtimeConnectStartedAt = 0
 	self.realtimeConnected = false
 	self.pendingRealtimeConnectCallbacks = {}
 	self.activeRealtimeCallbacks = nil
@@ -10582,6 +10728,30 @@ end
 
 -- Song identity, selection, and local chart matching
 -- -----------------------------------------------------------------------
+
+function ITGOnline:PrepareSongFileHashes(song, callback)
+	if not song then
+		safe_callback(callback, false, "missing_song")
+		return
+	end
+	local paths = {
+		song.GetSongFilePath and song:GetSongFilePath() or "",
+		song.GetMusicPath and song:GetMusicPath() or "",
+	}
+	local remaining = #paths
+	local succeeded = true
+	local firstError = nil
+	for _, path in ipairs(paths) do
+		prepare_song_file_hash(path, function(ok, _, errorCode)
+			succeeded = succeeded and ok == true
+			firstError = firstError or errorCode
+			remaining = remaining - 1
+			if remaining == 0 then
+				safe_callback(callback, succeeded, firstError)
+			end
+		end)
+	end
+end
 
 function ITGOnline:BuildSongPayloadFor(song, steps)
 	online_flow_trace_throttled("song_payload_build_for", 1.0,
@@ -11365,6 +11535,32 @@ function ITGOnline:SelectSong(callback, options)
 		return
 	end
 	local payload = self:BuildSongPayloadFor(song, steps)
+	if not payload and options.songHashesPrepared ~= true then
+		options.songHashesPrepared = true
+		online_flow_trace("song_selection_hash_prepare_begin"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " song=" .. tostring(song:GetDisplayFullTitle()))
+		self:PrepareSongFileHashes(song, function(hashOk, hashError)
+			local currentSong = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+			local currentSteps = GAMESTATE and GAMESTATE.GetCurrentSteps
+				and GAMESTATE:GetCurrentSteps(first_enabled_player()) or nil
+			if currentSong ~= song or currentSteps ~= steps then
+				options.songHashesPrepared = false
+			end
+			if hashOk then
+				self:SelectSong(callback, options)
+				return
+			end
+			online_flow_trace("song_selection_hash_prepare_failed"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " error=" .. tostring(hashError or "unknown"))
+			safe_callback(callback, false, nil, {
+				error = "song_hash_unavailable",
+				errorMessage = "Unable to verify the selected song files.",
+			})
+		end)
+		return
+	end
 	if not payload then
 		local songFilePath = song and song.GetSongFilePath and song:GetSongFilePath() or ""
 		local musicPath = song and song.GetMusicPath and song:GetMusicPath() or ""
@@ -12189,13 +12385,27 @@ function ITGOnline:ClearSongPreview(reason, callback)
 	self:DispatchPendingSongPreviewClear(key)
 end
 
-function ITGOnline:PreviewSong(callback)
+function ITGOnline:PreviewSong(callback, hashesPrepared)
 	if not self.currentRoomId then
 		online_flow_trace("song_preview_failed reason=no_current_room")
 		safe_callback(callback, false, nil, { errorMessage = "No active online room." })
 		return
 	end
 	local payload = self:BuildSongPayload()
+	if not payload and hashesPrepared ~= true then
+		local song = GAMESTATE and GAMESTATE.GetCurrentSong and GAMESTATE:GetCurrentSong() or nil
+		self:PrepareSongFileHashes(song, function(ok)
+			if ok then
+				self:PreviewSong(callback, true)
+			else
+				safe_callback(callback, false, {
+					skipped = true,
+					reason = "song_hash_unavailable",
+				}, { errorMessage = "The song preview files could not be verified.", skipped = true })
+			end
+		end)
+		return
+	end
 	if not payload then
 		online_flow_trace("song_preview_skipped reason=no_payload"
 			.. " room=" .. tostring(self.currentRoomId or "nil")
@@ -18939,6 +19149,18 @@ function ITGOnline:ReportSongAvailability(missing, reason, callback)
 		local expectedSong = selectedPayload or selectedSong or {}
 		local localPayload, localSourceOrReason = self:ResolveSelectedSongAvailabilityPayload(expectedSong, reason)
 		if not localPayload then
+			if localSourceOrReason == "hashing_local_files" then
+				online_flow_trace("song_availability_deferred reason=hashing_local_files"
+					.. " selectedAt=" .. tostring(payload.selected_at or "nil"))
+				safe_callback(callback, false, nil, {
+					errorCode = "song_availability_deferred",
+					errorMessage = "hashing_local_files",
+					deferred = true,
+					deferredReason = "hashing_local_files",
+					retryAfter = 0.25,
+				})
+				return
+			end
 			online_flow_trace("song_availability_local_check_failed reason=" .. tostring(localSourceOrReason or "local_payload_unavailable")
 				.. " selectedAt=" .. tostring(payload.selected_at or "nil")
 				.. " selectedSongHash=" .. tostring(expectedSong.song_hash or expectedSong.songHash or "nil")
@@ -19938,6 +20160,8 @@ function ITGOnline:CommitRealtimeEventProcessed(eventId)
 
 	self.processedRealtimeEventIds = self.processedRealtimeEventIds or {}
 	self.processedRealtimeEventOrder = self.processedRealtimeEventOrder or {}
+	self.processedRealtimeEventHead = math.max(1,
+		math.floor(tonumber(self.processedRealtimeEventHead) or 1))
 	if not self.processedRealtimeEventIds[normalizedId] then
 		self.processedRealtimeEventIds[normalizedId] = true
 		self.processedRealtimeEventOrder[#self.processedRealtimeEventOrder + 1] = normalizedId
@@ -19946,9 +20170,23 @@ function ITGOnline:CommitRealtimeEventProcessed(eventId)
 	local limit = math.max(1, math.min(4096,
 		math.floor(tonumber(self.processedRealtimeEventLimit) or 4096)))
 	self.processedRealtimeEventLimit = limit
-	while #self.processedRealtimeEventOrder > limit do
-		local oldestId = table.remove(self.processedRealtimeEventOrder, 1)
+	while (#self.processedRealtimeEventOrder - self.processedRealtimeEventHead + 1) > limit do
+		local oldestId = self.processedRealtimeEventOrder[self.processedRealtimeEventHead]
+		self.processedRealtimeEventOrder[self.processedRealtimeEventHead] = nil
+		self.processedRealtimeEventHead = self.processedRealtimeEventHead + 1
 		if oldestId then self.processedRealtimeEventIds[oldestId] = nil end
+	end
+	-- Compact only after a large inactive prefix has accumulated.  Normal event
+	-- commits stay O(1); this bounded copy runs at most once per 4096 evictions.
+	if self.processedRealtimeEventHead > limit
+		and self.processedRealtimeEventHead > (#self.processedRealtimeEventOrder / 2)
+	then
+		local compacted = {}
+		for index = self.processedRealtimeEventHead, #self.processedRealtimeEventOrder do
+			compacted[#compacted + 1] = self.processedRealtimeEventOrder[index]
+		end
+		self.processedRealtimeEventOrder = compacted
+		self.processedRealtimeEventHead = 1
 	end
 
 	if online_decimal_id_greater(normalizedId, self.lastEventCursor) then

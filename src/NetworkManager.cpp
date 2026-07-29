@@ -667,6 +667,22 @@ bool NormalizeOnlineArchivePaths(
   return true;
 }
 
+bool NormalizeOnlineSongFilePath(std::string& path) {
+  FixSlashesInPlace(path);
+  CollapsePath(path, true);
+  static const std::string songsRoot = "/Songs/";
+  if (path.size() <= songsRoot.size() ||
+      CompareNoCase(path.substr(0, songsRoot.size()), songsRoot) != 0 ||
+      path.back() == '/' || path.find('\0') != std::string::npos) {
+    return false;
+  }
+
+  const std::string extension = GetExtension(path);
+  return EqualsNoCase(extension, "sm") || EqualsNoCase(extension, "ssc") ||
+         EqualsNoCase(extension, "dwi") || EqualsNoCase(extension, "mp3") ||
+         EqualsNoCase(extension, "ogg") || EqualsNoCase(extension, "wav");
+}
+
 bool IsLowerHexSha256(const std::string& value) {
   return value.empty() ||
          (value.size() == 64 &&
@@ -733,10 +749,15 @@ static const char* WebSocketMessageTypeNames[] = {
     "Error",
 };
 
-static constexpr int kBaseMainThreadTasksPerUpdate = 256;
-static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.004f;
-static constexpr int kBacklogMainThreadTasksPerUpdate = 512;
-static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.008f;
+// Network callbacks execute arbitrary Lua and therefore share the render
+// thread's frame budget. Keep routine delivery below one millisecond and allow
+// a bounded two-millisecond catch-up window; queued terminal callbacks are
+// retained and delivered on subsequent frames instead of creating visible
+// 4–8 ms stalls.
+static constexpr int kBaseMainThreadTasksPerUpdate = 64;
+static constexpr float kBaseMainThreadTaskSecondsPerUpdate = 0.001f;
+static constexpr int kBacklogMainThreadTasksPerUpdate = 128;
+static constexpr float kBacklogMainThreadTaskSecondsPerUpdate = 0.002f;
 static constexpr std::size_t kBacklogAdaptiveThreshold = 8;
 static std::atomic<std::uint64_t> g_LuaHttpCallbackStateIds{0};
 static std::atomic<std::uint64_t> g_LuaWebSocketCallbackStateIds{0};
@@ -2704,6 +2725,93 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     return 1;
   }
 
+  static int HashOnlineSongFile(T* p, lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "path");
+    if (!lua_isstring(L, -1)) {
+      lua_pop(L, 1);
+      luaL_error(L, "path must be a string");
+    }
+    std::string path = lua_tostring(L, -1);
+    lua_pop(L, 1);
+    if (!NormalizeOnlineSongFilePath(path)) {
+      luaL_error(L, "path is outside the online song file boundary");
+    }
+
+    auto callbackState = std::make_shared<LuaHttpCallbackState>();
+    callbackState->id = ++g_LuaHttpCallbackStateIds;
+    callbackState->url = "online-song-file-hash";
+    lua_getfield(L, 1, "onComplete");
+    if (!lua_isfunction(L, -1)) {
+      lua_pop(L, 1);
+      luaL_error(L, "onComplete must be a function");
+    }
+    callbackState->responseRef = luaL_ref(L, LUA_REGISTRYINDEX);
+    RegisterLuaHttpCallbackState(callbackState);
+
+    auto requestArgs = std::make_shared<ix::HttpRequestArgs>();
+    auto future = std::make_shared<HttpRequestFuture>(requestArgs);
+    const bool queued = p->EnqueueDownloadTask(
+        [p, path, requestArgs, callbackState]() {
+          std::string digestHex;
+          std::string errorCode;
+          if (requestArgs->cancel.load()) {
+            errorCode = "cancelled";
+          } else if (FILEMAN == nullptr || CRYPTMAN == nullptr ||
+                     !FILEMAN->DoesFileExist(path)) {
+            errorCode = "file_unavailable";
+          } else {
+            const auto shouldCancel = [requestArgs]() {
+              return requestArgs->cancel.load();
+            };
+            const std::string digest =
+                CryptManager::GetSHA256ForFile(path, shouldCancel);
+            if (!digest.empty()) {
+              digestHex = BinaryToHex(digest);
+              MakeLower(digestHex);
+            }
+            if (requestArgs->cancel.load()) {
+              errorCode = "cancelled";
+            } else if (!IsLowerHexSha256(digestHex) || digestHex.empty()) {
+              errorCode = "hash_unavailable";
+            }
+          }
+
+          callbackState->active = false;
+          if (!p->EnqueueMainThreadTask(
+                  [digestHex, errorCode, callbackState]() {
+                    if (!WithLua([digestHex, errorCode,
+                                  callbackState](Lua* state) {
+                          if (!callbackState->canceled.load() &&
+                              !callbackState->refsReleased &&
+                              callbackState->responseRef != LUA_NOREF) {
+                            handleOnlineSongFileHashResult(
+                                state, digestHex, errorCode,
+                                callbackState->responseRef);
+                          }
+                          ReleaseLuaHttpCallbackRefs(state, callbackState);
+                        })) {
+                      DeferLuaHttpCallbackRefRelease(callbackState);
+                    }
+                  },
+                  true)) {
+            DeferLuaHttpCallbackRefRelease(callbackState);
+          }
+        });
+
+    if (!queued) {
+      ReleaseLuaHttpCallbackRefs(L, callbackState);
+      luaL_error(L, "online song hash worker queue is unavailable");
+    }
+
+    void* userdata =
+        lua_newuserdata(L, sizeof(std::shared_ptr<HttpRequestFuture>));
+    new (userdata) std::shared_ptr<HttpRequestFuture>(future);
+    luaL_getmetatable(L, "HttpRequestFuture");
+    lua_setmetatable(L, -2);
+    return 1;
+  }
+
   static int WebSocket(T* p, lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
 
@@ -3085,6 +3193,7 @@ class LunaNetworkManager : public Luna<NetworkManager> {
     ADD_METHOD(HttpPublicKeyPins);
     ADD_METHOD(HttpRequest);
     ADD_METHOD(ProcessPackArchive);
+    ADD_METHOD(HashOnlineSongFile);
     ADD_METHOD(WebSocket);
     ADD_METHOD(UrlEncode);
     ADD_METHOD(EncodeQueryParameters);
@@ -3097,6 +3206,26 @@ class LunaNetworkManager : public Luna<NetworkManager> {
   }
 
  private:
+  static void handleOnlineSongFileHashResult(
+      Lua* L, const std::string& digestHex, const std::string& errorCode,
+      int callbackRef) {
+    lua_rawgeti(L, LUA_REGISTRYINDEX, callbackRef);
+    lua_newtable(L);
+    lua_pushboolean(L, errorCode.empty() && !digestHex.empty());
+    lua_setfield(L, -2, "ok");
+    if (!digestHex.empty()) {
+      lua_pushstring(L, digestHex.c_str());
+      lua_setfield(L, -2, "sha256");
+    }
+    if (!errorCode.empty()) {
+      lua_pushstring(L, errorCode.c_str());
+      lua_setfield(L, -2, "errorCode");
+    }
+    std::string callbackError =
+        "Lua error in online song file hash completion handler: ";
+    LuaHelpers::RunScriptOnStack(L, callbackError, 1, 0, true);
+  }
+
   static void handlePackArchiveResult(
       Lua* L, bool ok, const std::string& errorCode,
       const std::string& archiveHash, int callbackRef) {

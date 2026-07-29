@@ -7,6 +7,7 @@ function Coordinator.payload(identity, values)
 	values = type(values) == "table" and values or {}
 	assert(identity.side == "P1" or identity.side == "P2", "local readiness identity is required")
 	return {
+		local_player = identity.side,
 		client_action_id = values.clientActionId,
 		selection_id = values.selectionId,
 		phase = values.phase,
@@ -21,8 +22,14 @@ function Coordinator.request_key(roomId, roundKey, payload)
 	return table.concat({
 		tostring(roomId or ""),
 		tostring(roundKey or ""),
+		tostring(payload.local_player or payload.localPlayer or ""),
+		tostring(payload.selection_id or ""),
 		tostring(payload.phase or ""),
 		payload.is_ready == true and "1" or "0",
+		tostring(options.song_hash or ""),
+		tostring(options.chart_hash or ""),
+		tostring(options.chart_key or ""),
+		tostring(options.score_mode or options.scoreMode or ""),
 		tostring(options.speed_mod or ""),
 		tostring(options.music_rate_bpm or ""),
 		tostring(options.stepchart or ""),

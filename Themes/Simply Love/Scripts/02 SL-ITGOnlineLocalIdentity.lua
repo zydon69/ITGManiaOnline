@@ -20,14 +20,19 @@ function Identity.side(value, playerOne, playerTwo)
 end
 
 function Identity.player(side, playerOne, playerTwo)
-	return Identity.side(side, playerOne, playerTwo) == "P2" and playerTwo or playerOne
+	local normalized = Identity.side(side, playerOne, playerTwo)
+	if normalized == "P1" then return playerOne end
+	if normalized == "P2" then return playerTwo end
+	return nil
 end
 
 function Identity.describe(value, playerOne, playerTwo, plan)
-	local side = Identity.side(value, playerOne, playerTwo) or "P1"
+	local side = Identity.side(value, playerOne, playerTwo)
+	if side == nil then return nil, "invalid_local_identity" end
 	local coordinatorSide = type(plan) == "table"
 		and Identity.side(plan.coordinatorSide, playerOne, playerTwo)
-		or "P1"
+		or nil
+	if coordinatorSide == nil then return nil, "invalid_coordinator_identity" end
 
 	return {
 		side = side,
