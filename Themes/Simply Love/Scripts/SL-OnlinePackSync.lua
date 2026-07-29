@@ -1422,115 +1422,12 @@ function PackSync:RequestDownloadAuthorization(songInfo, message, downloadGenera
 				)
 			end
 
-			local authorizeCompanion = ITGOnline.IsLocalTwoPlayerSession
-				and ITGOnline:IsLocalTwoPlayerSession()
-				and ITGOnline.LocalPartyRoomComplete
-				and ITGOnline:LocalPartyRoomComplete(decoded.room or ITGOnline.currentRoom)
-				and ITGOnline.RequestAsLocalPlayer
-				and ITGOnline.UserForLocalPlayer
-			if not authorizeCompanion then
-				self:ApplyLocalStatus(self.status.DownloadRequested, message, 0)
-				finish(true, decoded, response)
-				return
-			end
-
-			local companionUser = ITGOnline:UserForLocalPlayer(PLAYER_2)
-			local companionUserId = tostring(companionUser and companionUser.id or "")
-			local companionSequence = requestSequence
-			local roomMembers = decoded.room and decoded.room.members or {}
-			for _, member in pairs(type(roomMembers) == "table" and roomMembers or {}) do
-				local memberUser = type(member) == "table" and (member.user or member) or {}
-				local memberUserId = tostring(memberUser.id or member.user_id or member.userId or "")
-				if companionUserId ~= "" and memberUserId == companionUserId then
-					companionSequence = math.max(
-						companionSequence,
-						tonumber(member.pack_sync_sequence) or 0
-					)
-					break
-				end
-			end
-			companionSequence = companionSequence + 1
-			local companionPayload = {
-				client_action_id = ITGOnline:NewClientActionId("p2-pack-download-authorize"),
-				download_id = downloadId,
-				sequence = companionSequence,
-				message = status_message(message),
-			}
-			if selectionId ~= "" then companionPayload.selection_id = selectionId end
-
-			ITGOnline:RequestAsLocalPlayer(
-				PLAYER_2,
-				"POST",
-				"/rooms/" .. requestRoomId .. "/pack-downloads/authorize",
-				companionPayload,
-				function(companionOk, companionDecoded, companionResponse)
-					local companionAuthorization = type(companionDecoded) == "table"
-						and companionDecoded.authorization or nil
-					local companionMatches = companionOk
-						and type(companionAuthorization) == "table"
-						and companionAuthorization.authorized == true
-						and early_trim(companionAuthorization.download_id) == downloadId
-						and early_trim(companionAuthorization.selection_id) == selectionId
-						and tonumber(companionAuthorization.sequence) == tonumber(companionSequence)
-
-					trace_online_state("download_companion_authorization_response", {
-						roomId = requestRoomId,
-						downloadId = downloadId,
-						selectionId = selectionId,
-						sequence = companionSequence,
-						generation = downloadGeneration,
-						ok = companionOk == true,
-						authorizationMatches = companionMatches == true,
-						statusCode = companionResponse and companionResponse.statusCode or "nil",
-						errorCode = companionDecoded and companionDecoded.error_code or "nil",
-						action = companionDecoded and companionDecoded.action or "nil",
-					})
-
-					if not companionMatches then
-						if ITGOnline.EnsureCurrentRoom then ITGOnline:EnsureCurrentRoom() end
-						if MESSAGEMAN then
-							MESSAGEMAN:Broadcast("ITGOnlineLocalPartyPackSyncFailed", {
-								localPlayer = "P2",
-								status = self.status.DownloadRequested,
-								errorCode = companionDecoded and companionDecoded.error_code or nil,
-							})
-						end
-						companionResponse = companionResponse or {}
-						companionResponse.errorCode = companionResponse.errorCode
-							or companionDecoded and companionDecoded.error_code
-							or "companion_pack_download_authorization_rejected"
-						companionResponse.errorMessage = companionResponse.errorMessage
-							or companionDecoded and companionDecoded.message
-							or pack_text("PackDownloadAuthorizationRejected", "The server did not authorize this pack download.")
-						companionResponse.primaryDownloadAuthorized = true
-						finish(false, companionDecoded, companionResponse)
-						return
-					end
-
-					if companionDecoded.room and ITGOnline.ApplyRoomSnapshot then
-						ITGOnline:ApplyRoomSnapshot(
-							companionDecoded.room,
-							"pack_download_companion_authorized"
-						)
-						if MESSAGEMAN then
-							MESSAGEMAN:Broadcast(
-								"OnlineLobbyState",
-								ITGOnline:LobbyStatePayload(companionDecoded.room)
-							)
-						end
-					end
-					self.downloadStatusSequence = math.max(
-						tonumber(self.downloadStatusSequence) or 0,
-						companionSequence
-					)
-					self.sequence = math.max(
-						tonumber(self.sequence) or 0,
-						self.downloadStatusSequence
-					)
-					self:ApplyLocalStatus(self.status.DownloadRequested, message, 0)
-					finish(true, companionDecoded, companionResponse)
-				end
-			)
+			-- One Songs directory means one physical transfer and therefore one
+			-- server ledger. The authorization response already projects P1's
+			-- protected state onto P2; authorizing P2 again creates an orphan
+			-- ledger that can later expire after the shared transfer succeeded.
+			self:ApplyLocalStatus(self.status.DownloadRequested, message, 0)
+			finish(true, decoded, response)
 		end)
 end
 

@@ -1211,20 +1211,7 @@ local function sorted_count_summary(counts)
 end
 
 local function room_member_status_summary(room)
-	local packCounts = {}
-	local playCounts = {}
-	local members = room and room.members or {}
-	for member in ivalues(online_values(members)) do
-		local packStatus = tostring(member.pack_sync_status or "none")
-		packCounts[packStatus] = (packCounts[packStatus] or 0) + 1
-
-		local playState = tostring(member.play_state or "none")
-		playCounts[playState] = (playCounts[playState] or 0) + 1
-	end
-
-	return "members=" .. tostring(online_count(members))
-		.. " pack={" .. sorted_count_summary(packCounts) .. "}"
-		.. " play={" .. sorted_count_summary(playCounts) .. "}"
+	return ITGOnlineDiagnostics.room_status_summary(room)
 end
 
 local function room_ready_summary(room)
@@ -1651,12 +1638,17 @@ local function prepare_song_file_hash(path, callback)
 				local ok = result.ok == true and currentSignature == signature
 					and digest:match("^[a-f0-9]+$") ~= nil and #digest == 64
 				if ok then onlineSongFileHashCache[signature] = digest end
+				local errorCode = ITGOnlineDiagnostics.hash_completion_error(
+					ok,
+					result.errorCode,
+					currentSignature ~= signature
+				)
 				for _, pendingCallback in ipairs(callbacks) do
 					safe_callback(
 						pendingCallback,
 						ok,
 						ok and digest or nil,
-						result.errorCode or (currentSignature ~= signature and "file_changed" or "hash_failed")
+						errorCode
 					)
 				end
 			end,
@@ -14042,6 +14034,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		scorePayload,
 		function(ok, decoded, response)
 		local errorCode = response_error_code(response, decoded)
+		local responseFinalResults = ITGOnlineDiagnostics.response_final_results(decoded)
 		if traceScoreTransport or not ok then
 			online_score_transport_trace(final or not ok, "send_score_response"
 				.. " room=" .. tostring(self.currentRoomId)
@@ -14051,8 +14044,8 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 				.. " status=" .. tostring(response and response.statusCode or "nil")
 				.. " errorCode=" .. tostring(errorCode or "nil")
 				.. " roomPhase=" .. tostring(decoded and decoded.room_phase or decoded and decoded.room and decoded.room.phase or "nil")
-				.. " responseFinalResults=" .. tostring(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results and #decoded.room.play_state.final_results or 0)
-				.. " responseFinalRowsSummary=" .. online_score_rows_summary(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results or nil, 8)
+				.. " responseFinalResults=" .. tostring(#responseFinalResults)
+				.. " responseFinalRowsSummary=" .. online_score_rows_summary(responseFinalResults, 8)
 				.. " sentScore=" .. tostring(outgoingScore)
 				.. " sentDisplayed=" .. tostring(displayedScorePercent)
 				.. " sentFailed=" .. tostring(outgoingFailed == true))
@@ -16553,13 +16546,14 @@ function ITGOnline:MarkReturnedToLobby(callback, companionSynchronized)
 			-- after the operation is known not to have been accepted.
 			self.onlineGameplayEvaluationReturnedKey = ""
 		end
+		local responseFinalResults = ITGOnlineDiagnostics.response_final_results(decoded)
 		online_flow_trace("mark_returned_to_lobby_response room=" .. tostring(self.currentRoomId)
 			.. " roundKey=" .. tostring(key)
 			.. " ok=" .. tostring(ok == true)
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " responsePhase=" .. tostring(decoded and decoded.room and decoded.room.phase or decoded and decoded.room_phase or "nil")
-			.. " responseFinalResults=" .. tostring(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results and #decoded.room.play_state.final_results or 0)
-			.. " responseFinalRowsSummary=" .. online_score_rows_summary(decoded and decoded.room and decoded.room.play_state and decoded.room.play_state.final_results or nil, 8)
+			.. " responseFinalResults=" .. tostring(#responseFinalResults)
+			.. " responseFinalRowsSummary=" .. online_score_rows_summary(responseFinalResults, 8)
 			.. " message=" .. tostring(response_message(response, decoded, "")))
 		safe_callback(callback, ok, decoded, response)
 	end)

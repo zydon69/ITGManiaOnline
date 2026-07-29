@@ -26,6 +26,9 @@ local realtimeEventRouter = assert(dofile(
 local roomStateMachine = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomStateMachine.lua"
 ))
+local diagnostics = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineDiagnostics.lua"
+))
 
 local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
@@ -56,6 +59,36 @@ local p2Identity = localIdentity.describe("P2", "P1", "P2", versus)
 equal(p1Identity.isPrimary, true, "P1 identity owns room coordination")
 equal(p2Identity.isPrimary, false, "P2 identity remains the local companion")
 equal(p2Identity.role, "companion", "P2 identity role")
+equal(diagnostics.hash_completion_error(true, nil, false), nil,
+	"a successful file hash must not retain a failure code")
+equal(diagnostics.hash_completion_error(false, nil, true), "file_changed",
+	"a changed file signature must keep its specific failure code")
+equal(diagnostics.hash_completion_error(false, nil, false), "hash_failed",
+	"a failed hash without a backend code must use the stable fallback")
+local topLevelFinalResults = { { user_id = 1 }, { user_id = 2 } }
+equal(diagnostics.response_final_results({
+	play_state = { final_results = topLevelFinalResults },
+	room = { play_state = { final_results = { { user_id = 3 } } } },
+}), topLevelFinalResults,
+	"compact play-state responses must be the diagnostics source of truth")
+equal(#diagnostics.response_final_results({
+	room = { play_state = { final_results = { { user_id = 3 } } } },
+}), 1, "room snapshots remain a supported diagnostics source")
+equal(diagnostics.room_status_summary({
+	members = {
+		{ pack_sync_status = "ready" },
+		{ pack_sync_status = "ready" },
+		{ pack_sync_status = "download_in_progress" },
+	},
+	play_state = {
+		sessions = {
+			{ state = "failed" },
+			{ state = "playing" },
+			{ state = "failed" },
+		},
+	},
+}), "members=3 pack={download_in_progress:1,ready:2} sessions={failed:2,playing:1}",
+	"room diagnostics must summarize authoritative play sessions")
 local scorePayload = scoreTransport.payload(p2Identity, {
 	score = 420000,
 	displayed_percent = 42,
@@ -805,6 +838,10 @@ assert(lobbySource:find("ITGOnlineLobbyModel.online_lobby_state_signature", 1, t
 	"stable lobby view-model helpers must stay outside the overlay chunk")
 local onlineHelpersSource = read_source("Themes/Simply Love/Scripts/SL-OnlineHelpers.lua")
 local onlinePackSyncSource = read_source("Themes/Simply Love/Scripts/SL-OnlinePackSync.lua")
+assert(not onlinePackSyncSource:find("p2-pack-download-authorize", 1, true),
+	"a shared local download must create only the coordinator's server ledger")
+assert(not onlinePackSyncSource:find("download_companion_authorization_response", 1, true),
+	"the projected companion state must not trigger a second authorization")
 local optionsSource = read_source("Themes/Simply Love/BGAnimations/ScreenPlayerOptions common.lua")
 local judgmentPreviewSource = read_source(
 	"Themes/Simply Love/BGAnimations/ScreenPlayerOptions overlay/OptionRowPreviews/JudgmentGraphic.lua"
