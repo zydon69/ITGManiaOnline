@@ -2686,7 +2686,19 @@ function PackSync:FindLocalMatch(songInfo)
 					trace("Candidate hash preparation complete key=" .. tostring(preparationKey)
 						.. " ok=" .. tostring(ok == true)
 						.. " error=" .. tostring(errorCode or "nil"))
-					if ok then self:ApplySelectedChart(songInfo) end
+					if ok then
+						-- A freshly downloaded pack keeps ownership of the scan until
+						-- post-reload validation reaches a terminal result.  Resuming
+						-- through ApplySelectedChart would be rejected as an active
+						-- download and would strand the server-side reservation.
+						if self.pendingPostReloadSongInfo ~= nil
+							and selected_at(self.pendingPostReloadSongInfo) == selected_at(songInfo)
+						then
+							self:ValidatePendingPostReload()
+						else
+							self:ApplySelectedChart(songInfo)
+						end
+					end
 				end)
 			end
 			return {
@@ -4487,6 +4499,16 @@ function PackSync:ValidatePendingPostReload()
 		.. " status=" .. tostring(result and result.status or "nil")
 		.. " reason=" .. tostring(result and result.reason or "nil")
 		.. " quarantine=" .. tostring(quarantinePath or "nil"))
+	if result.deferred == true then
+		-- Hash preparation is asynchronous.  This is still part of the active
+		-- reload/validation transaction, not evidence that the installed song is
+		-- missing.  Keep the pending download identity and let its completion
+		-- callback re-enter this validator.
+		trace("PostReload validation deferred status=" .. tostring(result.status or "nil")
+			.. " reason=" .. tostring(result.reason or "nil")
+			.. " downloadId=" .. tostring(self.activeDownloadId or self.lastDownloadId or ""))
+		return false
+	end
 	if result.ok then
 		local songDir = result.song and result.song.GetSongDir and tostring(result.song:GetSongDir() or "") or ""
 		if quarantinePath and quarantinePath ~= "" and songDir:sub(1, #quarantinePath) ~= quarantinePath then
