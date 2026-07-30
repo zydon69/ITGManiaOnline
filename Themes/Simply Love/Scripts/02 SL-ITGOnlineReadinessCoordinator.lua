@@ -43,6 +43,15 @@ function Coordinator.local_party_action(plan, isReady, companionReadyAlready)
 	return isReady == true and "companion_barrier" or "companion_fanout"
 end
 
+function Coordinator.deferred_intent_action(deferredKey, currentKey)
+	deferredKey = tostring(deferredKey or "")
+	currentKey = tostring(currentKey or "")
+	if deferredKey == "" then return "none" end
+	if currentKey == "" then return "wait" end
+	if deferredKey ~= currentKey then return "discard" end
+	return "replay"
+end
+
 function Coordinator.validate_song_context(selectedSong, options, isReady)
 	if isReady ~= true then return true end
 	selectedSong = type(selectedSong) == "table" and selectedSong or {}

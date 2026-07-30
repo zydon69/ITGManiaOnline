@@ -1013,10 +1013,22 @@ assert(not companionReadySource:find("error_code = \"companion_ready_in_flight\"
 	"an existing Player 2 readiness request must not be reported as a failure")
 assert(lobbySource:find("ITGOnlineLobbyPresentation.player_status_label", 1, true),
 	"online player statuses must use localized labels")
-assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExit", 1, true),
+assert(onlineHelpersSource:find("deferredConfigReadyAfterOptionsExitKey", 1, true),
 	"options completion must survive a transient room-context gap")
 assert(onlineHelpersSource:find("retry_deferred_config_ready", 1, true),
 	"deferred options completion must be retried after room restoration")
+assert(ITGOnlineReadinessCoordinator.deferred_intent_action("", "room|selection-a") == "none",
+	"an absent deferred options intent must remain inactive")
+assert(ITGOnlineReadinessCoordinator.deferred_intent_action("room|selection-a", "") == "wait",
+	"a deferred options intent must wait while its authoritative context is unavailable")
+assert(ITGOnlineReadinessCoordinator.deferred_intent_action(
+	"room|selection-a",
+	"room|selection-b"
+) == "discard", "an annulled selection must not validate the next selected song")
+assert(ITGOnlineReadinessCoordinator.deferred_intent_action(
+	"room|selection-a",
+	"room|selection-a"
+) == "replay", "options completion may only resume for its exact original selection")
 assert(not onlineHelpersSource:find("ITGOnline.inLobby", 1, true),
 	"screen transitions must read the lobby state from their actor, not the API client")
 assert(optionsSource:find("onlineOptionsSessionActive", 1, true),

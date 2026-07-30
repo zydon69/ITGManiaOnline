@@ -23,8 +23,10 @@ local pendingOnlineStartRoomId = nil
 local pendingConfigReady = nil
 -- ScreenPlayerOptions can emit its completion message while the room snapshot
 -- is being restored.  Keep that intent until the lobby context is available
--- again instead of dropping the only validation event.
-local deferredConfigReadyAfterOptionsExit = false
+-- again instead of dropping the only validation event.  The intent is bound
+-- to the exact selection that displayed the options: an annulled selection
+-- must never validate a later selection.
+local deferredConfigReadyAfterOptionsExitKey = ""
 local pendingOnlineSongSelectionKey = ""
 local pendingOnlineSongSelectionAt = 0
 local pendingOnlineSongSelectionToken = 0
@@ -529,18 +531,55 @@ function current_room_is_active(options)
 end
 
 local function retry_deferred_config_ready(source)
-	if not deferredConfigReadyAfterOptionsExit then return false end
+	if deferredConfigReadyAfterOptionsExitKey == "" then return false end
 	if pendingConfigReady then
-		deferredConfigReadyAfterOptionsExit = false
+		deferredConfigReadyAfterOptionsExitKey = ""
 		return false
 	end
 	local active = current_room_is_active({ phase = { "config", "lobby_ready", "lobby" } })
 	if not active then return false end
-	deferredConfigReadyAfterOptionsExit = false
+	local currentKey = current_config_ready_key()
+	local action = ITGOnlineReadinessCoordinator
+		and ITGOnlineReadinessCoordinator.deferred_intent_action
+		and ITGOnlineReadinessCoordinator.deferred_intent_action(
+			deferredConfigReadyAfterOptionsExitKey,
+			currentKey
+		)
+		or (currentKey == "" and "wait"
+			or (currentKey == deferredConfigReadyAfterOptionsExitKey and "replay" or "discard"))
+	if action == "wait" then return false end
+	if action ~= "replay" then
+		online_flow_trace("options_confirmed deferred_intent_discarded source=" .. tostring(source or "unknown")
+			.. " deferredKey=" .. tostring(deferredConfigReadyAfterOptionsExitKey)
+			.. " currentKey=" .. tostring(currentKey)
+			.. " reason=selection_changed")
+		deferredConfigReadyAfterOptionsExitKey = ""
+		return false
+	end
+	deferredConfigReadyAfterOptionsExitKey = ""
 	online_flow_trace("options_confirmed deferred_context_recovered source=" .. tostring(source or "unknown")
 		.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil")
+		.. " key=" .. tostring(currentKey))
 	MESSAGEMAN:Broadcast("OnlineConfigReady")
+	return true
+end
+
+local function defer_config_ready_after_options_exit(reason)
+	local key = current_config_ready_key()
+	if key == "" and ITGOnline then
+		key = tostring(ITGOnline.onlineOptionsPresentedKey or "")
+	end
+	if key == "" then
+		online_flow_trace("options_confirmed deferred_intent_discarded reason=missing_selection_identity"
+			.. " source=" .. tostring(reason or "unknown")
+			.. " room=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
+			.. " phase=" .. tostring(ITGOnline and ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
+		return false
+	end
+	deferredConfigReadyAfterOptionsExitKey = key
+	online_flow_trace("options_confirmed deferred_intent_stored source=" .. tostring(reason or "unknown")
+		.. " key=" .. tostring(key))
 	return true
 end
 
@@ -2742,7 +2781,7 @@ end
 		stop_room_timers(actor, "clear_room_async_state")
 		stop_named_timers(actor, { "ConfigReadyRetryTimer" })
 		pendingConfigReady = nil
-		deferredConfigReadyAfterOptionsExit = false
+		deferredConfigReadyAfterOptionsExitKey = ""
 	pendingOnlineStartRoomId = nil
 	lastOnlineGameplayRoomId = nil
 		lastOnlineOptionsSongKey = ""
@@ -3608,7 +3647,7 @@ CreateOnlineHandler = function()
 			      OnlineConfigReadyMessageCommand=function(self)
 					local roomActive, _, inactiveReason = current_room_is_active({ phase = { "config", "lobby_ready", "lobby" } })
 					if not (ITGOnline and ITGOnline.MarkConfigReady and roomActive) then
-						deferredConfigReadyAfterOptionsExit = true
+						defer_config_ready_after_options_exit("missing_context")
 						online_flow_trace("options_confirmed ignored reason=missing_context"
 							.. " connected=" .. tostring(self.connected == true)
 							.. " hasSocket=" .. tostring(self.socket ~= nil)
@@ -3621,13 +3660,13 @@ CreateOnlineHandler = function()
 					self.inLobby = true
 					local configReadyKey = current_config_ready_key()
 					if configReadyKey == "" then
-						deferredConfigReadyAfterOptionsExit = true
+						defer_config_ready_after_options_exit("invalid_selection_key")
 						online_flow_trace("options_confirmed ignored reason=invalid_selection_key"
 							.. " room=" .. tostring(ITGOnline.currentRoomId or "nil")
 							.. " phase=" .. tostring(ITGOnline.currentRoom and ITGOnline.currentRoom.phase or "nil"))
 						return
 					end
-					deferredConfigReadyAfterOptionsExit = false
+					deferredConfigReadyAfterOptionsExitKey = ""
 					pendingConfigReady = configReadyKey
 					self.configReadyRetryKey = configReadyKey
 					self.configReadyRoomToken = room_context_token("config_ready")
