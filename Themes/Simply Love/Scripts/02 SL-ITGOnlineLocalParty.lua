@@ -120,6 +120,43 @@ function Party.gameplay_exit_allowed(plan, requestingSide, finalizedBySide)
 	return true
 end
 
+-- Once every required local score is frozen, leaving ScreenGameplay is a
+-- local operation.  Transport failures only defer the idempotent lifecycle
+-- acknowledgement; deterministic contract rejections still stop the replay.
+function Party.gameplay_exit_failure_action(statusCode, errorCode, retryAfter)
+	if (tonumber(retryAfter) or 0) > 0 then return "defer" end
+
+	local status = tonumber(statusCode)
+	local code = tostring(errorCode or ""):lower()
+	if status == nil or status == 0 then return "defer" end
+	if status == 408 or status == 425 or status == 429 or status >= 500 then
+		return "defer"
+	end
+	if code == ""
+		or code:find("cannotconnect", 1, true)
+		or code:find("cannot_connect", 1, true)
+		or code:find("timeout", 1, true)
+		or code:find("network", 1, true)
+		or code:find("temporar", 1, true)
+	then
+		return "defer"
+	end
+
+	return "cancel"
+end
+
+function Party.deferred_gameplay_exit_action(hasCurrentRoom, phase, sameRoom)
+	if hasCurrentRoom ~= true or sameRoom ~= true then return "departed" end
+
+	phase = tostring(phase or ""):lower()
+	if phase == "lobby" or phase == "lobby_ready" or phase == "config" then
+		return "confirmed"
+	end
+	if phase == "playing" or phase == "results" then return "retry" end
+
+	return "wait"
+end
+
 function Party.should_submit_companion_ready(plan, isReady, companionReadyAlready)
 	return type(plan) == "table"
 		and plan.twoPlayer == true

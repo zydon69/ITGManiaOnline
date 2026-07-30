@@ -249,6 +249,36 @@ equal(party.all_local_finals_accepted(soloP1, { P1 = true }), true,
 	"solo evaluation releases independently from remote machines")
 equal(party.all_local_finals_accepted(soloP1, { P1 = false }), false,
 	"solo evaluation must wait for its local final acknowledgement")
+equal(
+	party.gameplay_exit_failure_action(0, "HttpErrorCode_CannotConnect", 0),
+	"defer",
+	"a disconnected gameplay exit must remain pending after local navigation"
+)
+equal(
+	party.gameplay_exit_failure_action(503, "service_unavailable", 0),
+	"defer",
+	"a temporary server failure must preserve the idempotent gameplay exit"
+)
+equal(
+	party.gameplay_exit_failure_action(409, "round_mismatch", 0),
+	"cancel",
+	"a deterministic gameplay-exit contract rejection must stop replay"
+)
+equal(
+	party.deferred_gameplay_exit_action(true, "playing", true),
+	"retry",
+	"a reconnected member still in gameplay must replay returned-to-lobby"
+)
+equal(
+	party.deferred_gameplay_exit_action(true, "lobby", true),
+	"confirmed",
+	"an authoritative lobby snapshot confirms an already accepted return"
+)
+equal(
+	party.deferred_gameplay_exit_action(false, nil, false),
+	"departed",
+	"an authoritative missing room resolves the player outside the private lobby"
+)
 equal(party.score_transport_should_continue(versus, { P1 = true, P2 = false }), true,
 	"P2 live-score transport must continue after P1 finalization")
 equal(party.score_transport_should_continue(versus, { P1 = false, P2 = true }), true,
