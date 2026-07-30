@@ -3669,10 +3669,25 @@ void ScreenGameplay::Update(float fDeltaTime) {
         }
       }
 
+      // The Online theme owns Start/Back gameplay exits and submits an
+      // authoritative per-player final snapshot before leaving gameplay.
+      // Lua input callbacks do not prevent ScreenGameplay::Input from seeing
+      // the same event, so never let the legacy whole-screen give-up timer
+      // survive while an Online room is active.
+      // Input (and the Online start gate) already refreshes the observed
+      // session flag.  Reading the atomic here avoids evaluating Lua once per
+      // rendered frame.
+      const bool isOnlineActive =
+          ITGOnlineSessionGuard::IsObservedActive();
+      if (isOnlineActive) {
+        AbortGiveUp(false);
+      }
+
       // update give up
       bool bGiveUpTimerFired = false;
       bGiveUpTimerFired =
-          !m_GiveUpTimer.IsZero() && m_GiveUpTimer.Ago() > GIVE_UP_SECONDS;
+          !isOnlineActive && !m_GiveUpTimer.IsZero() &&
+          m_GiveUpTimer.Ago() > GIVE_UP_SECONDS;
       m_gave_up = bGiveUpTimerFired;
       m_skipped_song =
           !m_SkipSongTimer.IsZero() && m_SkipSongTimer.Ago() > GIVE_UP_SECONDS;
@@ -4434,6 +4449,17 @@ bool ScreenGameplay::Input(const InputEventPlus& input) {
 
   if (m_DancingState != STATE_OUTRO && GAMESTATE->IsHumanPlayer(input.pn) &&
       !m_Cancel.IsTransitioning()) {
+    // Online Start/Back is coordinated by the theme on a per-player basis.
+    // Consume the native copy of the event before it can arm the legacy
+    // whole-screen timer or call BeginBackingOutFromGameplay.  This applies
+    // during both the scheduled-start window and active gameplay.
+    if (GetITGOnlineIsActive() &&
+        (input.MenuI == GAME_BUTTON_START ||
+         input.MenuI == GAME_BUTTON_BACK)) {
+      AbortGiveUp(false);
+      return true;
+    }
+
     /* Allow bailing out by holding any START button.
      * This gives a way to "give up" when a back button isn't available.
      * If this is also a style button, don't do this; pump center is start.

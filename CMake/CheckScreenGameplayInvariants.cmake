@@ -101,6 +101,20 @@ if(PAUSE_GATE_OFFSET EQUAL -1 OR CODE_INPUT_OFFSET EQUAL -1 OR
 endif()
 
 foreach(REQUIRED_SNIPPET
+    "const bool isOnlineActive =\n          ITGOnlineSessionGuard::IsObservedActive();"
+    "!isOnlineActive && !m_GiveUpTimer.IsZero()"
+    "GetITGOnlineIsActive() &&"
+    "input.MenuI == GAME_BUTTON_START"
+    "input.MenuI == GAME_BUTTON_BACK")
+  string(FIND "${SCREEN_GAMEPLAY_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
+  if(SNIPPET_OFFSET EQUAL -1)
+    message(
+        FATAL_ERROR
+        "ScreenGameplay Online exit invariant failed: missing '${REQUIRED_SNIPPET}'")
+  endif()
+endforeach()
+
+foreach(REQUIRED_SNIPPET
     "p.m_fSpeed <= 0.0f"
     "UpdateSongPosition rejected audio position/adjustment"
     "static_cast<double>(fSeconds) + static_cast<double>(fAdjust)"
@@ -200,6 +214,9 @@ foreach(REQUIRED_SNIPPET
     "those indexes are positions, never user identifiers"
     "resultUserId ~= \"\" and resultUserId == userId"
     "final_failed_snapshot_selected reason=prefer_terminal_candidate"
+    "onlineGameplayPrimaryFinalInFlightKey"
+    "onlineGameplayCompanionFinalInFlightKey"
+    "mark_terminal_waiting_local_finals"
     "if scoreMode == \"itg\" then"
     "itgScorePercent = outgoingPercent")
   string(FIND "${ONLINE_CLIENT_TEXT}" "${REQUIRED_SNIPPET}" SNIPPET_OFFSET)
