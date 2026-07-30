@@ -48,6 +48,25 @@ function Policy.options_deadline_blocked(room)
 	return #Policy.pending_song_sync_member_ids(room) > 0
 end
 
+function Policy.can_leave_room(phase, roundKey, returnedRoundKey)
+	phase = normalized_phase(phase)
+	if phase ~= "starting" and phase ~= "playing" then
+		return true, "phase_leaveable"
+	end
+
+	-- A local player who has already completed the authoritative
+	-- returned-to-lobby handshake is no longer participating in gameplay.
+	-- Keeping the global room phase at "playing" must not trap that player.
+	if phase == "playing"
+		and tostring(roundKey or "") ~= ""
+		and tostring(returnedRoundKey or "") == tostring(roundKey)
+	then
+		return true, "local_party_returned"
+	end
+
+	return false, "active_round"
+end
+
 function Policy.projection_includes_user(projectedUserIds, expectedUserId)
 	expectedUserId = tostring(expectedUserId or "")
 	if expectedUserId == "" then return false end

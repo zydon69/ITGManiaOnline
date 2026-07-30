@@ -100,6 +100,15 @@ function Transport.is_contract_error(errorCode)
 		or errorCode == "score_contract_rejected"
 end
 
+-- HTTP 422 means the authoritative server has rejected the score payload as
+-- invalid for the current round. Replaying the same engine state cannot make
+-- that request valid, so keep transient/network failures retryable while
+-- permanently stopping deterministic validation failures for this context.
+function Transport.is_deterministic_rejection(statusCode, errorCode)
+	if Transport.is_contract_error(errorCode) then return true end
+	return tonumber(statusCode) == 422
+end
+
 function Transport.context_key(roundKey, context)
 	context = type(context) == "table" and context or {}
 	return table.concat({

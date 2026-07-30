@@ -4551,11 +4551,24 @@ CreateOnlineHandler = function()
 							local currentPhase = ITGOnline and ITGOnline.NormalizeRoomPhase
 								and ITGOnline:NormalizeRoomPhase(currentRoom and currentRoom.phase or ITGOnline.currentRoomPhase)
 								or tostring(currentRoom and currentRoom.phase or "")
-							if currentPhase == "starting" or currentPhase == "playing" then
+							local currentRoundKey = ITGOnline and ITGOnline.PlayStateKey
+								and tostring(ITGOnline:PlayStateKey() or "")
+								or ""
+							local canLeave, leavePolicyReason =
+								ITGOnlineRoomPolicy.can_leave_room(
+									currentPhase,
+									currentRoundKey,
+									ITGOnline and ITGOnline.onlineGameplayReturnedKey or ""
+								)
+							if not canLeave then
 								if online_trace then
 									online_trace("FLOW LeaveLobbyMessage blocked reason=phase_not_leaveable"
 										.. " roomId=" .. tostring(ITGOnline and ITGOnline.currentRoomId or "nil")
-										.. " phase=" .. tostring(currentPhase))
+										.. " phase=" .. tostring(currentPhase)
+										.. " policyReason=" .. tostring(leavePolicyReason)
+										.. " roundKey=" .. tostring(currentRoundKey)
+										.. " returnedKey="
+											.. tostring(ITGOnline and ITGOnline.onlineGameplayReturnedKey or ""))
 								end
 								safe_broadcast("OnlineResponseStatus", {
 									event="leaveLobby",

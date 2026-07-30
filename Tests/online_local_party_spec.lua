@@ -150,12 +150,31 @@ equal(scoreTransport.is_contract_error("score_song_mismatch"), true,
 	"server chart contract rejects stop the current score transport")
 equal(scoreTransport.is_contract_error("temporary_server_error"), false,
 	"transient score failures remain retryable")
+equal(scoreTransport.is_deterministic_rejection(422, "score_increase_with_song_position_regression"), true,
+	"unprocessable score snapshots stop the current round transport")
+equal(scoreTransport.is_deterministic_rejection(500, "temporary_server_error"), false,
+	"server failures remain retryable")
+equal(scoreTransport.is_deterministic_rejection(nil, "network_error"), false,
+	"network failures remain retryable")
 local scoreRuntime = scoreTransport.new_runtime(p2Identity, "round-1")
 equal(scoreRuntime.localPlayer, "P2", "score runtime is bound to its local identity")
 scoreTransport.queue_final(scoreRuntime, function() end)
 local finalQueued, finalCallbacks = scoreTransport.take_pending_final(scoreRuntime)
 equal(finalQueued, true, "final score is queued behind an in-flight local score")
 equal(#finalCallbacks, 1, "queued final callbacks are preserved")
+local canLeave, leaveReason = roomPolicy.can_leave_room(
+	"playing",
+	"room-1|selection:round-1",
+	"room-1|selection:round-1"
+)
+equal(canLeave, true, "an authoritatively returned player can leave an active room")
+equal(leaveReason, "local_party_returned", "active-room leave exposes its policy reason")
+equal(roomPolicy.can_leave_room("playing", "round-1", "round-2"), false,
+	"an active player cannot leave during gameplay")
+equal(roomPolicy.can_leave_room("starting", "round-1", "round-1"), false,
+	"starting remains non-leaveable before returned-to-lobby is possible")
+equal(roomPolicy.can_leave_room("results", "round-1", ""), true,
+	"results remain leaveable")
 local readyPayload = readinessCoordinator.payload(p2Identity, {
 	clientActionId = "action-1",
 	selectionId = "selection-1",

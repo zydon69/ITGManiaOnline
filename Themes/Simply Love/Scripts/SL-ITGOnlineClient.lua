@@ -12915,6 +12915,13 @@ function ITGOnline:QueueLiveScore(snapshot)
 	end
 
 	local roundKey, roundKeySource = self:CanonicalGameplayRoundKey("live_score_queue")
+	if tostring(self.scoreContractRejectedRoundKey or "") == tostring(roundKey)
+		and tostring(roundKey or "") ~= ""
+	then
+		self.pendingLiveScoreSnapshot = nil
+		self.pendingLiveScoreRoundKey = ""
+		return false
+	end
 	if self:IsLiveScoreFinalizedForRound(roundKey) then
 		self.pendingLiveScoreSnapshot = nil
 		self.pendingLiveScoreRoundKey = ""
@@ -14141,6 +14148,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		scorePayload,
 		function(ok, decoded, response)
 		local errorCode = response_error_code(response, decoded)
+		local deterministicRejection =
+			ITGOnlineScoreTransport.is_deterministic_rejection(
+				response and response.statusCode,
+				errorCode
+			)
 		local responseFinalResults = ITGOnlineDiagnostics.response_final_results(decoded)
 		if traceScoreTransport or not ok then
 			online_score_transport_trace(final or not ok, "send_score_response"
@@ -14211,21 +14223,22 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 					.. " song_pos=" .. tostring(songPosition)
 					.. " status=" .. tostring(response and response.statusCode or "nil"))
 			end
-		elseif ITGOnlineScoreTransport.is_contract_error(errorCode) then
+		elseif deterministicRejection then
 			self.scoreContractRejectedRoundKey = tostring(roundKey or "")
 			self.scoreContractRejectedContextKey = scoreContractContextKey
 			if self.StopLiveScoreFlush then
-				self:StopLiveScoreFlush("score_contract_rejected:" .. tostring(roundKey))
+				self:StopLiveScoreFlush("score_deterministically_rejected:" .. tostring(roundKey))
 			end
 			if tostring(self.scoreContractRejectedNoticeKey or "") ~= scoreContractContextKey then
 				self.scoreContractRejectedNoticeKey = scoreContractContextKey
-				online_flow_trace("score_contract_rejected"
+				online_flow_trace("score_deterministically_rejected"
 					.. " room=" .. tostring(self.currentRoomId or "nil")
 					.. " roundKey=" .. tostring(roundKey)
 					.. " localPlayer=" .. tostring(local_player_key(player))
 					.. " songHash=" .. tostring(scoreChartContext.song_hash or ""):sub(1, 12)
 					.. " chartHash=" .. tostring(scoreChartContext.chart_hash or ""):sub(1, 12)
 					.. " errorCode=" .. tostring(errorCode or "nil")
+					.. " status=" .. tostring(response and response.statusCode or "nil")
 					.. " decision=stop_round_transport_and_resynchronize")
 				safe_broadcast("OnlineResponseStatus", {
 					event = "scoreContract",
@@ -14233,7 +14246,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 					message = response_message(
 						response,
 						decoded,
-						"The server rejected this player's chart metadata."
+						"The server rejected this player's score for the current round."
 					),
 				})
 				if self.FetchRoom then
@@ -14282,7 +14295,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		if not ok and errorCode == "room_not_playing" then
 			self:HandleRoomNotPlayingScoreReject(final, decoded)
 		end
-		if not ok and final and not ITGOnlineScoreTransport.is_contract_error(errorCode) then
+		if not ok and final and not deterministicRejection then
 			safe_broadcast("OnlineResponseStatus", {
 				event = final and "finalScore" or "score",
 				success = false,
@@ -14293,6 +14306,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 			failed = outgoingFailed,
 			roundKey = roundKey,
 			final = final and true or false,
+			terminal = deterministicRejection,
 		})
 		end
 	)
@@ -14364,11 +14378,15 @@ function ITGOnline:ShouldContinueLocalScoreTransport(source)
 				source or "local_score_transport",
 				roundKey
 			)
+				or tostring(self.scoreContractRejectedRoundKey or "") == roundKey
 		else
+			local companionState = self:CompanionScoreState(roundKey)
 			finalized = self:IsCompanionScoreFinalizedForCurrentRound(
 				source or "local_score_transport",
-				roundKey
+				roundKey,
+				companionState
 			)
+				or tostring(companionState.contractRejectedContextKey or "") ~= ""
 		end
 		finalizedBySide[side] = finalized == true
 	end
@@ -14758,6 +14776,11 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			local pendingFinalRequested, pendingFinalCallbacks =
 				ITGOnlineScoreTransport.take_pending_final(state)
 			local errorCode = response_error_code(response, decoded)
+			local deterministicRejection =
+				ITGOnlineScoreTransport.is_deterministic_rejection(
+					response and response.statusCode,
+					errorCode
+				)
 			if ok then
 				state.lastAcceptedFingerprint = fingerprint
 				state.lastAcceptedSongPosition = math.max(
@@ -14777,17 +14800,18 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			elseif final and errorCode == "score_already_finalized" then
 				state.finalAccepted = true
 				ok = true
-			elseif ITGOnlineScoreTransport.is_contract_error(errorCode) then
+			elseif deterministicRejection then
 				state.contractRejectedContextKey = scoreContractContextKey
 				if state.contractRejectedNoticeShown ~= true then
 					state.contractRejectedNoticeShown = true
-					online_flow_trace("companion_score_contract_rejected"
+					online_flow_trace("companion_score_deterministically_rejected"
 						.. " localPlayer=P2"
 						.. " room=" .. tostring(self.currentRoomId or "nil")
 						.. " roundKey=" .. tostring(roundKey)
 						.. " songHash=" .. tostring(scoreChartContext.song_hash):sub(1, 12)
 						.. " chartHash=" .. tostring(scoreChartContext.chart_hash):sub(1, 12)
 						.. " errorCode=" .. tostring(errorCode or "nil")
+						.. " status=" .. tostring(response and response.statusCode or "nil")
 						.. " decision=stop_player_transport_and_resynchronize")
 					safe_broadcast("OnlineResponseStatus", {
 						event = "scoreContractP2",
@@ -14795,7 +14819,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 						message = response_message(
 							response,
 							decoded,
-							"The server rejected Player 2 chart metadata."
+							"The server rejected Player 2 score for the current round."
 						),
 					})
 					if self.FetchRoom then
@@ -14814,7 +14838,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			end
 			if not ok
 				and final
-				and not ITGOnlineScoreTransport.is_contract_error(errorCode)
+				and not deterministicRejection
 			then
 				safe_broadcast("OnlineResponseStatus", {
 					event = "finalScoreP2",
@@ -14827,6 +14851,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 				final = final == true,
 				failed = failed,
 				roundKey = roundKey,
+				terminal = deterministicRejection,
 			})
 			if pendingFinalRequested then
 				online_flow_trace("companion_final_score_dispatch localPlayer=P2"
@@ -21508,6 +21533,108 @@ elseif name == "room.score_updated" then
 			end
 		end
 	end
+	elseif name == "room.player_play_state_updated" or name == "room.started" then
+		local roomPayload = type(payload.room) == "table" and payload.room or {}
+		local roomId = payload.room_id
+			or payload.roomId
+			or roomPayload.id
+			or (event.target and event.target.id)
+		if not room_event_is_relevant(roomId) then return end
+
+		local playState = payload.play_state
+			or payload.playState
+			or roomPayload.play_state
+			or roomPayload.playState
+		if type(playState) ~= "table" then
+			online_flow_trace("player_play_state_event_reconcile reason=missing_play_state"
+				.. " room=" .. tostring(roomId or "nil"))
+			if self.FetchPlayState then self:FetchPlayState() end
+			return
+		end
+
+		local roomKey = self:RoomKey(roomId)
+		local incomingRoomVersion = tonumber(
+			payload.room_version
+				or payload.roomVersion
+				or roomPayload.room_version
+				or roomPayload.roomVersion
+		) or 0
+		local previousRoomVersion = tonumber(
+			self.lastRoomVersionByRoomId[roomKey]
+				or self.currentRoom and self.currentRoom.room_version
+				or 0
+		) or 0
+		if incomingRoomVersion > 0 and previousRoomVersion > 0
+			and incomingRoomVersion < previousRoomVersion
+		then
+			online_flow_trace("player_play_state_event_ignored reason=room_version_regression"
+				.. " room=" .. tostring(roomId)
+				.. " incoming=" .. tostring(incomingRoomVersion)
+				.. " previous=" .. tostring(previousRoomVersion))
+			return
+		end
+
+		local incomingPhase = self:KnownRoomPhaseOrNil(
+			payload.room_phase or payload.roomPhase or roomPayload.phase
+		)
+		local phaseChanged = false
+		if incomingPhase then
+			phaseChanged = self:ApplyRoomPhase(
+				incomingPhase,
+				name
+			) == true
+		end
+		if name == "room.started" then
+			self.currentRoom.current_selection_id =
+				payload.current_selection_id
+				or payload.currentSelectionId
+				or self.currentRoom.current_selection_id
+			self.currentRoom.start_at =
+				payload.start_at or payload.startAt or self.currentRoom.start_at
+			self.currentRoom.start_at_ms =
+				payload.start_at_ms or payload.startAtMs or self.currentRoom.start_at_ms
+			self.currentRoom.started_at =
+				payload.started_at or payload.startedAt or self.currentRoom.started_at
+			self.currentRoom.started_at_ms =
+				payload.started_at_ms or payload.startedAtMs or self.currentRoom.started_at_ms
+		end
+		if incomingRoomVersion > previousRoomVersion then
+			self.lastRoomVersionByRoomId[roomKey] = incomingRoomVersion
+			self.currentRoom.room_version = incomingRoomVersion
+		end
+		if eventId and eventId ~= "0" then
+			self.lastRoomEventIdByRoomId[roomKey] = eventId
+		end
+		self.lastAuthoritativeRoomSnapshotRoomId = roomKey
+		self.lastAuthoritativeRoomSnapshotAt = GetTimeSinceStart()
+		self.lastAuthoritativeRoomSnapshotSource = "compact:" .. tostring(name)
+
+		local playStateVersion = tonumber(
+			payload.play_state_version_ms
+				or payload.playStateVersionMs
+				or playState.version_ms
+		) or 0
+		local applied, lifecycleChanged = self:ApplyPlayStateSnapshot(
+			playState,
+			name,
+			playStateVersion,
+			{
+				suppressLobbyBroadcast = name ~= "room.started",
+				suppressUnchangedPlayStateBroadcast = true,
+			}
+		)
+		if applied and (phaseChanged or lifecycleChanged)
+			and self.EnforceRoomPhaseScreen
+		then
+			self:EnforceRoomPhaseScreen()
+		end
+		online_realtime_event_trace(name,
+			"gameplay_state_event_applied"
+				.. " room=" .. tostring(roomId)
+				.. " roomVersion=" .. tostring(incomingRoomVersion)
+				.. " playStateVersion=" .. tostring(playStateVersion)
+				.. " lifecycleChanged=" .. tostring(lifecycleChanged == true))
+		return true
 	elseif name == "room.results_ready" then
 		local resultsRoomId = payload.room_id
 			or payload.roomId
