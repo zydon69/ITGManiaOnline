@@ -36,6 +36,8 @@ function Transport.new_runtime(identity, roundKey)
 		lastSentAt = 0,
 		lastAcceptedSongPosition = 0,
 		maxCombo = 0,
+		failedFinalRetryCount = 0,
+		failedFinalNextAttemptAt = 0,
 	}
 end
 
@@ -107,6 +109,26 @@ end
 function Transport.is_deterministic_rejection(statusCode, errorCode)
 	if Transport.is_contract_error(errorCode) then return true end
 	return tonumber(statusCode) == 422
+end
+
+function Transport.failed_final_action(failed, finalAccepted, inFlight, now, nextAttemptAt)
+	if finalAccepted == true then return "complete" end
+	if failed ~= true then return "live" end
+	if inFlight == true then return "wait" end
+	if (tonumber(now) or 0) < (tonumber(nextAttemptAt) or 0) then return "wait" end
+	return "final"
+end
+
+function Transport.next_transient_final_retry(runtime, now)
+	runtime = type(runtime) == "table" and runtime or {}
+	runtime.failedFinalRetryCount =
+		(tonumber(runtime.failedFinalRetryCount) or 0) + 1
+	local delay = math.min(
+		8,
+		2 ^ math.min(3, runtime.failedFinalRetryCount - 1)
+	)
+	runtime.failedFinalNextAttemptAt = (tonumber(now) or 0) + delay
+	return delay
 end
 
 function Transport.context_key(roundKey, context)

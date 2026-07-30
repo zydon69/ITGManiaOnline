@@ -156,8 +156,30 @@ equal(scoreTransport.is_deterministic_rejection(500, "temporary_server_error"), 
 	"server failures remain retryable")
 equal(scoreTransport.is_deterministic_rejection(nil, "network_error"), false,
 	"network failures remain retryable")
+equal(scoreTransport.failed_final_action(false, false, false, 10, 0), "live",
+	"a non-failed player keeps sending live scores")
+equal(scoreTransport.failed_final_action(true, false, true, 10, 0), "wait",
+	"a failed final is never duplicated while its request is in flight")
+equal(scoreTransport.failed_final_action(true, false, false, 10, 12), "wait",
+	"a failed final respects transient retry backoff")
+equal(scoreTransport.failed_final_action(true, false, false, 12, 12), "final",
+	"a failed final is retried as final when its backoff expires")
+equal(scoreTransport.failed_final_action(true, true, false, 12, 0), "complete",
+	"an acknowledged failed final stops transport")
 local scoreRuntime = scoreTransport.new_runtime(p2Identity, "round-1")
 equal(scoreRuntime.localPlayer, "P2", "score runtime is bound to its local identity")
+equal(scoreTransport.next_transient_final_retry(scoreRuntime, 10), 1,
+	"first transient final retry uses a bounded one-second delay")
+equal(scoreRuntime.failedFinalNextAttemptAt, 11,
+	"failed final runtime records its next retry deadline")
+equal(scoreTransport.next_transient_final_retry(scoreRuntime, 11), 2,
+	"second transient final retry backs off for two seconds")
+equal(scoreTransport.next_transient_final_retry(scoreRuntime, 13), 4,
+	"third transient final retry backs off for four seconds")
+equal(scoreTransport.next_transient_final_retry(scoreRuntime, 17), 8,
+	"transient final retry delay is capped at eight seconds")
+equal(scoreTransport.next_transient_final_retry(scoreRuntime, 25), 8,
+	"transient final retry delay remains capped")
 scoreTransport.queue_final(scoreRuntime, function() end)
 local finalQueued, finalCallbacks = scoreTransport.take_pending_final(scoreRuntime)
 equal(finalQueued, true, "final score is queued behind an in-flight local score")
@@ -321,9 +343,9 @@ equal(party.gameplay_exit_allowed(versus, "P1", { P1 = false, P2 = false }), fal
 equal(party.gameplay_exit_allowed(versus, "P2", { P1 = false, P2 = false }), false,
 	"P2 cannot leave a shared gameplay screen while P1 is still active")
 equal(party.gameplay_exit_allowed(versus, "P1", { P1 = false, P2 = true }), true,
-	"P1 may freeze and leave once P2 already owns a final result")
+	"P1 may request an exit once P2 has locally reached a terminal state")
 equal(party.gameplay_exit_allowed(versus, "P2", { P1 = true, P2 = false }), true,
-	"P2 may freeze and leave once P1 already owns a final result")
+	"P2 may request an exit once P1 has locally reached a terminal state")
 equal(party.gameplay_exit_allowed(soloP1, "P1", { P1 = false }), true,
 	"a one-player machine may leave gameplay immediately")
 
@@ -711,6 +733,12 @@ assert(clientSource:find('online_score_trace("live_score_queue_activity room="',
 assert(clientSource:find("local companionTickDue =", 1, true)
 	and clientSource:find("self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()", 1, true),
 	"Player 2 score collection must run at the network cadence instead of every 100 ms")
+assert(clientSource:find('companionFinalAction == "final"', 1, true)
+	and clientSource:find("self:SendCompanionScore(true, true", 1, true)
+	and clientSource:find('companionFinalAction == "live"', 1, true),
+	"a failed Player 2 snapshot must remain final across transient transport failures")
+assert(clientSource:find('self:MarkPlayFailedEarly("score_transport_watchdog"', 1, true),
+	"a failed primary snapshot must be retried independently of the engine transition")
 local scoreTransportTickStart = assert(clientSource:find(
 	"function ITGOnline:TickLiveScoreTransport()",
 	1,
@@ -802,6 +830,9 @@ local gameplayExitSource = clientSource:sub(gameplayExitStart, gameplayExitEnd -
 assert(gameplayExitSource:find("self:MarkLocalPlayerFailedEarly", 1, true)
 	and gameplayExitSource:find("self:MarkReturnedToLobby", 1, true),
 	"a gameplay exit must finalize the failed snapshot before confirming lobby return")
+assert(gameplayExitSource:find("gameplay_exit_securing_local_final", 1, true)
+	and gameplayExitSource:find("secure_local_finals()", 1, true),
+	"a shared gameplay exit must secure every local final before leaving the screen")
 assert(gameplayExitSource:find("self.onlineGameplayVoluntaryExitKey = intent.roundKey", 1, true),
 	"navigation must remain blocked until the server accepts the returned-to-lobby command")
 assert(clientSource:find('normalizedHealth == "Dead"', 1, true),

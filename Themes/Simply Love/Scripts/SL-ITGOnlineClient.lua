@@ -13018,27 +13018,112 @@ function ITGOnline:TickLiveScoreTransport()
 	end
 
 	local companionNow = GetTimeSinceStart()
+	local activeRoundKey = tostring(self:CanonicalGameplayRoundKey(
+		"live_score_terminal_watchdog"
+	) or "")
+	local activeRoundValid = self:PlayStateKeyIsValid(activeRoundKey)
+	local primaryPlayer = online_score_source_player()
+	local primaryFailed = online_score_failed(
+		primaryPlayer,
+		online_stage_stats_for_score(primaryPlayer)
+	)
+	local primaryFinalAction = ITGOnlineScoreTransport.failed_final_action(
+		activeRoundValid and primaryFailed,
+		self:IsPrimaryScoreTransportFinalizedForCurrentRound(
+			"live_score_terminal_watchdog",
+			activeRoundKey
+		),
+		tostring(self.onlineGameplayFailedEarlyInFlightKey or "") == activeRoundKey
+			or self.scoreInFlightFingerprint ~= nil,
+		companionNow,
+		self.onlineGameplayEvaluationNextRetryAt
+	)
+	if primaryFinalAction == "final" and self.MarkPlayFailedEarly then
+		online_flow_trace("failed_final_watchdog_submit localPlayer=P1"
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " roundKey=" .. tostring(activeRoundKey))
+		self:MarkPlayFailedEarly("score_transport_watchdog", function(ok, decoded, response)
+			online_flow_trace("failed_final_watchdog_response localPlayer=P1"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(activeRoundKey)
+				.. " ok=" .. tostring(ok == true)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " error=" .. tostring(response_error_code(response, decoded) or "nil"))
+		end)
+	end
+
 	local companionTickDue = companionNow >= (tonumber(self.companionLiveScoreNextTickAt) or 0)
 	if companionTickDue
+		and activeRoundValid
 		and self:IsLocalTwoPlayerSession()
 		and self.SendCompanionScore
 		and self:NormalizeRoomPhase(self.currentRoom and self.currentRoom.phase) == "playing"
 		and not self:IsCompanionScoreFinalizedForCurrentRound("live_score_tick")
 	then
-		self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()
-		self:SendCompanionScore(false, false, function(ok, decoded, response)
-			if not ok
-				and not (response and response.inFlight)
-				and not (response and response.retryAfter)
-			then
-				online_flow_trace_throttled("companion_live_score_tick_failed", 2.0,
-					"companion_live_score_tick_failed localPlayer=P2"
+		local companionState = self:CompanionScoreState(activeRoundKey)
+		local companionFailed = online_score_failed(
+			PLAYER_2,
+			online_stage_stats_for_score(PLAYER_2)
+		)
+		local companionFinalAction = ITGOnlineScoreTransport.failed_final_action(
+			companionFailed,
+			companionState.finalAccepted == true
+				or self:LocalPlayerHasFinalResult(self.currentRoom, PLAYER_2),
+			companionState.inFlight == true,
+			companionNow,
+			companionState.failedFinalNextAttemptAt
+		)
+		if companionFinalAction == "final" then
+			-- A failed score is immutable. Once the engine reports Dead, never
+			-- downgrade its transport back to a live update.
+			companionState.failedFinalNextAttemptAt = companionNow + 0.75
+			online_flow_trace("failed_final_watchdog_submit localPlayer=P2"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(activeRoundKey)
+				.. " retry=" .. tostring(companionState.failedFinalRetryCount or 0))
+			self:SendCompanionScore(true, true, function(ok, decoded, response)
+				local errorCode = response_error_code(response, decoded)
+				if ok then
+					companionState.failedFinalRetryCount = 0
+					companionState.failedFinalNextAttemptAt = 0
+				elseif not ITGOnlineScoreTransport.is_deterministic_rejection(
+					response and response.statusCode,
+					errorCode
+				) then
+					local delay = ITGOnlineScoreTransport.next_transient_final_retry(
+						companionState,
+						GetTimeSinceStart()
+					)
+					online_flow_trace("failed_final_watchdog_retry localPlayer=P2"
+						.. " room=" .. tostring(self.currentRoomId or "nil")
+						.. " roundKey=" .. tostring(activeRoundKey)
+						.. " nextIn=" .. tostring(delay)
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " error=" .. tostring(errorCode or "nil"))
+				end
+				online_flow_trace("failed_final_watchdog_response localPlayer=P2"
 					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(activeRoundKey)
+					.. " ok=" .. tostring(ok == true)
 					.. " status=" .. tostring(response and response.statusCode or "nil")
-					.. " error=" .. tostring(decoded and decoded.error_code
-						or response and response.errorMessage or "nil"))
-			end
-		end)
+					.. " error=" .. tostring(errorCode or "nil"))
+			end)
+		elseif companionFinalAction == "live" then
+			self.companionLiveScoreNextTickAt = companionNow + self:LiveScoreMinIntervalSeconds()
+			self:SendCompanionScore(false, false, function(ok, decoded, response)
+				if not ok
+					and not (response and response.inFlight)
+					and not (response and response.retryAfter)
+				then
+					online_flow_trace_throttled("companion_live_score_tick_failed", 2.0,
+						"companion_live_score_tick_failed localPlayer=P2"
+						.. " room=" .. tostring(self.currentRoomId or "nil")
+						.. " status=" .. tostring(response and response.statusCode or "nil")
+						.. " error=" .. tostring(decoded and decoded.error_code
+							or response and response.errorMessage or "nil"))
+				end
+			end)
+		end
 	end
 
 	return self:HasPendingLiveScore()
@@ -16915,26 +17000,44 @@ function ITGOnline:MarkPlayFailed(callback)
 	self:MarkPlayTerminal("/play/failed", "failed", callback)
 end
 
-function ITGOnline:LocalGameplayExitAllowed(player, roundKey)
+function ITGOnline:LocalGameplayExitStates(roundKey)
+	roundKey = tostring(roundKey or "")
+	local terminalBySide = {}
 	local finalizedBySide = {}
 	for _, localPlayer in ipairs(self:RequiredLocalPlayers()) do
 		local side = local_player_key(localPlayer)
 		local accepted = self:LocalPlayerHasFinalResult(self.currentRoom, localPlayer)
+		local frozenFailed = false
 		if self:IsPrimaryLocalPlayer(localPlayer) then
 			accepted = accepted
-				or tostring(self.lastFinalScoreKey or "") == tostring(roundKey or "")
+				or tostring(self.lastFinalScoreKey or "") == roundKey
+			frozenFailed = type(self.failedScoreSnapshot) == "table"
+				and tostring(self.failedScoreSnapshotRoundKey or "") == roundKey
 		else
-			accepted = accepted
-				or self:CompanionScoreState(roundKey).finalAccepted == true
+			local companionState = self:CompanionScoreState(roundKey)
+			accepted = accepted or companionState.finalAccepted == true
+			frozenFailed = type(companionState.failedSnapshot) == "table"
 		end
 		finalizedBySide[side] = accepted == true
+		terminalBySide[side] = accepted == true
+			or frozenFailed
+			or online_score_failed(
+				localPlayer,
+				online_stage_stats_for_score(localPlayer)
+			)
 	end
 
+	return terminalBySide, finalizedBySide
+end
+
+function ITGOnline:LocalGameplayExitAllowed(player, roundKey)
+	local terminalBySide, finalizedBySide =
+		self:LocalGameplayExitStates(roundKey)
 	return ITGOnlineLocalParty.gameplay_exit_allowed(
 		self:LocalPartyPlan(),
 		local_player_key(player),
-		finalizedBySide
-	), finalizedBySide
+		terminalBySide
+	), terminalBySide, finalizedBySide
 end
 
 function ITGOnline:CommitLocalGameplayExit(intent, reason)
@@ -17033,8 +17136,50 @@ function ITGOnline:ProgressGameplayExit()
 		end, false, { allowDuringGameplay = true })
 	end
 
+	local function secure_local_finals()
+		if self.onlineGameplayExitIntent ~= intent then return end
+		local _, finalizedBySide = self:LocalGameplayExitStates(intent.roundKey)
+		for _, localPlayer in ipairs(self:RequiredLocalPlayers()) do
+			local side = local_player_key(localPlayer)
+			if finalizedBySide[side] ~= true then
+				intent.stage = "securing_local_finals"
+				intent.busy = true
+				online_flow_trace("gameplay_exit_securing_local_final"
+					.. " localPlayer=" .. tostring(side)
+					.. " requestedBy=" .. tostring(intent.playerKey)
+					.. " room=" .. tostring(intent.roomId)
+					.. " roundKey=" .. tostring(intent.roundKey))
+				self:MarkLocalPlayerFailedEarly(
+					localPlayer,
+					intent.source .. "_secure_" .. string.lower(side),
+					function(ok, decoded, response)
+						if self.onlineGameplayExitIntent ~= intent then return end
+						if not ok then
+							retry_or_cancel(
+								"secure_local_final_" .. string.lower(side),
+								decoded,
+								response
+							)
+							return
+						end
+						intent.busy = false
+						secure_local_finals()
+					end
+				)
+				return
+			end
+		end
+
+		return_to_lobby()
+	end
+
 	if intent.stage == "returning" then
 		return_to_lobby()
+		return true
+	end
+
+	if intent.stage == "securing_local_finals" then
+		secure_local_finals()
 		return true
 	end
 
@@ -17046,7 +17191,7 @@ function ITGOnline:ProgressGameplayExit()
 			return
 		end
 		intent.busy = false
-		return_to_lobby()
+		secure_local_finals()
 	end)
 	return true
 end
@@ -17060,11 +17205,14 @@ function ITGOnline:RequestGameplayExit(player, source)
 
 	local roundKey = self:CanonicalGameplayRoundKey("request_gameplay_exit")
 	if not self:PlayStateKeyIsValid(roundKey) then return false, "invalid_round" end
-	local allowed, finalizedBySide = self:LocalGameplayExitAllowed(player, roundKey)
+	local allowed, terminalBySide, finalizedBySide =
+		self:LocalGameplayExitAllowed(player, roundKey)
 	if not allowed then
 		online_flow_trace("gameplay_exit_blocked reason=other_local_player_not_failed"
 			.. " localPlayer=" .. tostring(local_player_key(player))
 			.. " roundKey=" .. tostring(roundKey)
+			.. " P1Terminal=" .. tostring(terminalBySide.P1 == true)
+			.. " P2Terminal=" .. tostring(terminalBySide.P2 == true)
 			.. " P1Final=" .. tostring(finalizedBySide.P1 == true)
 			.. " P2Final=" .. tostring(finalizedBySide.P2 == true))
 		return false, "other_local_player_not_failed"

@@ -99,10 +99,11 @@ end
 
 -- A shared ScreenGameplay cannot return only one local side to the lobby.
 -- The requesting side may therefore leave only after every *other* local side
--- already owns an authoritative final result.  A one-player machine has no
--- companion to wait for.
-function Party.gameplay_exit_allowed(plan, requestingSide, finalizedBySide)
-	if type(plan) ~= "table" or type(finalizedBySide) ~= "table" then
+-- has reached a local terminal state. Transport acknowledgement is a separate
+-- concern: it may delay the actual screen transition, but must not make a
+-- visibly failed companion behave as if it were still playing.
+function Party.gameplay_exit_allowed(plan, requestingSide, terminalBySide)
+	if type(plan) ~= "table" or type(terminalBySide) ~= "table" then
 		return false
 	end
 
@@ -112,7 +113,7 @@ function Party.gameplay_exit_allowed(plan, requestingSide, finalizedBySide)
 
 	for _, side in ipairs(plan.requiredSides or {}) do
 		side = normalized_side(side)
-		if side ~= requester and finalizedBySide[side] ~= true then
+		if side ~= requester and terminalBySide[side] ~= true then
 			return false
 		end
 	end

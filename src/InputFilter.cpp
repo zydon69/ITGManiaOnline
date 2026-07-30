@@ -13,6 +13,7 @@
 #include "RageTimer.h"
 #include "RageUtil.h"
 // for mouse stuff: -aj
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -275,17 +276,23 @@ void InputFilter::CheckButtonChange(
 }
 
 void InputFilter::ReportButtonChange(const DeviceInput& di, InputEventType t) {
-  if (LogInputDiagnosticsEnabled()) {
+  // First/release is sufficient to reconstruct an input sequence. Logging
+  // every 30 ms repeat while Start or Back is held can itself perturb the
+  // render loop and bury the state transition that matters.
+  if (LogInputDiagnosticsEnabled() && t != IET_REPEAT) {
     GameInput gi;
     const bool mapped = INPUTMAPPER != nullptr &&
                         INPUTMAPPER->DeviceToGame(di, gi);
+    const size_t heldButtons =
+        std::count_if(g_CurrentState.begin(), g_CurrentState.end(),
+                      [](const DeviceInput& input) { return input.bDown; });
     LOG->Trace(
         "INPUT_TRACE: type=%s device=%s level=%.3f mapped=%d game=%s "
         "buttons_held=%zu",
         InputEventTypeToString(t).c_str(), di.ToString().c_str(), di.level,
         mapped ? 1 : 0,
         mapped ? gi.ToString(INPUTMAPPER->GetInputScheme()).c_str() : "none",
-        g_CurrentState.size());
+        heldButtons);
   }
 
   queue.push_back(InputEvent());
