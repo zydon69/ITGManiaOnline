@@ -301,6 +301,16 @@ if(NOT NIL_SCHEDULE_HOLD_OFFSET EQUAL -1)
       "ScreenGameplay invariant failed: online starting phase must hold gameplay even when a scheduled start is known")
 endif()
 
+string(FIND
+    "${ONLINE_CLIENT_TEXT}"
+    "local traceKey = \"elapsed\""
+    STABLE_SCHEDULE_ELAPSED_TRACE_OFFSET)
+if(STABLE_SCHEDULE_ELAPSED_TRACE_OFFSET EQUAL -1)
+  message(
+      FATAL_ERROR
+      "ScreenGameplay invariant failed: an elapsed online schedule must not emit a new trace every second")
+endif()
+
 string(REGEX MATCH
     "if \\(GetITGOnlineShouldHoldGameplayForStart\\(\\)\\)[^{]*\\{[^}]*p\\.m_StartSecond[ \t]*=[ \t]*0\\.0f"
     HOLD_STARTS_AT_ZERO

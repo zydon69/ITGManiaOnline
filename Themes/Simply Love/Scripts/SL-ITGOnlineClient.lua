@@ -17820,7 +17820,11 @@ function ITGOnline:VisibleSecondsUntilScheduledStart()
 	end
 
 	if seconds <= 0 then
-		local traceKey = "elapsed|" .. tostring(math.ceil(seconds))
+		-- Keep the negative scheduled-start offset available to ScreenGameplay:
+		-- late entry uses it to align audio with the authoritative server clock.
+		-- The elapsed state itself is stable, so trace it once per schedule instead
+		-- of emitting a new line for every increasingly negative second.
+		local traceKey = "elapsed"
 		if tostring(self.scheduledStartVisibleTraceKey or "") ~= traceKey then
 			self.scheduledStartVisibleTraceKey = traceKey
 			online_flow_trace("scheduled_start_visible_elapsed seconds=" .. tostring(seconds)
