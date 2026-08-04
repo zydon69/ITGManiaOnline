@@ -9510,9 +9510,47 @@ function ITGOnline:HandleLocalPartyInvariantFailure(reason, player, payload)
 		self:LeaveRoom(function()
 			returnToLobby()
 		end)
-	else
-		returnToLobby()
+		return
 	end
+
+	-- The coordinator may already have consumed an authoritative not-room-member
+	-- response while P2 still owns the former room.  Do not merely repaint the
+	-- lobby in that split state: resolve P2's authoritative membership and leave
+	-- it explicitly so the local party cannot strand a ghost member/manager.
+	if reason == "companion_presence_room_mismatch"
+		and player and not self:IsPrimaryLocalPlayer(player) then
+		self:RequestAsLocalPlayer(player, "GET", "/rooms/current", nil,
+			function(currentOk, currentDecoded, currentResponse)
+				local companionRoom = currentDecoded and currentDecoded.room or nil
+				local companionRoomId = companionRoom
+					and (companionRoom.id or companionRoom.room_id or companionRoom.roomId) or nil
+				if companionRoomId then
+					online_flow_trace("local_party_invariant_companion_leave_begin"
+						.. " localPlayer=" .. playerKey
+						.. " room=" .. tostring(companionRoomId))
+					self:RequestAsLocalPlayer(player, "POST",
+						"/rooms/" .. tostring(companionRoomId) .. "/leave", {
+							client_action_id = self:NewClientActionId("invariant-companion-leave"),
+						}, function(leaveOk, leaveDecoded, leaveResponse)
+							online_flow_trace("local_party_invariant_companion_leave_end"
+								.. " localPlayer=" .. playerKey
+								.. " room=" .. tostring(companionRoomId)
+								.. " ok=" .. tostring(leaveOk == true)
+								.. " status=" .. tostring(leaveResponse and leaveResponse.statusCode or "nil"))
+							returnToLobby()
+						end)
+					return
+				end
+				online_flow_trace("local_party_invariant_companion_room_resolved"
+					.. " localPlayer=" .. playerKey
+					.. " ok=" .. tostring(currentOk == true)
+					.. " status=" .. tostring(currentResponse and currentResponse.statusCode or "nil"))
+				returnToLobby()
+			end)
+		return
+	end
+
+	returnToLobby()
 end
 
 function ITGOnline:SendCompanionRealtimePing(player, source)
