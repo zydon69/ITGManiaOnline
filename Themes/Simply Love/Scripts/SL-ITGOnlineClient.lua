@@ -17934,6 +17934,12 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity, r
 			.. " status=" .. tostring(response and response.statusCode or "nil")
 			.. " error=" .. tostring(errorCode ~= "" and errorCode or "nil")
 			.. " room=" .. tostring(roomId or "nil"))
+		-- A successful authenticated heartbeat proves that P2's HTTP transport
+		-- recovered. Restore its realtime channel immediately instead of waiting
+		-- for a later lobby synchronization side effect.
+		if ok and self.MaintainCompanionRealtime then
+			self:MaintainCompanionRealtime("companion_heartbeat_recovered")
+		end
 		if not ok and tonumber(response and response.statusCode) == 401 then
 			self:ClearLocalPlayerSession(player, { clearStored = true })
 			self:HandleLocalPartyInvariantFailure("companion_heartbeat_unauthorized", player, decoded)
@@ -21211,6 +21217,11 @@ if name == "connection.ready" then
 		online_flow_trace("realtime_event_apply name=connection.ready"
 			.. " serverTime=" .. tostring(event.server_time or payload.server_time or "nil"))
 		self:ObserveRoomServerTime(event.server_time or payload.server_time, "connection.ready")
+		-- P1 and P2 are independent authenticated websocket identities. A primary
+		-- reconnect must also reconcile the companion transport before gameplay.
+		if self.MaintainCompanionRealtime then
+			self:MaintainCompanionRealtime("primary_connection_ready")
+		end
 		local screen = top_screen()
 		local screenName = screen and screen:GetName() or ""
 		if screenName == "ScreenOnlineLobbies" then

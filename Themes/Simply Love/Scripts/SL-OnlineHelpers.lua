@@ -2889,7 +2889,7 @@ CreateOnlineHandler = function()
 					self.onlineOperationTokens = {}
 					self.onlineOperations = {}
 				end,
-	      ConnectOnlineMessageCommand=function(self)
+		      ConnectOnlineMessageCommand=function(self)
 	        if self.connecting then
 						if online_trace then online_trace("FLOW connect_online_skipped reason=already_connecting") end
 						return
@@ -2908,9 +2908,12 @@ CreateOnlineHandler = function()
 						self.leaveLobbyBusy = false
 						self.onlineOperationTokens = {}
 						self.onlineOperations = {}
-						online_flow_trace("connect_online_resume_after_shutdown restarting_connection_timers=true busy_flags_cleared=true")
-						start_connection_timers(self)
+						online_flow_trace("connect_online_resume_after_shutdown busy_flags_cleared=true")
 					end
+					-- Persistent overlay actors do not reliably receive OnCommand on every
+					-- engine lifecycle.  Connection establishment is the authoritative,
+					-- idempotent point at which network maintenance must be armed.
+					start_connection_timers(self)
 					if online_trace then
 						online_trace("FLOW connect_online_begin connected=" .. tostring(self.connected == true)
 							.. " socket=" .. tostring(self.socket ~= nil)

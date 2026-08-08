@@ -1015,6 +1015,17 @@ assert(countdownPolicySource:find('normalized_room_phase_for_runtime() ~= "start
 	"the pre-song countdown must stop as soon as gameplay starts")
 assert(not onlineHelpersSource:find("room_fast_runtime_should_run", 1, true),
 	"the old starting-or-playing countdown policy must not return")
+local connectCommandStart = assert(onlineHelpersSource:find("ConnectOnlineMessageCommand=function", 1, true),
+	"online runtime must expose its connection command")
+local connectCommandEnd = assert(onlineHelpersSource:find("DisconnectOnlineMessageCommand=function", connectCommandStart, true),
+	"online connection command boundary must remain identifiable")
+local connectCommandSource = onlineHelpersSource:sub(connectCommandStart, connectCommandEnd - 1)
+assert(connectCommandSource:find("start_connection_timers(self)", 1, true),
+	"every authoritative online connection attempt must arm network maintenance")
+assert(clientSource:find('MaintainCompanionRealtime("primary_connection_ready")', 1, true),
+	"a recovered coordinator websocket must restore the companion websocket")
+assert(clientSource:find('MaintainCompanionRealtime("companion_heartbeat_recovered")', 1, true),
+	"a recovered companion HTTP heartbeat must restore its websocket")
 assert(onlineScorePushSource:find("ITGOnline:FlushLiveScore()", 1, true),
 	"ScreenGameplay must remain the sole owner of primary live-score transport")
 local helperReadyStart = assert(onlineHelpersSource:find("function maybe_set_lobby_ready", 1, true),
