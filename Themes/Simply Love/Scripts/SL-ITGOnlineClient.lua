@@ -4989,7 +4989,7 @@ function ITGOnline:CurrentPresenceStatus(screenName, room)
 	end
 	if not hasRoom then return "available" end
 	if self:IsOnlineGameplayScreen(screenName)
-		and (phase == "starting" or phase == "playing" or phase == "results") then
+		and (phase == "starting" or phase == "playing") then
 		return "playing"
 	end
 	return "in_room"
@@ -16151,8 +16151,15 @@ end
 function ITGOnline:UpdatePlayStateFromResponse(decoded)
 	if decoded and decoded.play_state and self.currentRoom then
 		local versionKey = tostring(self.currentRoomId or self.currentRoom.id or "")
-		local incomingVersion = tonumber(decoded.play_state_version_ms or (decoded.play_state and decoded.play_state.version_ms) or decoded.version_ms) or 0
+		local rawIncomingVersion = decoded.play_state_version_ms
+			or (decoded.play_state and decoded.play_state.version_ms)
+			or decoded.version_ms
+		local parsedIncomingVersion = tonumber(rawIncomingVersion)
+		local incomingVersion = parsedIncomingVersion or 0
 		local previousVersion = tonumber(self.lastPlayStateVersionByRoomId[versionKey]) or 0
+		local responsePhase = self:KnownRoomPhaseOrNil(decoded.room_phase)
+		local isAuthoritativeLobbyReset = parsedIncomingVersion == 0
+			and responsePhase == "lobby"
 		if incomingVersion > 0 then
 			if incomingVersion < previousVersion then
 				online_flow_trace("ignored_stale_play_state_response version=" .. tostring(incomingVersion)
@@ -16160,6 +16167,12 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 				return
 			end
 			self.lastPlayStateVersionByRoomId[versionKey] = incomingVersion
+		elseif isAuthoritativeLobbyReset then
+			-- Idle lobby payloads deliberately use version 0 as an explicit reset
+			-- sentinel.  Accept only the complete server contract (version + phase),
+			-- never a response whose version is merely absent.
+			self.lastPlayStateVersionByRoomId[versionKey] = 0
+			online_flow_trace("accepted_lobby_play_state_reset previous=" .. tostring(previousVersion))
 		elseif previousVersion > 0 then
 			online_flow_trace("ignored_unversioned_play_state_response previous=" .. tostring(previousVersion))
 			if self.FetchRoom then
@@ -16174,7 +16187,7 @@ function ITGOnline:UpdatePlayStateFromResponse(decoded)
 		local previousPhase = self.currentRoom.phase
 		local rawResponsePhase = decoded.room_phase
 		local hasResponsePhase = rawResponsePhase ~= nil and tostring(rawResponsePhase or "") ~= ""
-		local responsePhase = hasResponsePhase and self:KnownRoomPhaseOrNil(rawResponsePhase) or nil
+		responsePhase = hasResponsePhase and self:KnownRoomPhaseOrNil(rawResponsePhase) or nil
 		local responsePhaseLabel = "unchanged"
 		if responsePhase then
 			responsePhaseLabel = responsePhase

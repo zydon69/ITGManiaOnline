@@ -2617,7 +2617,10 @@ function PackSync:FindLocalMatch(songInfo)
 			local matchMessage = matchSource == "manager_pack"
 				and pack_text("PackAndChartFound", "Pack and chart found")
 				or pack_text("CompatibleChartFound", "Pack missing / compatible chart found")
-			self:UpdateStatus(self.status.LocalChartMatchFound, matchMessage)
+			-- The following availability confirmation atomically promotes the
+			-- member to READY on the server.  Publishing this transient local scan
+			-- result separately only serializes another write on the room row.
+			self:ApplyLocalStatus(self.status.LocalChartMatchFound, matchMessage)
 			local result = { ok = true, status = "matched", song = song, steps = steps, payload = payload, matchSource = matchSource, matchMessage = matchMessage }
 			self.localScanCache[scanKey] = result
 			return result
@@ -2662,14 +2665,19 @@ function PackSync:FindLocalMatch(songInfo)
 		local message = mismatchReason == "song_hash_mismatch"
 			and pack_text("LocalChartAudioMismatch", "The chart exists locally, but its audio differs from the manager's.")
 			or pack_text("SongOrChartMismatch", "The song or chart differs from the manager's.")
-		self:UpdateStatus(self.status.ChartMismatch, message)
+		-- OnlineMissingSong is the authoritative server write for this terminal
+		-- scan result.  Keep the UI status local until that availability report
+		-- returns, avoiding two concurrent writes for the same fact.
+		self:ApplyLocalStatus(self.status.ChartMismatch, message)
 		self.localScanCache[scanKey] = { ok = false, status = "mismatch", reason = mismatchReason, message = message }
 		return { ok = false, status = "mismatch", reason = mismatchReason }
 	end
 
 	trace("No compatible chart found title=" .. selected_title(songInfo))
 	local message = pack_text("NoIdenticalManagerChart", "No chart identical to the manager's was found.")
-	self:UpdateStatus(self.status.NoCompatibleChartFound, message)
+	-- OnlineMissingSong reports this terminal state through song-availability,
+	-- which also updates pack_sync_status atomically on the server.
+	self:ApplyLocalStatus(self.status.NoCompatibleChartFound, message)
 	self.localScanCache[scanKey] = { ok = false, status = "missing", reason = "no_compatible_chart_found", message = message }
 	return { ok = false, status = "missing", reason = "no_compatible_chart_found" }
 end

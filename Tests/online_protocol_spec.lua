@@ -443,6 +443,14 @@ local roomKickedHandler = assert(
 )
 assert(roomKickedHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
 	"room.kicked must clear the local room immediately without waiting for heartbeat reconciliation")
+local playStateResponseHandler = assert(
+	onlineClientContent:match("function ITGOnline:UpdatePlayStateFromResponse%b()%s*(.-)%s*function ITGOnline:PlayStateLifecycleSignature"),
+	"missing play-state response handler"
+)
+assert(playStateResponseHandler:find('responsePhase == "lobby"', 1, true)
+	and playStateResponseHandler:find("parsedIncomingVersion == 0", 1, true)
+	and playStateResponseHandler:find("accepted_lobby_play_state_reset", 1, true),
+	"the explicit version-zero lobby reset must be accepted without a redundant room fetch")
 
 local packSyncPath = sourceRoot .. "/Themes/Simply Love/Scripts/SL-OnlinePackSync.lua"
 local packSyncFile = assert(io.open(packSyncPath, "rb"), "missing online pack-sync source: " .. packSyncPath)
@@ -494,6 +502,16 @@ assert(candidateDownloadHandler:find("missing_or_stale_server_authorization", 1,
 	"the transfer path must reject a missing or stale authorization identity")
 assert(packSyncContent:find("self.status.NoCompatibleChartFound, message", 1, true),
 	"catalogue failure before authorization must not forge a download failure")
+local localMatchHandler = assert(
+	packSyncContent:match("function PackSync:FindLocalMatch%b()%s*(.-)%s*function PackSync:ApplySelectedChart"),
+	"missing local chart matching handler"
+)
+assert(not localMatchHandler:find("self:UpdateStatus(self.status.LocalChartMatchFound", 1, true),
+	"a successful local scan must not post a redundant transient pack status")
+assert(not localMatchHandler:find("self:UpdateStatus(self.status.ChartMismatch", 1, true),
+	"a chart mismatch must be persisted only by the authoritative availability report")
+assert(not localMatchHandler:find("self:UpdateStatus(self.status.NoCompatibleChartFound", 1, true),
+	"a missing chart must be persisted only by the authoritative availability report")
 
 local lobbyOverlayPath = sourceRoot .. "/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
 local lobbyOverlayFile = assert(io.open(lobbyOverlayPath, "rb"), "missing online lobby overlay: " .. lobbyOverlayPath)

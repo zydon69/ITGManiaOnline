@@ -17,8 +17,7 @@ function Policy.presence_status(hasRoom, phase, _screenName)
 
 	phase = normalized_phase(phase)
 	if phase == "starting"
-		or phase == "playing"
-		or phase == "results" then
+		or phase == "playing" then
 		return "playing"
 	end
 

@@ -422,10 +422,10 @@ equal(roomPolicy.presence_status(true, "starting", "ScreenGameplay"), "playing",
 	"starting gameplay presence is playing")
 equal(roomPolicy.presence_status(true, "playing", "ScreenGameplayShared"), "playing",
 	"shared gameplay presence is playing")
-equal(roomPolicy.presence_status(true, "results", "ScreenGameplay"), "playing",
-	"gameplay held for global results remains playing")
-equal(roomPolicy.presence_status(true, "results", "ScreenEvaluationStage"), "playing",
-	"evaluation presence remains playing until the server closes the active round")
+equal(roomPolicy.presence_status(true, "results", "ScreenGameplay"), "in_room",
+	"a completed round is no longer reported as actively playing")
+equal(roomPolicy.presence_status(true, "results", "ScreenEvaluationStage"), "in_room",
+	"evaluation presence is in-room while results remain visible")
 equal(roomPolicy.presence_status(true, "playing", "ScreenEvaluationStage"), "playing",
 	"a locally completed player cannot regress presence while remote players continue")
 equal(roomPolicy.presence_status(true, "lobby", "ScreenEvaluationStage"), "in_room",
