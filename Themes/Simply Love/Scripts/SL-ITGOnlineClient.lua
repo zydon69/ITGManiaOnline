@@ -6805,6 +6805,30 @@ function ITGOnline:BroadcastLeaderboardFromRoom(room, source)
 	return true
 end
 
+function ITGOnline:ApplyLeaderboardSnapshot(room, leaderboard, version)
+	if type(room) ~= "table" or type(leaderboard) ~= "table" then
+		return false
+	end
+
+	-- These aliases remain part of the public room shape, but they must never
+	-- become independent sources of truth. Update them atomically from the same
+	-- authoritative server snapshot.
+	room.live_scores = leaderboard
+	room.leaderboard = leaderboard
+	room.top_scores = leaderboard
+
+	version = math.max(
+		tonumber(version) or 0,
+		tonumber(room.leaderboard_version_ms or room.live_score_version_ms) or 0
+	)
+	if version > 0 then
+		room.leaderboard_version_ms = version
+		room.live_score_version_ms = version
+	end
+
+	return true
+end
+
 function ITGOnline:FinalLeaderboardResultsFrom(source)
 	if type(source) ~= "table" then return nil end
 	if type(source.finalResults) == "table" then return source.finalResults end
@@ -21131,11 +21155,7 @@ function ITGOnline:ApplyResultsReadyPayload(payload, eventId)
 
 	local finalResults = self.currentRoom.play_state
 		and self.currentRoom.play_state.final_results or {}
-	self.currentRoom.live_scores = finalResults
-	if playStateVersion > 0 then
-		self.currentRoom.leaderboard_version_ms = playStateVersion
-		self.currentRoom.live_score_version_ms = playStateVersion
-	end
+	self:ApplyLeaderboardSnapshot(self.currentRoom, finalResults, playStateVersion)
 	self:BroadcastLeaderboardFromRoom(
 		self.currentRoom,
 		"results_ready_fast_path"
@@ -21631,7 +21651,7 @@ elseif name == "room.score_updated" then
 	local leaderboardIsFresh = false
 	if payload.leaderboard and versionRoomId ~= "" then
 		local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
-		if incomingVersion > 0 and incomingVersion < previousVersion then
+		if incomingVersion > 0 and incomingVersion <= previousVersion then
 			online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
 				.. " previous=" .. tostring(previousVersion))
 		elseif incomingVersion > 0 then
@@ -21648,9 +21668,7 @@ elseif name == "room.score_updated" then
 
 	if payload.leaderboard and leaderboardIsFresh then
 		if self.currentRoom then
-			self.currentRoom.live_scores = payload.leaderboard
-			self.currentRoom.leaderboard_version_ms = incomingVersion
-			self.currentRoom.live_score_version_ms = incomingVersion
+			self:ApplyLeaderboardSnapshot(self.currentRoom, payload.leaderboard, incomingVersion)
 			if self.debugScoreTrace == true then
 				online_score_trace("score_updated_live_scores_applied roomId=" .. tostring(payload.room_id or "nil")
 					.. " version=" .. tostring(incomingVersion)

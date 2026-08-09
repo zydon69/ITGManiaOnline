@@ -713,6 +713,19 @@ assert(leaderboardContent:find("local function local_user_roles()", 1, true)
 	and leaderboardContent:find('Name="RightMarker"', 1, true)
 	and leaderboardContent:find('localRole == "P2" and "<" or ""', 1, true),
 	"the live leaderboard must identify P2 locally and draw its marker on the right")
+assert(onlineClientContent:find("function ITGOnline:ApplyLeaderboardSnapshot", 1, true)
+	and onlineClientContent:find("room.live_scores = leaderboard", 1, true)
+	and onlineClientContent:find("room.leaderboard = leaderboard", 1, true)
+	and onlineClientContent:find("room.top_scores = leaderboard", 1, true),
+	"all room leaderboard aliases must share one authoritative snapshot")
+assert(onlineClientContent:find(
+	"incomingVersion > 0 and incomingVersion <= previousVersion", 1, true
+), "duplicate or reordered score events must not overwrite a newer leaderboard")
+assert(leaderboardContent:find(
+	"leaderboard_policy.canonical_leaderboard(room)", 1, true
+) and leaderboardContent:find(
+	"leaderboard_policy.row_supersedes(previous, row)", 1, true
+), "the gameplay leaderboard must use its canonical source and per-player freshness policy")
 
 local paneNumbersPath = sourceRoot
 	.. "/Themes/Simply Love/BGAnimations/ScreenEvaluation common/Panes/Pane2/JudgmentNumbers.lua"

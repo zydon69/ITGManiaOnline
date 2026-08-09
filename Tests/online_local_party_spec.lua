@@ -11,6 +11,9 @@ local lobbyModel = assert(dofile(
 local roomPolicy = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineRoomPolicy.lua"
 ))
+local leaderboardPolicy = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLeaderboardPolicy.lua"
+))
 local localIdentity = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineLocalIdentity.lua"
 ))
@@ -34,6 +37,28 @@ local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
 		.. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
+
+local canonicalRoomLeaderboard = { { user_id = 1, score_percent = 42 } }
+equal(leaderboardPolicy.canonical_leaderboard({
+	live_scores = canonicalRoomLeaderboard,
+	leaderboard = { { user_id = 1, score_percent = 0 } },
+}), canonicalRoomLeaderboard, "live scores must be the canonical room leaderboard")
+equal(leaderboardPolicy.row_supersedes(
+	{ song_position_seconds = 60, percent = 20, updated_at = "2026-08-09T10:00:01Z" },
+	{ song_position_seconds = 59, percent = 80, updated_at = "2026-08-09T10:00:02Z" }
+), false, "an older song snapshot must not replace a fresher score")
+equal(leaderboardPolicy.row_supersedes(
+	{ song_position_seconds = 60, percent = 80, updated_at = "2026-08-09T10:00:01Z" },
+	{ song_position_seconds = 61, percent = 70, updated_at = "2026-08-09T10:00:02Z" }
+), true, "a legitimate later ITG score decrease must remain visible")
+local sortedLeaderboard = leaderboardPolicy.sort_rows({
+	{ user_id = 1, percent = 0, rank = 1 },
+	{ user_id = 2, percent = 67.09, rank = 3 },
+	{ user_id = 3, percent = 76.77, rank = 2 },
+})
+equal(sortedLeaderboard[1].user_id, 3, "current percentage must define first place")
+equal(sortedLeaderboard[2].user_id, 2, "positive score must remain above a stale zero-percent rank")
+equal(sortedLeaderboard[3].user_id, 1, "zero-percent player must remain last")
 
 local kickedRoute = assert(realtimeEventRouter.route({
 	id = 42,

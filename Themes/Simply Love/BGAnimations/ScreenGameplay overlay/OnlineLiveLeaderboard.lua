@@ -25,6 +25,7 @@ local last_score_phase = ""
 local leaderboard_trace_seen = {}
 local leaderboard_trace_order = {}
 local max_leaderboard_trace_signatures = 512
+local leaderboard_policy = ITGOnlineLeaderboardPolicy
 
 local function monotonic_time()
 	if GetTimeSinceStart then
@@ -225,6 +226,9 @@ local function rows_from_leaderboard(leaderboard)
 			finished = flags.finished or is_finalized,
 			play_state = play_state,
 			last_updated_at = tostring(score.updated_at or ""),
+			reported_at = tostring(score.reported_at or ""),
+			song_position_seconds = tonumber(score.song_position_seconds
+				or score.latest_song_position_seconds) or 0,
 		}
 	end
 	leaderboard_trace("rows_from_leaderboard end rows=" .. tostring(#rows))
@@ -268,40 +272,6 @@ local function copy_row(row)
 		copied[key] = value
 	end
 	return copied
-end
-
-local function sort_row_for_display(left, right)
-	local left_rank = tonumber(left and left.rank)
-	local right_rank = tonumber(right and right.rank)
-	if left_rank ~= nil and right_rank ~= nil and left_rank ~= right_rank then
-		return left_rank < right_rank
-	end
-
-	local left_display_order = tonumber(left and left.display_order)
-	local right_display_order = tonumber(right and right.display_order)
-	if left_display_order ~= nil and right_display_order ~= nil and left_display_order ~= right_display_order then
-		return left_display_order < right_display_order
-	end
-
-	local left_percent = tonumber(left and left.percent) or 0
-	local right_percent = tonumber(right and right.percent) or 0
-	if left_percent ~= right_percent then
-		return left_percent > right_percent
-	end
-
-	local left_updated = tostring(left and left.last_updated_at or left and left.updated_at or "")
-	local right_updated = tostring(right and right.last_updated_at or right and right.updated_at or "")
-	if left_updated ~= right_updated then
-		return left_updated > right_updated
-	end
-
-	local left_name = tostring(left and left.name or "")
-	local right_name = tostring(right and right.name or "")
-	if left_name ~= right_name then
-		return left_name < right_name
-	end
-
-	return tostring(left and left.user_id or "") < tostring(right and right.user_id or "")
 end
 
 local function rows_debug_summary(rows)
@@ -352,18 +322,16 @@ local function remember_score_rows(rows)
 		local user_id = tostring(row.user_id or "")
 		if user_id ~= "" then
 			local previous = cached_score_rows_by_user_id[user_id]
-			local incoming_terminal = row.failed == true or row.finished == true or row.exited == true
 			local incoming_placeholder = row.is_placeholder == true
 			local previous_placeholder = previous and previous.is_placeholder == true
-			if not previous
-				or (previous_placeholder and not incoming_placeholder)
-				or (not incoming_placeholder and incoming_terminal)
-				or not incoming_placeholder then
+			if leaderboard_policy.row_supersedes(previous, row) then
 				cached_score_rows_by_user_id[user_id] = copy_row(row)
 			else
-				leaderboard_trace("score_cache_kept_reliable user=" .. tostring(user_id)
+				leaderboard_trace("score_cache_kept_fresher user=" .. tostring(user_id)
 					.. " incomingPlaceholder=" .. tostring(incoming_placeholder)
-					.. " previousPlaceholder=" .. tostring(previous_placeholder))
+					.. " previousPlaceholder=" .. tostring(previous_placeholder)
+					.. " incomingPosition=" .. tostring(row.song_position_seconds or 0)
+					.. " previousPosition=" .. tostring(previous and previous.song_position_seconds or 0))
 			end
 			if not cache_has_user_id(user_id) then
 				cached_score_user_order[#cached_score_user_order + 1] = user_id
@@ -390,7 +358,7 @@ end
 
 local function rows_from_room(room, leaderboard_override)
 	reset_score_cache_if_needed(room)
-	local leaderboard = leaderboard_override or (room and (room.leaderboard or room.live_scores or room.top_scores) or nil)
+	local leaderboard = leaderboard_override or leaderboard_policy.canonical_leaderboard(room)
 	local score_rows = rows_from_leaderboard(leaderboard or {})
 	local session_rows = rows_from_play_state_sessions(room and room.play_state or nil)
 	local score_by_user_id = {}
@@ -401,13 +369,7 @@ local function rows_from_room(room, leaderboard_override)
 	for row in ivalues(score_rows or {}) do
 		if row.user_id and tostring(row.user_id) ~= "" then
 			local user_id = tostring(row.user_id)
-			local cached = cached_score_rows_by_user_id[user_id]
-			local row_is_placeholder = row.is_placeholder == true
-			if cached and row_is_placeholder and cached.is_placeholder ~= true then
-				score_by_user_id[user_id] = cached
-			else
-				score_by_user_id[user_id] = row
-			end
+			score_by_user_id[user_id] = cached_score_rows_by_user_id[user_id] or row
 		end
 	end
 
@@ -438,7 +400,7 @@ local function rows_from_room(room, leaderboard_override)
 		for row in ivalues(score_rows or {}) do
 			local user_id = tostring(row.user_id or "")
 			if user_id ~= "" and not seen[user_id] then
-				merged[#merged + 1] = row
+				merged[#merged + 1] = copy_row(cached_score_rows_by_user_id[user_id] or row)
 				seen[user_id] = true
 			end
 		end
@@ -449,12 +411,7 @@ local function rows_from_room(room, leaderboard_override)
 		for row in ivalues(score_rows or {}) do
 			local user_id = tostring(row.user_id or "")
 			local cached = cached_score_rows_by_user_id[user_id]
-			local row_is_placeholder = row.is_placeholder == true
-			if cached and row_is_placeholder and cached.is_placeholder ~= true then
-				merged[#merged + 1] = copy_row(cached)
-			else
-				merged[#merged + 1] = row
-			end
+			merged[#merged + 1] = copy_row(cached or row)
 			if user_id ~= "" then seen[user_id] = true end
 		end
 
@@ -474,7 +431,7 @@ local function rows_from_room(room, leaderboard_override)
 			merged[#merged + 1] = copy_row(row)
 		end
 	elseif #merged > 1 then
-		table.sort(merged, sort_row_for_display)
+		leaderboard_policy.sort_rows(merged)
 	end
 
 	leaderboard_trace("rows_from_room merged scoreRows=" .. tostring(#score_rows)
