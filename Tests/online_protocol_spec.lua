@@ -431,6 +431,26 @@ local heartbeatRoomUnavailableHandler = assert(
 )
 assert(heartbeatRoomUnavailableHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
 	"a heartbeat proving server-side removal must immediately leave the joined-lobby UI")
+local presencePrunedHandler = assert(
+	onlineClientContent:match('elseif name == "presence%.pruned" then(.-)%s*elseif name == "room%.kicked"'),
+	"missing presence.pruned handler"
+)
+assert(presencePrunedHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"a server-side inactivity prune must immediately leave the joined-lobby UI")
+local currentRoomFallbackHandler = assert(
+	onlineClientContent:match("function ITGOnline:FetchCurrentRoomFallback%b()%s*(.-)%s*function ITGOnline:"),
+	"missing current-room fallback handler"
+)
+assert(currentRoomFallbackHandler:find("statusCode == 404", 1, true)
+	and currentRoomFallbackHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"a missing fallback room must terminate stale local membership")
+local companionRealtimeHandler = assert(
+	onlineClientContent:match("function ITGOnline:HandleCompanionRealtimeEvent%b()%s*(.-)%s*function ITGOnline:"),
+	"missing companion realtime handler"
+)
+assert(companionRealtimeHandler:find('eventName == "presence.pruned"', 1, true)
+	and companionRealtimeHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
+	"a pruned companion must terminate the shared local-party room state")
 local roomLeftHandler = assert(
 	onlineClientContent:match('elseif name == "room%.left" then(.-)%s*elseif name == "lobby%.updated"'),
 	"missing room.left handler"
@@ -443,6 +463,16 @@ local roomKickedHandler = assert(
 )
 assert(roomKickedHandler:find("self:ApplyAuthoritativeRoomExit", 1, true),
 	"room.kicked must clear the local room immediately without waiting for heartbeat reconciliation")
+local lobbyOverlayPath = sourceRoot .. "/Themes/Simply Love/BGAnimations/ScreenOnlineLobbies overlay/default.lua"
+local lobbyOverlayFile = assert(io.open(lobbyOverlayPath, "rb"), "missing online lobby overlay")
+local lobbyOverlayContent = lobbyOverlayFile:read("*a")
+lobbyOverlayFile:close()
+local lobbyInputHandler = assert(
+	lobbyOverlayContent:match("local InputHandler = function%b()(.-)%s*if not event or not event.PlayerNumber"),
+	"missing lobby input activity handler"
+)
+assert(lobbyInputHandler:find('tostring(event and event.GameButton or "") ~= ""', 1, true),
+	"unmapped operating-system keys must not renew room inactivity leases")
 local playStateResponseHandler = assert(
 	onlineClientContent:match("function ITGOnline:UpdatePlayStateFromResponse%b()%s*(.-)%s*function ITGOnline:PlayStateLifecycleSignature"),
 	"missing play-state response handler"

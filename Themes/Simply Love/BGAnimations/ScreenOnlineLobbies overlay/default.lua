@@ -3886,10 +3886,12 @@ end
 local InputHandler = function(event)
 	local inputType = tostring(event and event.type or "")
 	if (inputType == "InputEventType_FirstPress" or inputType == "FirstPress")
+		and tostring(event and event.GameButton or "") ~= ""
 		and ITGOnline and ITGOnline.MarkUserActivity then
-		-- Activity is transport-level, not UI-level.  Even an unmapped key or a
-		-- key consumed by a modal proves that the player is still present.
-		ITGOnline:MarkUserActivity("lobby_input:" .. tostring(event and (event.GameButton or event.button) or "unknown"))
+		-- Only a mapped game action proves intentional cabinet activity. Raw OS
+		-- keys may reach an unfocused/windowed process and must not silently renew
+		-- every local player's server-side room lease.
+		ITGOnline:MarkUserActivity("lobby_input:" .. tostring(event.GameButton))
 	end
 	if not event or not event.PlayerNumber or not event.button then return false end
 	if not t then return false end

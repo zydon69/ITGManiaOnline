@@ -9677,6 +9677,22 @@ function ITGOnline:HandleCompanionRealtimeEvent(player, payload)
 	elseif eventName == "auth.session_revoked" then
 		self:ClearLocalPlayerSession(player, { clearStored = true })
 		self:HandleLocalPartyInvariantFailure("companion_auth_session_revoked", player, eventPayload)
+	elseif eventName == "presence.pruned" then
+		local eventRoomId = eventPayload.room_id or eventPayload.roomId
+		local applied, result = self:ApplyAuthoritativeRoomExit(
+			eventRoomId,
+			"presence_pruned",
+			"companion_presence.pruned"
+		)
+		online_flow_trace("companion_presence_pruned_event localPlayer="
+			.. local_player_key(player)
+			.. " room=" .. tostring(eventRoomId or "nil")
+			.. " applied=" .. tostring(applied == true)
+			.. " result=" .. tostring(result or "nil"))
+		self:QueueLobbyRefresh({
+			ignoreSuppression = true,
+			reason = "companion_presence_pruned",
+		})
 	elseif eventName == "room.kicked" or eventName == "room.left" then
 		local eventRoomId = eventPayload.room_id or eventPayload.roomId
 		local expectedCoordinatedLeave = eventName == "room.left"
@@ -18542,16 +18558,28 @@ function ITGOnline:FetchCurrentRoomFallback(source, minIntervalSeconds)
 
 	self.lastCurrentRoomFallbackFetchAtByRoomId[key] = now
 	online_flow_trace("current_room_fallback_fetch_start source=" .. tostring(source) .. " room=" .. key)
-	self:FetchRoom(roomId, function(ok, decoded)
+	self:FetchRoom(roomId, function(ok, decoded, response)
 		local room = type(decoded) == "table" and decoded.room or nil
+		local statusCode = tonumber(response and response.statusCode) or 0
 		online_flow_trace("current_room_fallback_fetch_done source=" .. tostring(source)
 			.. " room=" .. key
 			.. " ok=" .. tostring(ok == true)
+			.. " status=" .. tostring(statusCode)
 			.. " hasRoom=" .. tostring(type(room) == "table")
 			.. " phase=" .. tostring(type(room) == "table" and room.phase or "nil")
 			.. " members=" .. tostring(type(room) == "table" and type(room.members) == "table" and #room.members or 0)
 			.. " readyStates=" .. tostring(type(room) == "table" and type(room.ready_states) == "table" and #room.ready_states or 0))
-		if ok and type(room) == "table" then
+		if not ok and statusCode == 404 then
+			self:ApplyAuthoritativeRoomExit(
+				roomId,
+				"room_not_found",
+				"current_room_fallback_not_found:" .. tostring(source)
+			)
+			self:QueueLobbyRefresh({
+				ignoreSuppression = true,
+				reason = "current_room_fallback_not_found",
+			})
+		elseif ok and type(room) == "table" then
 			-- FetchRoom has already validated and applied this snapshot before this
 			-- coalesced callback runs. Applying it again can duplicate broadcasts and
 			-- compete with screen enforcement during a phase transition.
@@ -21399,9 +21427,23 @@ elseif name == "client.error" then
 		self:InvalidateAuthenticatedSession("auth.session_revoked", payload)
 		return
 	elseif name == "presence.pruned" then
-		-- Server-side cleanup notification. The next sync/lobby refresh carries the durable state.
-		online_flow_trace("presence_pruned_refresh_requested")
-		self:QueueLobbyRefresh({ reason = "presence_pruned" })
+		-- This user-targeted event is the server's terminal membership decision.
+		-- Apply it immediately; waiting for a later heartbeat leaves a ghost room
+		-- visible even though the event was already received and acknowledged.
+		local roomId = payload.room_id or payload.roomId
+		local applied, result = self:ApplyAuthoritativeRoomExit(
+			roomId,
+			"presence_pruned",
+			"presence.pruned"
+		)
+		online_flow_trace("presence_pruned_event"
+			.. " room=" .. tostring(roomId or "nil")
+			.. " applied=" .. tostring(applied == true)
+			.. " result=" .. tostring(result or "nil"))
+		self:QueueLobbyRefresh({
+			ignoreSuppression = true,
+			reason = "presence_pruned",
+		})
 		return
 	elseif name == "room.kicked" then
 		local roomId = payload.room_id
