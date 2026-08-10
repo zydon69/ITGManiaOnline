@@ -5523,6 +5523,30 @@ function ITGOnline:ResetOnlineRoundRuntimeState(source)
 	self:ClearActiveGameplayRound(source or "round_runtime_state_reset")
 end
 
+function ITGOnline:HasOnlineRoundRuntimeState()
+	return ITGOnlineScoreTransport.has_round_runtime_state({
+		currentRoundKey = self.currentRoomRoundKey,
+		activeRoundKey = self.activeGameplayRoundKey,
+		positionKey = self.lastScorePositionKey,
+		songPosition = self.lastScoreSongPosition,
+		finalScoreKey = self.lastFinalScoreKey,
+		failedSnapshot = self.failedScoreSnapshot,
+		pendingLiveScore = self.pendingLiveScoreSnapshot,
+	})
+end
+
+function ITGOnline:OnlineRoundRuntimeBelongsTo(roundKey)
+	roundKey = tostring(roundKey or "")
+	if roundKey == "" then return false end
+	return tostring(self.currentRoomRoundKey or "") == roundKey
+		or tostring(self.activeGameplayRoundKey or "") == roundKey
+		or tostring(self.lastFinalScoreKey or "") == roundKey
+		or ITGOnlineScoreTransport.position_belongs_to_round(
+			self.lastScorePositionKey,
+			roundKey
+		)
+end
+
 function ITGOnline:RoomSongSelectedAtMs(room)
 	local value = room and room.selected_song and (room.selected_song.selected_at or room.selected_song.selectedAt) or nil
 	return iso_utc_milliseconds(value)
@@ -6606,7 +6630,14 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 		else
 			local previousRoundKey = tostring(self.currentRoomRoundKey or "")
 			local incomingRoundKey = self:RoomSongRoundKey(room)
-			if previousRoundKey ~= "" and incomingRoundKey ~= "" and previousRoundKey ~= incomingRoundKey then
+			local changedKnownRound = previousRoundKey ~= ""
+				and incomingRoundKey ~= ""
+				and previousRoundKey ~= incomingRoundKey
+			local orphanedPreviousRuntime = previousRoundKey == ""
+				and incomingRoundKey ~= ""
+				and self:HasOnlineRoundRuntimeState()
+				and not self:OnlineRoundRuntimeBelongsTo(incomingRoundKey)
+			if changedKnownRound or orphanedPreviousRuntime then
 				self:ResetOnlineRoundRuntimeState("room_snapshot_round_changed:" .. tostring(source or "unknown"))
 			end
 			self.currentSongPayload = room.selected_song
@@ -6627,7 +6658,10 @@ function ITGOnline:ApplyRoomSnapshot(room, source)
 			.. " previousRoundKey=" .. tostring(self.currentRoomRoundKey or "")
 			.. " hadCurrentSong=" .. tostring(self.currentSongPayload ~= nil))
 		local normalizedClearPhase = self:NormalizeRoomPhase(room.phase)
-		if normalizedClearPhase == "lobby" and tostring(self.currentRoomRoundKey or "") ~= "" then
+		if normalizedClearPhase == "lobby"
+			and (tostring(self.currentRoomRoundKey or "") ~= ""
+				or self:HasOnlineRoundRuntimeState())
+		then
 			self:ResetOnlineRoundRuntimeState("room_snapshot_lobby_without_song:" .. tostring(source or "unknown"))
 		end
 		self.currentSongPayload = nil
@@ -12793,7 +12827,15 @@ function ITGOnline:BuildCurrentScoreSnapshot(player)
 	local maxCombo, songPosition, judgments
 	if failed then
 		maxCombo = online_score_max_combo(stats, combo)
-		songPosition = online_score_song_position(player, self.lastScoreSongPosition)
+		local scoreRoundKey = tostring(self:CanonicalGameplayRoundKey(
+			"build_current_score_snapshot"
+		) or "")
+		local roundPositionFallback = ITGOnlineScoreTransport.round_position_fallback(
+			self.lastScorePositionKey,
+			scoreRoundKey,
+			self.lastScoreSongPosition
+		)
+		songPosition = online_score_song_position(player, roundPositionFallback)
 		local judgmentsOk, judgmentsValue = pcall(function()
 			return self:ServerJudgments(player)
 		end)
@@ -13439,6 +13481,10 @@ function ITGOnline:FlushLiveScore()
 		end
 		local errorCode = response_error_code(response, decoded)
 		local statusCode = tonumber(response and response.statusCode)
+		local deterministicRejection = ITGOnlineScoreTransport.is_deterministic_rejection(
+			statusCode,
+			errorCode
+		)
 		if not ok and (tostring(errorCode) == "local_round_terminal"
 			or response and response.terminal == true
 			or response and response.dropped == true) then
@@ -13451,8 +13497,8 @@ function ITGOnline:FlushLiveScore()
 				self:HandleRoomNotPlayingScoreReject(false, decoded)
 			end
 			return
-		elseif not ok and statusCode == 422 then
-			self:StopLiveScoreFlush("server_rejected_live_score_status_422:" .. tostring(errorCode or "unknown"))
+		elseif not ok and deterministicRejection then
+			self:StopLiveScoreFlush("server_rejected_live_score_contract:" .. tostring(errorCode or "unknown"))
 			return
 		end
 		if not ok and response and response.inFlight then
@@ -13866,12 +13912,6 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		if hardExOk and tonumber(hardExValue) then hardExScore = tonumber(hardExValue) end
 	end
 
-	local songPosition = tonumber(snapshot and (
-		snapshot.songPositionSeconds or snapshot.SongPositionSeconds
-	)) or tonumber(self.lastScoreSongPosition) or 0
-	if not snapshotFrozen then
-		songPosition = online_score_song_position(player, songPosition)
-	end
 	local positionKey = table.concat({
 		tostring(roundKey or ""),
 		tostring(scoreChartContext.song_hash or ""),
@@ -13884,6 +13924,12 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		self.lastScoreSongPosition = 0
 		self.lastAcceptedScoreSongPosition = 0
 	end
+	local songPosition = tonumber(snapshot and (
+		snapshot.songPositionSeconds or snapshot.SongPositionSeconds
+	)) or tonumber(self.lastScoreSongPosition) or 0
+	if not snapshotFrozen then
+		songPosition = online_score_song_position(player, songPosition)
+	end
 	songPosition = math.max(0, tonumber(songPosition) or 0)
 	local startAtMs = tonumber(self.currentRoom.start_at_ms or "") or iso_utc_milliseconds(self.currentRoom.start_at)
 	if not snapshotFrozen and startAtMs and self.serverClockOffsetSeconds then
@@ -13891,8 +13937,11 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		rateForClock = math.max(0.25, math.min(3, rateForClock))
 		local estimatedServerNowSeconds = GetTimeSinceStart() + self.serverClockOffsetSeconds
 		local estimatedPosition = math.max(0, (estimatedServerNowSeconds - (startAtMs / 1000)) * rateForClock)
-		-- Keep client position coherent with server clock to avoid "behind_server_clock" rejects.
+		-- Keep live snapshots inside the authoritative clock window in both
+		-- directions. Final failed snapshots remain immutable and retry once the
+		-- server clock has caught up.
 		songPosition = math.max(songPosition, math.max(0, estimatedPosition - 0.5))
+		songPosition = math.min(songPosition, estimatedPosition + 4.5)
 	end
 	local chartDuration = tonumber(scoreChartContext.chart_duration_seconds)
 		or tonumber(scoreChartContext.music_length_seconds)
@@ -14300,6 +14349,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 				response and response.statusCode,
 				errorCode
 			)
+		local clockRejection = ITGOnlineScoreTransport.is_clock_rejection(errorCode)
 		local responseFinalResults = ITGOnlineDiagnostics.response_final_results(decoded)
 		if traceScoreTransport or not ok then
 			online_score_transport_trace(final or not ok, "send_score_response"
@@ -14400,6 +14450,17 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 					self:FetchRoom(self.currentRoomId)
 				end
 			end
+		elseif clockRejection then
+			online_flow_trace("score_clock_rejected_retryable"
+				.. " room=" .. tostring(self.currentRoomId or "nil")
+				.. " roundKey=" .. tostring(roundKey)
+				.. " localPlayer=" .. tostring(local_player_key(player))
+				.. " songPosition=" .. tostring(songPosition)
+				.. " status=" .. tostring(response and response.statusCode or "nil")
+				.. " decision=resynchronize_and_retry")
+			if self.FetchRoom then
+				self:FetchRoom(self.currentRoomId)
+			end
 		elseif self.debugScoreTrace == true then
 			online_score_trace("score-nack room=" .. tostring(self.currentRoomId or "")
 				.. " round=" .. tostring(roundKey)
@@ -14442,7 +14503,7 @@ function ITGOnline:SendScore(force, final, snapshot, callback, options)
 		if not ok and errorCode == "room_not_playing" then
 			self:HandleRoomNotPlayingScoreReject(final, decoded)
 		end
-		if not ok and final and not deterministicRejection then
+		if not ok and final and not deterministicRejection and not clockRejection then
 			safe_broadcast("OnlineResponseStatus", {
 				event = final and "finalScore" or "score",
 				success = false,
@@ -14828,7 +14889,9 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 	if not snapshotFrozen and startAtMs and self.serverClockOffsetSeconds then
 		local rate = math.max(0.25, math.min(3, tonumber(scoreChartContext.rate) or 1))
 		local serverNow = GetTimeSinceStart() + self.serverClockOffsetSeconds
-		songPosition = math.max(songPosition, math.max(0, (serverNow - (startAtMs / 1000)) * rate - 0.5))
+		local estimatedPosition = math.max(0, (serverNow - (startAtMs / 1000)) * rate)
+		songPosition = math.max(songPosition, math.max(0, estimatedPosition - 0.5))
+		songPosition = math.min(songPosition, estimatedPosition + 4.5)
 	end
 	if final and not failed then
 		local duration = tonumber(scoreChartContext.chart_duration_seconds)
@@ -14928,6 +14991,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 					response and response.statusCode,
 					errorCode
 				)
+			local clockRejection = ITGOnlineScoreTransport.is_clock_rejection(errorCode)
 			if ok then
 				state.lastAcceptedFingerprint = fingerprint
 				state.lastAcceptedSongPosition = math.max(
@@ -14973,6 +15037,16 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 						self:FetchRoom(self.currentRoomId)
 					end
 				end
+			elseif clockRejection then
+				online_flow_trace("companion_score_clock_rejected_retryable"
+					.. " localPlayer=P2"
+					.. " room=" .. tostring(self.currentRoomId or "nil")
+					.. " roundKey=" .. tostring(roundKey)
+					.. " songPosition=" .. tostring(songPosition)
+					.. " decision=resynchronize_and_retry")
+				if self.FetchRoom then
+					self:FetchRoom(self.currentRoomId)
+				end
 			end
 			if final == true or not ok or self.debugScoreTrace == true then
 				online_score_transport_trace(final or not ok, "companion_score_response localPlayer=P2"
@@ -14986,6 +15060,7 @@ function ITGOnline:SendCompanionScore(force, final, callback)
 			if not ok
 				and final
 				and not deterministicRejection
+				and not clockRejection
 			then
 				safe_broadcast("OnlineResponseStatus", {
 					event = "finalScoreP2",

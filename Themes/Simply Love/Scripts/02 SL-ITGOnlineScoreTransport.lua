@@ -100,15 +100,45 @@ function Transport.is_contract_error(errorCode)
 	return errorCode == "score_song_mismatch"
 		or errorCode == "invalid_player_score_context"
 		or errorCode == "score_contract_rejected"
+		or errorCode == "selected_chart_metadata_missing"
 end
 
--- HTTP 422 means the authoritative server has rejected the score payload as
--- invalid for the current round. Replaying the same engine state cannot make
--- that request valid, so keep transient/network failures retryable while
--- permanently stopping deterministic validation failures for this context.
-function Transport.is_deterministic_rejection(statusCode, errorCode)
-	if Transport.is_contract_error(errorCode) then return true end
-	return tonumber(statusCode) == 422
+-- Only immutable song/chart contract failures poison a round transport.
+-- Snapshot validation also uses HTTP 422, but clock/progress errors can become
+-- valid after a fresh engine snapshot or an authoritative clock resync.
+function Transport.is_deterministic_rejection(_statusCode, errorCode)
+	return Transport.is_contract_error(errorCode)
+end
+
+function Transport.is_clock_rejection(errorCode)
+	return tostring(errorCode or "") == "song_position_ahead_of_server_clock"
+		or tostring(errorCode or "") == "song_position_behind_server_clock"
+end
+
+function Transport.position_belongs_to_round(positionKey, roundKey)
+	positionKey = tostring(positionKey or "")
+	roundKey = tostring(roundKey or "")
+	if positionKey == "" or roundKey == "" then return false end
+	return positionKey == roundKey
+		or positionKey:sub(1, #roundKey + 1) == roundKey .. "|"
+end
+
+function Transport.round_position_fallback(positionKey, roundKey, position)
+	if not Transport.position_belongs_to_round(positionKey, roundKey) then
+		return 0
+	end
+	return math.max(0, tonumber(position) or 0)
+end
+
+function Transport.has_round_runtime_state(runtime)
+	runtime = type(runtime) == "table" and runtime or {}
+	return tostring(runtime.currentRoundKey or "") ~= ""
+		or tostring(runtime.activeRoundKey or "") ~= ""
+		or tostring(runtime.positionKey or "") ~= ""
+		or (tonumber(runtime.songPosition) or 0) > 0
+		or tostring(runtime.finalScoreKey or "") ~= ""
+		or runtime.failedSnapshot ~= nil
+		or runtime.pendingLiveScore ~= nil
 end
 
 function Transport.failed_final_action(failed, finalAccepted, inFlight, now, nextAttemptAt)

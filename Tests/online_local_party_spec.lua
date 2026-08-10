@@ -175,12 +175,34 @@ equal(scoreTransport.is_contract_error("score_song_mismatch"), true,
 	"server chart contract rejects stop the current score transport")
 equal(scoreTransport.is_contract_error("temporary_server_error"), false,
 	"transient score failures remain retryable")
-equal(scoreTransport.is_deterministic_rejection(422, "score_increase_with_song_position_regression"), true,
-	"unprocessable score snapshots stop the current round transport")
+equal(scoreTransport.is_deterministic_rejection(422, "score_increase_with_song_position_regression"), false,
+	"recoverable score snapshots do not poison the current round transport")
+equal(scoreTransport.is_deterministic_rejection(422, "song_position_ahead_of_server_clock"), false,
+	"an authoritative clock rejection remains retryable")
+equal(scoreTransport.is_clock_rejection("song_position_ahead_of_server_clock"), true,
+	"future song positions trigger an authoritative clock resync")
+equal(scoreTransport.is_deterministic_rejection(422, "score_song_mismatch"), true,
+	"immutable song contract failures stop the current round transport")
 equal(scoreTransport.is_deterministic_rejection(500, "temporary_server_error"), false,
 	"server failures remain retryable")
 equal(scoreTransport.is_deterministic_rejection(nil, "network_error"), false,
 	"network failures remain retryable")
+equal(scoreTransport.round_position_fallback(
+	"room-1|selection:first|song|chart",
+	"room-1|selection:first",
+	14.956
+), 14.956, "song position remains monotonic inside one round")
+equal(scoreTransport.round_position_fallback(
+	"room-1|selection:first|song|chart",
+	"room-1|selection:second",
+	14.956
+), 0, "song position from the previous round is never reused")
+equal(scoreTransport.has_round_runtime_state({
+	positionKey = "room-1|selection:first|song|chart",
+	songPosition = 14.956,
+}), true, "a stale score position keeps the old round runtime detectable")
+equal(scoreTransport.has_round_runtime_state({}), false,
+	"a clean lobby has no round runtime to reset")
 equal(scoreTransport.failed_final_action(false, false, false, 10, 0), "live",
 	"a non-failed player keeps sending live scores")
 equal(scoreTransport.failed_final_action(true, false, true, 10, 0), "wait",
