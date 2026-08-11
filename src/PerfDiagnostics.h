@@ -4,6 +4,7 @@
 #include "Compiler.h"
 
 bool PerfDiagnosticsEnabled();
+bool ResetNonEssentialDiagnosticsForCurrentBuild();
 void RefreshPerfDiagnosticsPreferenceCache();
 void RefreshOnlineDiagnosticsPreferenceCache();
 bool OnlineNetworkDiagnosticsEnabled();

@@ -50,6 +50,8 @@ read_source(
   "src/arch/MemoryCard/MemoryCardDriverThreaded_Windows.cpp"
   memory_card_windows)
 read_source("Themes/Simply Love/Scripts/SL-Helpers.lua" sl_helpers)
+read_source("Themes/Simply Love/Scripts/SL-ITGOnlineClient.lua" online_client)
+read_source("Themes/Simply Love/Scripts/99 SL-ThemePrefs.lua" theme_prefs)
 read_source("Themes/Simply Love/BGAnimations/ScreenGameplay overlay/TrackExScoreJudgments.lua" score_tracker)
 
 require_not_contains(
@@ -58,6 +60,12 @@ require_not_contains(
 require_contains(
   "${game_loop}" "incoming_delta_hitch"
   "frame hitch diagnostics must remain centralized and preference-gated")
+require_not_contains(
+  "${game_loop}" "allowWhenDisabled"
+  "frame hitch diagnostics must never bypass the diagnostics preference")
+require_contains(
+  "${game_loop}" "static void TraceFpsDrop() {\n  if (!PerfDiagnosticsEnabled())"
+  "FPS-drop diagnostics must remain preference-gated")
 require_contains(
   "${stats_overlay}" "PerfDiagnosticsEnabled() ||"
   "performance diagnostics must include exact visible drop timestamps")
@@ -98,7 +106,7 @@ require_contains(
   "Win32 event diagnostics must remain configurable")
 require_contains(
   "${prefs_manager}"
-  "TranslateDeprecatedFlags();\n  RefreshPerfDiagnosticsPreferenceCache();"
+  "TranslateDeprecatedFlags();\n  ResetNonEssentialDiagnosticsForCurrentBuild();\n  RefreshPerfDiagnosticsPreferenceCache();"
   "factory reset must refresh diagnostic preference caches")
 require_contains(
   "${prefs_manager}" "m_bLogSkips(\"LogSkips\", false)"
@@ -106,6 +114,18 @@ require_contains(
 require_contains(
   "${prefs_manager}" "m_bLogCheckpoints(\"LogCheckpoints\", false)"
   "generic checkpoint logging must be opt-in by default")
+require_contains(
+  "${prefs_manager}" "m_bShowLogOutput(\"ShowLogOutput\", false)"
+  "the platform log window must be disabled by default")
+require_contains(
+  "${prefs_manager}" "ResetNonEssentialDiagnosticsForCurrentBuild()"
+  "persisted diagnostics must be reset once for every compiled build")
+require_contains(
+  "${perf_diagnostics}" "\"DiagnosticsResetBuildId\", \"\""
+  "the engine diagnostics reset must remember the current build")
+require_contains(
+  "${perf_diagnostics}" "\"ShowLogOutput\","
+  "the per-build diagnostics reset must close the log window")
 require_not_contains(
   "${song_manager}" "skipped invalid course file"
   "unavailable dynamic courses must not be reported as invalid files")
@@ -152,5 +172,38 @@ require_contains(
 require_contains(
   "${score_tracker}" "traceCounts[reason] % 250"
   "per-judgment score traces must be aggressively sampled")
+require_contains(
+  "${online_client}" "ITGOnline.onlineFlowLoggingDefaultEnabled = false"
+  "online flow diagnostics must be opt-in before preferences load")
+require_contains(
+  "${online_client}" "[\"OnlineTrace\"] = \"false\""
+  "the generated online debug configuration must be quiet")
+require_contains(
+  "${online_client}" "[\"BuildId\"] = buildId"
+  "online debug overrides must reset for every compiled build")
+require_not_contains(
+  "${online_client}" "ITGOnline.onlineFlowLoggingDefaultEnabled = true"
+  "online flow diagnostics must never be enabled by a hard-coded default")
+require_contains(
+  "${online_client}" "song_availability_pack_sync_match_pending"
+  "local hashing must be logged as a pending availability state")
+require_contains(
+  "${online_client}" "online_score_trace(\"ignored_stale_score_leaderboard"
+  "stale score snapshots must use the dedicated score diagnostics gate")
+foreach(pref_name IN ITEMS
+    ITGOnlineGameplayLayoutLogs
+    ITGOnlineNetworkLogs
+    ITGOnlineAuthLogs
+    ITGOnlineScoreLogs)
+  require_contains(
+    "${theme_prefs}" "${pref_name} = {\n\t\t\tDefault = false"
+    "${pref_name} must remain disabled by default")
+endforeach()
+require_contains(
+  "${theme_prefs}" "DiagnosticsResetBuildId = {"
+  "theme diagnostic preferences must remember the current build")
+require_contains(
+  "${theme_prefs}" "ThemePrefs.Set(pref_name, false)"
+  "theme diagnostic preferences must reset on a newly compiled build")
 
 message(STATUS "Log hygiene invariants passed")

@@ -412,6 +412,10 @@ SL_CustomPrefs.Get = function()
 			Values  = { false, true }
 		},
 
+		DiagnosticsResetBuildId = {
+			Default = "",
+		},
+
 		ITGOnlineRememberToken = {
 			Default = true,
 			Choices = {
@@ -492,6 +496,27 @@ SL_CustomPrefs.Init = function()
 
 	-- run our own rudimentary validation
 	SL_CustomPrefs.Validate()
+
+	-- A newly compiled binary starts quiet even when the previous build was
+	-- intentionally used for diagnostics.  The build timestamp is embedded in
+	-- the executable, so users may still opt in again for the current build.
+	local build_id = table.concat({
+		type(ProductVersion) == "function" and tostring(ProductVersion()) or "unknown-product",
+		type(VersionDate) == "function" and tostring(VersionDate()) or "unknown-date",
+		type(VersionTime) == "function" and tostring(VersionTime()) or "unknown-time",
+	}, "|")
+	if tostring(ThemePrefs.Get("DiagnosticsResetBuildId") or "") ~= build_id then
+		for _, pref_name in ipairs({
+			"ArrowCloudDebugLogs",
+			"ITGOnlineGameplayLayoutLogs",
+			"ITGOnlineNetworkLogs",
+			"ITGOnlineAuthLogs",
+			"ITGOnlineScoreLogs",
+		}) do
+			ThemePrefs.Set(pref_name, false)
+		end
+		ThemePrefs.Set("DiagnosticsResetBuildId", build_id)
+	end
 
 	-- finally, call ThemePrefs.Save() so that a [Simply Love] section
 	-- can be created in ./Save/ThemePrefs.ini if one was not found

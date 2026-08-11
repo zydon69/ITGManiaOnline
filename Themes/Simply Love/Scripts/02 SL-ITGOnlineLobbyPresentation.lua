@@ -25,4 +25,22 @@ function Presentation.player_status_label(status)
 	return tostring(status or "")
 end
 
+function Presentation.local_player_suffix(player)
+	if type(player) ~= "table" then return "" end
+	local side = tostring(player.localSide or player.local_side or "")
+	if side == "P1" or side == "P2" then
+		return "(" .. side .. ")"
+	end
+	if side == "self" or player.isSelf == true then
+		return "(" .. Presentation.text("Me", "Me") .. ")"
+	end
+	-- Keep older cached room projections readable during a live theme reload.
+	if player.isLocalCompanion == true then return "(P2)" end
+	return ""
+end
+
+function Presentation.is_local_player(player)
+	return Presentation.local_player_suffix(player) ~= ""
+end
+
 return Presentation

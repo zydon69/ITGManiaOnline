@@ -237,6 +237,15 @@ elseif(APPLE)
     "${SM_ROOT_DIR}/Themes"
   )
 
+  # Keep the application icon as an explicit bundle resource.  CMake then
+  # tracks logo.icns as a target input and refreshes it whenever the icon
+  # changes, instead of relying on a post-link copy that can become stale.
+  set(_SM_MACOS_APP_ICON "${SM_XCODE_DIR}/logo.icns")
+  set_source_files_properties(
+    "${_SM_MACOS_APP_ICON}"
+    PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  target_sources("${SM_EXE_NAME}" PRIVATE "${_SM_MACOS_APP_ICON}")
+
   target_compile_definitions("${SM_EXE_NAME}" PRIVATE _XOPEN_SOURCE)
 
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -292,8 +301,7 @@ elseif(APPLE)
     add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E make_directory "${_SM_BUNDLE_RESOURCES_DIR}"
       COMMAND ${CMAKE_COMMAND} -E remove_directory "${_SM_BUNDLE_RESOURCES_DIR}/Songs"
-      COMMAND ${CMAKE_COMMAND} -E make_directory "${_SM_BUNDLE_RESOURCES_DIR}/Songs"
-      COMMAND ${CMAKE_COMMAND} -E copy "${SM_XCODE_DIR}/logo.icns" "${_SM_BUNDLE_RESOURCES_DIR}/")
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${_SM_BUNDLE_RESOURCES_DIR}/Songs")
   else()
       message(STATUS "WITH_MACOS_PORTABLE_APP is ON: creating empty .app Resources directories and bundling only the icon")
 
@@ -315,11 +323,6 @@ elseif(APPLE)
                                  "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs"
                          COMMAND ${CMAKE_COMMAND} -E make_directory
                                  "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/Songs")
-
-      add_custom_command(TARGET "${SM_EXE_NAME}" POST_BUILD
-             COMMAND ${CMAKE_COMMAND} -E copy
-               "${SM_XCODE_DIR}/logo.icns"
-               "$<TARGET_FILE_DIR:${SM_EXE_NAME}>/../Resources/")
   endif()
 else() # Linux
   set_target_properties("${SM_EXE_NAME}"

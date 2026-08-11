@@ -393,10 +393,10 @@ PrefsManager::PrefsManager()
       m_bLogToDisk("LogToDisk", true),
 #if defined(DEBUG)
       m_bForceLogFlush("ForceLogFlush", false),
-      m_bShowLogOutput("ShowLogOutput", true),
+      m_bShowLogOutput("ShowLogOutput", false),
 #else
       m_bForceLogFlush("ForceLogFlush", false),
-      m_bShowLogOutput("ShowLogOutput", true),
+      m_bShowLogOutput("ShowLogOutput", false),
 #endif
       m_bShowPopups("ShowPopups", false),
       m_bLogSkips("LogSkips", false),
@@ -954,6 +954,9 @@ void PrefsManager::ReadPrefsFromDisk() {
 
   TranslateDeprecatedFlags();
 
+  const bool diagnosticsResetForBuild =
+      ResetNonEssentialDiagnosticsForCurrentBuild();
+
   if (!m_sCurrentGame.Get().empty()) {
     RestoreGamePrefs();
   }
@@ -1005,6 +1008,13 @@ void PrefsManager::ReadPrefsFromDisk() {
         "PrefsManager: using global offset profiles from Preferences.ini for "
         "this session because the dedicated storage is invalid.");
   }
+  if (diagnosticsResetForBuild) {
+    if (LOG != nullptr) {
+      LOG->Info(
+          "Non-essential diagnostics were disabled for this new build.");
+    }
+    SavePrefsToDisk();
+  }
   LogGlobalOffsetDiagnostics("read_prefs_from_disk_end");
 }
 
@@ -1016,6 +1026,7 @@ void PrefsManager::ResetToFactoryDefaults() {
       SpecialFiles::STATIC_INI_PATH, GetPreferencesSection(), true);
 
   TranslateDeprecatedFlags();
+  ResetNonEssentialDiagnosticsForCurrentBuild();
   RefreshPerfDiagnosticsPreferenceCache();
   InitializeGlobalOffsetProfiles();
   LogGlobalOffsetDiagnostics("reset_to_factory_defaults_before_save");

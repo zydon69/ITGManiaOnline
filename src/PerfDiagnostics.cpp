@@ -12,6 +12,7 @@
 #include "RageLog.h"
 #include "RageTimer.h"
 #include "RageUtil.h"
+#include "ver.h"
 #include "global.h"
 
 static Preference<bool> g_bPerfDiagnostics("PerfDiagnostics", false);
@@ -40,6 +41,8 @@ static Preference<bool> g_bLogGlobalOffsetDiagnostics(
 static Preference<bool> g_bLogWindowsEventDiagnostics(
     "LogWindowsEventDiagnostics", false);
 static Preference<bool> g_bRuntimeValidation("runtime_validation", false);
+static Preference<std::string> g_sDiagnosticsResetBuildId(
+    "DiagnosticsResetBuildId", "");
 
 static std::atomic<bool> g_bPerfDiagnosticsCached{false};
 static std::atomic<bool> g_bLogAudioUnderrunDiagnosticsCached{false};
@@ -92,6 +95,61 @@ static const bool g_bEnvLegacyTraceResourceSnapshots =
     EnvFlagEnabled("ITG_TRACE_RESOURCE_SNAPSHOTS");
 bool PerfDiagnosticsEnabled() {
   return g_bPerfDiagnosticsCached.load(std::memory_order_acquire);
+}
+
+namespace {
+template <typename T>
+void ResetPreference(const char* name, const T& value) {
+  Preference<T>* preference = Preference<T>::GetPreferenceByName(name);
+  if (preference != nullptr) {
+    preference->Set(value);
+  }
+}
+
+std::string CurrentDiagnosticsBuildId() {
+  return ssprintf(
+      "%s|%s|%s", product_version, version_date, version_time);
+}
+}  // namespace
+
+bool ResetNonEssentialDiagnosticsForCurrentBuild() {
+  const std::string buildId = CurrentDiagnosticsBuildId();
+  if (g_sDiagnosticsResetBuildId.Get() == buildId) {
+    return false;
+  }
+
+  static const char* const boolPreferences[] = {
+      "PerfDiagnostics",
+      "LogAudioUnderrunDiagnostics",
+      "LogTextureUploadDiagnostics",
+      "LogResourceSnapshotDiagnostics",
+      "LogBackgroundDiagnostics",
+      "LogPlayOnceDiagnostics",
+      "LogNoteSkinDiagnostics",
+      "LogInputDiagnostics",
+      "LogMemoryCardDiagnostics",
+      "LogContentLoadDiagnostics",
+      "LogThemeLuaDiagnostics",
+      "LogGlobalOffsetDiagnostics",
+      "LogWindowsEventDiagnostics",
+      "runtime_validation",
+      "LogFPS",
+      "LogSkips",
+      "LogCheckpoints",
+      "ForceLogFlush",
+      "ShowLogOutput",
+      "ShowStats",
+      "PerfTraceOpenGLPreFramePacingProactiveDetails",
+  };
+  for (const char* name : boolPreferences) {
+    ResetPreference<bool>(name, false);
+  }
+  ResetPreference<int>("PerfTraceOpenGLPreFramePacingSummaryEveryN", 0);
+  ResetPreference<float>("PerfTraceOpenGLPreFramePacingSummaryEveryMs", 0.0f);
+
+  g_sDiagnosticsResetBuildId.Set(buildId);
+  RefreshPerfDiagnosticsPreferenceCache();
+  return true;
 }
 
 void RefreshPerfDiagnosticsPreferenceCache() {
@@ -168,7 +226,8 @@ bool OnlineGameplayLayoutDiagnosticsEnabled() {
 }
 
 /*
- * Most diagnostic categories are enabled when ANY of the following is true:
+ * Diagnostic categories are disabled by default and enabled only when ANY of
+ * the following explicit opt-ins is true:
  *   1. its own "Log<Category>Diagnostics" preference is set, or
  *   2. the master "PerfDiagnostics" switch is on (it enables every category), or
  *   3. its dedicated "ITG_LOG_<CATEGORY>" environment variable is set to "1".

@@ -112,6 +112,14 @@ require_contains(
   "${version_generator_cmake}"
   "\${SM_VERSION_TRADITIONAL}-git-\${generated_git_hash}"
   "generated executable version labels retain the source revision")
+require_not_contains(
+  "${version_generator_cmake}"
+  "existing_time"
+  "each newly compiled executable must receive a fresh build timestamp")
+require_contains(
+  "${version_generator_cmake}"
+  "string(TIMESTAMP build_time \"%H:%M:%S\" UTC)"
+  "the compiled build identity must include its generation time")
 
 file(GLOB language_files "${ITGMANIA_SOURCE_DIR}/Themes/Simply Love/Languages/*.ini")
 foreach(language_file IN LISTS language_files)

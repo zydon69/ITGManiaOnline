@@ -2367,10 +2367,11 @@ DisplayLobbyState = function(data, actor)
 			end
 			local playerName = tostring(player.profileName or player.displayName or player.name
 				or online_lobby_text("UnknownPlayer", "Player"))
-			local partyLabel = ""
-			if player.isLocalCompanion == true then
-				partyLabel = " " .. online_lobby_text("WithYou", "(with you)")
-			elseif tostring(player.partyCompanionName or "") ~= "" then
+			local localSuffix = ITGOnlineLobbyPresentation
+				and ITGOnlineLobbyPresentation.local_player_suffix
+				and ITGOnlineLobbyPresentation.local_player_suffix(player) or ""
+			local partyLabel = localSuffix ~= "" and (" " .. localSuffix) or ""
+			if localSuffix == "" and tostring(player.partyCompanionName or "") ~= "" then
 				partyLabel = " " .. online_lobby_text(
 					"WithPlayer",
 					"(with %s)",

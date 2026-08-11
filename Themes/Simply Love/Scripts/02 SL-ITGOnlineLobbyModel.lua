@@ -11,8 +11,12 @@ function Model.player_state_signature(player)
 	player = type(player) == "table" and player or {}
 	local user = type(player.user) == "table" and player.user or {}
 	return table.concat({
-		Model.stable_scalar(player.id or player.user_id or user.id),
-		Model.stable_scalar(user.display_name or user.displayName or user.name or player.name),
+		Model.stable_scalar(player.id or player.playerId or player.user_id or user.id),
+		Model.stable_scalar(user.display_name or user.displayName or user.name
+			or player.profileName or player.displayName or player.name),
+		Model.stable_scalar(player.localSide or player.local_side),
+		Model.stable_scalar(player.isSelf),
+		Model.stable_scalar(player.isLocalCompanion),
 		Model.stable_scalar(player.status or player.play_state or player.state),
 		Model.stable_scalar(player.ready_state or player.readyState),
 		Model.stable_scalar(player.is_ready or player.ready),

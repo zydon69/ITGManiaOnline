@@ -196,9 +196,8 @@ static const char* ClassifyLoopPerfSnapshot(
 
 static void LogLoopPerfSnapshot(
     const char* reason,
-    const LoopPerfSnapshot& snapshot,
-    bool allowWhenDisabled = false) {
-  if (!PerfDiagnosticsEnabled() && !allowWhenDisabled) {
+    const LoopPerfSnapshot& snapshot) {
+  if (!PerfDiagnosticsEnabled()) {
     return;
   }
 
@@ -226,6 +225,10 @@ static void LogLoopPerfSnapshot(
 }
 
 static void TraceFpsDrop() {
+  if (!PerfDiagnosticsEnabled()) {
+    g_ConsecutiveLowFpsSamples = 0;
+    return;
+  }
   if (DISPLAY == nullptr) {
     g_ConsecutiveLowFpsSamples = 0;
     return;
@@ -542,7 +545,7 @@ void GameLoop::UpdateAllButDraw(bool bRunningFromVBLANK) {
   const float rawDeltaTime = fDeltaTime;
 
   if (g_HasLastLoopPerf && rawDeltaTime >= kCriticalFrameHitchSeconds) {
-    LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf, true);
+    LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf);
   } else if (g_HasLastLoopPerf &&
              rawDeltaTime >= kPerfTraceFrameHitchSeconds) {
     LogLoopPerfSnapshot("incoming_delta_hitch", g_LastLoopPerf);

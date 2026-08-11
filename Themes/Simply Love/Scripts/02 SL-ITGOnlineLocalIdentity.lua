@@ -42,4 +42,16 @@ function Identity.describe(value, playerOne, playerTwo, plan)
 	}
 end
 
+function Identity.online_presentation_side(userId, primaryUserId, companionUserId, isViewerPresence)
+	local userKey = tostring(userId or "")
+	local primaryKey = tostring(primaryUserId or "")
+	local companionKey = tostring(companionUserId or "")
+	if userKey == "" then return nil end
+	if companionKey ~= "" and userKey == companionKey then return "P2" end
+	local isPrimary = isViewerPresence == true
+		or (isViewerPresence == nil and primaryKey ~= "" and userKey == primaryKey)
+	if not isPrimary then return nil end
+	return companionKey ~= "" and "P1" or "self"
+end
+
 return Identity

@@ -41,6 +41,20 @@ local function equal(actual, expected, label)
 		.. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
 
+equal(lobbyPresentation.local_player_suffix({ localSide = "self", isSelf = true }), "(Me)",
+	"solo local player suffix")
+equal(lobbyPresentation.local_player_suffix({ localSide = "P1", isSelf = true }), "(P1)",
+	"two-player coordinator suffix")
+equal(lobbyPresentation.local_player_suffix({ localSide = "P2", isLocalCompanion = true }), "(P2)",
+	"two-player companion suffix")
+equal(lobbyPresentation.local_player_suffix({ partyCompanionName = "Remote P2" }), "",
+	"remote party is not presented as a local player")
+equal(lobbyPresentation.is_local_player({ localSide = "P1" }), true,
+	"local row color policy identifies P1")
+assert(lobbyModel.player_state_signature({ playerId = 7, profileName = "Local", localSide = "P1" })
+	~= lobbyModel.player_state_signature({ playerId = 7, profileName = "Local", localSide = "self" }),
+	"local identity changes must invalidate the joined-lobby render signature")
+
 local retryAttempt, retryDelay, retryAt = transportRecovery.schedule(0, 100, 1, 10, 0)
 equal(retryAttempt, 1, "transport recovery first attempt")
 equal(retryDelay, 1, "transport recovery first delay")
@@ -135,6 +149,16 @@ local p2Identity = localIdentity.describe("P2", "P1", "P2", versus)
 equal(p1Identity.isPrimary, true, "P1 identity owns room coordination")
 equal(p2Identity.isPrimary, false, "P2 identity remains the local companion")
 equal(p2Identity.role, "companion", "P2 identity role")
+equal(localIdentity.online_presentation_side(3, 3, nil, true), "self",
+	"solo viewer presence is labeled as self")
+equal(localIdentity.online_presentation_side(3, 3, 4, true), "P1",
+	"two-player viewer presence is labeled P1")
+equal(localIdentity.online_presentation_side(4, 3, 4, false), "P2",
+	"two-player companion presence is labeled P2")
+equal(localIdentity.online_presentation_side(3, 3, 4, false), nil,
+	"another presence for the same account is not mislabeled P1")
+equal(localIdentity.online_presentation_side(3, 3, 4, nil), "P1",
+	"joined-room primary membership is labeled P1")
 equal(diagnostics.hash_completion_error(true, nil, false), nil,
 	"a successful file hash must not retain a failure code")
 equal(diagnostics.hash_completion_error(false, nil, true), "file_changed",
@@ -678,12 +702,19 @@ for _, deadMethod in ipairs({
 	assert(not clientSource:find("function ITGOnline:" .. deadMethod, 1, true),
 		"dead public method must stay removed: " .. deadMethod)
 end
-assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = true", 1, true),
-	"new installations must enable online network diagnostics by default")
+assert(clientSource:find("ITGOnline.onlineFlowLoggingDefaultEnabled = false", 1, true),
+	"new installations must keep online network diagnostics disabled by default")
 assert(not clientSource:find("forceOnlineFlowLogging", 1, true),
 	"online diagnostics must remain a preference after their initial default is applied")
-assert(clientSource:find('["OnlineTrace"] = "true"', 1, true),
-	"new debug configurations must enable the online trace")
+assert(clientSource:find('["OnlineTrace"] = "false"', 1, true),
+	"new debug configurations must keep the online trace disabled")
+assert(clientSource:find('["BuildId"] = buildId', 1, true),
+	"online debug overrides must reset for every newly compiled build")
+assert(clientSource:find("song_availability_pack_sync_match_pending", 1, true)
+	and clientSource:find("song_selected_auto_ready_deferred", 1, true),
+	"local file hashing must be reported as pending rather than failed")
+assert(clientSource:find('online_score_trace("ignored_stale_score_leaderboard', 1, true),
+	"stale leaderboard diagnostics must use the opt-in score trace")
 assert(clientSource:find("function ITGOnline:SendCompanionScore", 1, true),
 	"client must expose an isolated Player 2 score pipeline")
 assert(clientSource:find("ITGOnlineLocalParty.should_preserve_local_chart_choice", 1, true)
@@ -1169,6 +1200,17 @@ assert(lobbySource:find("local_companion_read_only", 1, true),
 	"Player 2 lobby controls must remain read-only")
 assert(lobbySource:find("user.isLocalCompanion", 1, true),
 	"the local companion must not expose invitation actions")
+assert(lobbySource:find("LOCAL_PLAYER_ROW_COLOR", 1, true)
+	and lobbySource:find("ITGOnlineLobbyPresentation.is_local_player", 1, true),
+	"global and joined local-player rows must be colored in full")
+assert(lobbySource:find('profile = profile .. " [Manager]"', 1, true)
+	and not lobbySource:find('profile = "[M] "', 1, true),
+	"the full manager role must be displayed after the player name")
+assert(lobbySource:find(":zoom(0.54):maxwidth(420)", 1, true),
+	"the connected-player list must keep its larger text size")
+assert(not lobbySource:find('text("WithYou"', 1, true)
+	and not onlineHelpersSource:find('online_lobby_text("WithYou"', 1, true),
+	"local players must never be described as being 'with you'")
 assert(lobbySource:find('"WithPlayer"', 1, true),
 	"remote local parties must display their companion name")
 assert(clientSource:find("party_companion_descriptor", 1, true),
@@ -1177,8 +1219,12 @@ assert(clientSource:find("party_companion_descriptor(member)", 1, true),
 	"joined-room players must prefer the companion relation supplied by the room snapshot")
 assert(clientSource:find("partyCompanionName = partyCompanion and partyCompanion.name", 1, true),
 	"room and online projections must retain the companion display name")
-assert(onlineHelpersSource:find("player.isLocalCompanion == true", 1, true),
-	"joined-room players must identify the local companion")
+assert(clientSource:find("isSelf = isSelf", 1, true)
+	and clientSource:find("localSide = self:LocalOnlinePresentationSide", 1, true)
+	and not clientSource:find("selfOnlineUserFiltered", 1, true),
+	"the viewer presence must remain in the global connected-player projection")
+assert(onlineHelpersSource:find("local_player_suffix(player)", 1, true),
+	"joined-room status text must use the shared local identity presentation")
 assert(clientSource:find("companion_ready_song_hash_recovered", 1, true),
 	"companion readiness must survive the shared options transition")
 assert(clientSource:find("action=server_authoritative_request", 1, true),
@@ -1285,9 +1331,12 @@ assert(gameLoopSource:find("PERF_TRACE: fps_drop", 1, true),
 assert(gameLoopSource:find("network_ms=%.3f", 1, true),
 	"low-FPS diagnostics must expose the network phase cost")
 assert(gameLoopSource:find("kCriticalFrameHitchSeconds", 1, true),
-	"critical frame hitches must be logged even with verbose diagnostics disabled")
+	"critical frame hitches must retain their dedicated classification")
 assert(gameLoopSource:find("if (!PerfTraceRateLimit(nowUsec))", 1, true),
-	"always-on hitch diagnostics must remain rate-limited")
+	"enabled hitch diagnostics must remain rate-limited")
+assert(not gameLoopSource:find("allowWhenDisabled", 1, true)
+	and gameLoopSource:find("static void TraceFpsDrop() {\n  if (!PerfDiagnosticsEnabled())", 1, true),
+	"frame and FPS diagnostics must never bypass the disabled master flag")
 
 local rageDisplaySource = read_source("src/RageDisplay.cpp")
 assert(not rageDisplaySource:find(
@@ -1308,6 +1357,9 @@ assert(perfDiagnosticsSource:find("kRefreshIntervalSeconds = 30", 1, true),
 	"online diagnostic preferences must not poll the filesystem every frame")
 assert(perfDiagnosticsSource:find("OnlineNetworkDiagnosticsEnabled", 1, true),
 	"native online diagnostics must share one cached preference")
+assert(perfDiagnosticsSource:find("ResetNonEssentialDiagnosticsForCurrentBuild", 1, true)
+	and perfDiagnosticsSource:find('"ShowLogOutput",', 1, true),
+	"every compiled build must reset noisy diagnostics and close the log window")
 local metalPresenterSource = read_source(
 	"src/arch/LowLevelWindow/MacOSMetalPresenter.mm"
 )
@@ -1342,6 +1394,9 @@ for _, language in ipairs({ "en", "fr", "es", "de", "it", "ja", "pl", "pt-br", "
 	local languageSource = read_source("Themes/Simply Love/Languages/" .. language .. ".ini")
 	assert(languageSource:find("PlayerLobbyName=", 1, true),
 		"invitation room names must be localized for " .. language)
+	assert(languageSource:find("Me=", 1, true)
+		and languageSource:find("LocalPlayer=", 1, true),
+		"local online player labels must be localized for " .. language)
 end
 
 local englishOnlineText = ini_section(

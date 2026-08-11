@@ -22,6 +22,7 @@ local lobby_flow_trace
 local connected = false
 local has_error = false
 local input_added = false
+local LOCAL_PLAYER_ROW_COLOR = {1, 0.55, 0.10, 1}
 
 local holding = {
 	["MenuRight"]=false,
@@ -2492,8 +2493,9 @@ local function build_player_action_options(user)
 		}
 	end
 	if user.isLocalCompanion then
+		local suffix = ITGOnlineLobbyPresentation.local_player_suffix(user)
 		return {
-			{label=ITGOnlineLobbyPresentation.text("AlreadyWithYou", "Already with you"), action="cancel"},
+			{label=ITGOnlineLobbyPresentation.text("LocalPlayer", "Local player %s", suffix), action="cancel"},
 			{label=ITGOnlineLobbyPresentation.text("Cancel", "Cancel"), action="cancel"},
 		}
 	end
@@ -4226,6 +4228,7 @@ local af = Def.ActorFrame{
 		local renderParts = {}
 		local selected_start = nil
 		local selected_length = nil
+		local local_ranges = {}
 		local text_length = 0
 		for i, user in ipairs(online_users) do
 			local selected = (list_selected and lobby_view == "players" and i == online_player_index) and "> " or "  "
@@ -4241,10 +4244,9 @@ local af = Def.ActorFrame{
 			local unknownPlayer = ITGOnlineLobbyPresentation.text("UnknownPlayer", "Player")
 			local display_name = ITGOnline and ITGOnline.UserDisplayName and ITGOnline:UserDisplayName(user, unknownPlayer)
 				or tostring(user.display_name or user.displayName or user.name or unknownPlayer)
-			local partyLabel = ""
-			if user.isLocalCompanion then
-				partyLabel = " " .. ITGOnlineLobbyPresentation.text("WithYou", "(with you)")
-			elseif tostring(user.partyCompanionName or "") ~= "" then
+			local localSuffix = ITGOnlineLobbyPresentation.local_player_suffix(user)
+			local partyLabel = localSuffix ~= "" and (" " .. localSuffix) or ""
+			if localSuffix == "" and tostring(user.partyCompanionName or "") ~= "" then
 				partyLabel = " " .. ITGOnlineLobbyPresentation.text(
 					"WithPlayer",
 					"(with %s)",
@@ -4254,12 +4256,16 @@ local af = Def.ActorFrame{
 			-- Keep the room suffix intact: it carries the room number required to
 			-- identify private rooms. The actor's maxwidth handles final scaling.
 			local line = selected .. i .. ". " .. clamp_text(display_name, 24) .. partyLabel .. status .. room
+			local lineLength = online_utf8_length(line)
+			if ITGOnlineLobbyPresentation.is_local_player(user) then
+				local_ranges[#local_ranges + 1] = {start=text_length, length=lineLength}
+			end
 			if list_selected and lobby_view == "players" and i == online_player_index then
 				selected_start = text_length
-				selected_length = online_utf8_length(line)
+				selected_length = lineLength
 			end
 			lines[#lines + 1] = line
-			text_length = text_length + online_utf8_length(line) + 1
+			text_length = text_length + lineLength + 1
 		end
 
 		local playersList = playersContent:GetChild("OnlinePlayersList")
@@ -4269,6 +4275,12 @@ local af = Def.ActorFrame{
 			playersList:ClearAttributes()
 			if selected_start and selected_length and selected_length > 0 then
 				playersList:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
+			end
+			for _, range in ipairs(local_ranges) do
+				playersList:AddAttribute(range.start, {
+					Length=range.length,
+					Diffuse=LOCAL_PLAYER_ROW_COLOR,
+				})
 			end
 		end
 
@@ -4465,6 +4477,7 @@ local af = Def.ActorFrame{
 		local renderParts = {}
 		local selected_start = nil
 		local selected_length = nil
+		local local_ranges = {}
 		local text_length = 0
 		if #joined_lobby_players == 0 then
 			joined_player_index = 1
@@ -4478,8 +4491,13 @@ local af = Def.ActorFrame{
 		for i, player in ipairs(joined_lobby_players) do
 			local profile = trim_text(player.profileName or player.name or player.playerId
 				or ITGOnlineLobbyPresentation.text("PlayerNumber", "Player %d", i))
+			profile = clamp_text(profile, 40)
+			local localSuffix = ITGOnlineLobbyPresentation.local_player_suffix(player)
+			if localSuffix ~= "" then
+				profile = profile .. " " .. localSuffix
+			end
 			if tostring(player.playerId or "") == tostring(joined_manager_user_id or "") then
-				profile = "[M] " .. profile
+				profile = profile .. " [Manager]"
 			end
 			local ready = player.ready and " ✔" or ""
 			local missing = ""
@@ -4538,12 +4556,16 @@ local af = Def.ActorFrame{
 				end
 			end
 			local line = clamp_text(lineHead..options..lineTail, maxLineLen)
+			local lineLength = online_utf8_length(line)
+			if ITGOnlineLobbyPresentation.is_local_player(player) then
+				local_ranges[#local_ranges + 1] = {start=text_length, length=lineLength}
+			end
 			if joined_players_selected and i == joined_player_index then
 				selected_start = text_length
-				selected_length = online_utf8_length(line)
+				selected_length = lineLength
 			end
 			lines[#lines+1] = line
-			text_length = text_length + online_utf8_length(line) + 1
+			text_length = text_length + lineLength + 1
 		end
 		lobby_flow_trace("joined_players_render rows=" .. table.concat(renderParts, ",")
 			.. " selectedIndex=" .. tostring(joined_player_index)
@@ -4559,6 +4581,12 @@ local af = Def.ActorFrame{
 			playersText:ClearAttributes()
 			if selected_start and selected_length and selected_length > 0 then
 				playersText:AddAttribute(selected_start, {Length=selected_length, Diffuse={0,1,0,1}})
+			end
+			for _, range in ipairs(local_ranges) do
+				playersText:AddAttribute(range.start, {
+					Length=range.length,
+					Diffuse=LOCAL_PLAYER_ROW_COLOR,
+				})
 			end
 		end
 		local playersFrame = joinedContent:GetChild("JoinedLobbyPlayersFrame")
@@ -6383,7 +6411,7 @@ end,
 			Name="OnlinePlayersList",
 				Text=ITGOnlineLobbyPresentation.text("NoOnlinePlayers", "No online players found."),
 			InitCommand=function(self)
-				self:horizalign(left):vertalign(top):xy(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+10, -132):zoom(0.48):maxwidth(420)
+				self:horizalign(left):vertalign(top):xy(lobby_layout.browsePlayersX-(lobby_layout.browsePanelWidth/2)+10, -132):zoom(0.54):maxwidth(420)
 			end
 		},
 		Def.ActorFrame{

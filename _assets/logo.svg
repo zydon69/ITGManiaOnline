@@ -26,7 +26,8 @@
 	.st21{fill:url(#SVGID_00000011023117027288417160000017545869502732254861_);}
 	.st22{fill:url(#SVGID_00000040548951127158259500000013259101659872674706_);}
 </style>
-<g id="XMLID_00000029017376475579079530000017684822204198375610_">
+<!-- Preserve the original arrow geometry while reserving space for the fork name. -->
+<g id="XMLID_00000029017376475579079530000017684822204198375610_" transform="translate(72.9 0) scale(0.73)">
 	<g>
 		<linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="459.2658" y1="423.0769" x2="497.996" y2="423.0769">
 			<stop offset="4.936103e-07" style="stop-color:#FAA21E"/>
@@ -171,4 +172,23 @@
 	<g>
 	</g>
 </g>
+<defs>
+	<!-- The ONLINE wordmark deliberately reuses the arrow's complete color palette. -->
+	<linearGradient id="online-wordmark-gradient" gradientUnits="userSpaceOnUse" x1="64" y1="469" x2="476" y2="469">
+		<stop offset="0" style="stop-color:#40BAEB"/>
+		<stop offset="0.2" style="stop-color:#4056A6"/>
+		<stop offset="0.38" style="stop-color:#69BD46"/>
+		<stop offset="0.55" style="stop-color:#F0EA41"/>
+		<stop offset="0.75" style="stop-color:#FAA21E"/>
+		<stop offset="1" style="stop-color:#EC2426"/>
+	</linearGradient>
+</defs>
+<!-- Vector outlines keep the wordmark deterministic and independent of installed fonts. -->
+<path id="online-wordmark" fill="url(#online-wordmark-gradient)" fill-rule="evenodd" stroke="#000000" stroke-width="8" stroke-linejoin="miter" d="
+	M64 427H132V511H64V427ZM82 445V493H114V445H82Z
+	M143 511V427H162L195 474V427H213V511H194L161 464V511H143Z
+	M224 427H242V493H284V511H224V427Z
+	M297 427H315V511H297V427Z
+	M328 511V427H347L380 474V427H398V511H379L346 464V511H328Z
+	M409 427H476V445H427V459H470V477H427V493H476V511H409V427Z"/>
 </svg>

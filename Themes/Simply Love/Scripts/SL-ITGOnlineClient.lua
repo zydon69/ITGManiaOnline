@@ -322,13 +322,11 @@ ITGOnline.fileHashCacheTtlSeconds = ITGOnline.fileHashCacheTtlSeconds or 30
 ITGOnline.onlineFlowTraceThrottle = ITGOnline.onlineFlowTraceThrottle or {}
 ITGOnline.onlineFlowTraceThrottleOrder = ITGOnline.onlineFlowTraceThrottleOrder or {}
 ITGOnline.maxOnlineFlowTraceThrottleKeys = tonumber(ITGOnline.maxOnlineFlowTraceThrottleKeys) or 512
--- Network-flow diagnostics start enabled for a fresh installation.  They remain
--- a user preference afterwards, so long-running cabinets can opt out without
--- editing the game code.
-ITGOnline.onlineFlowLoggingDefaultEnabled = true
-ITGOnline.debugOnlineTrace = ITGOnline.onlineFlowLoggingDefaultEnabled
-	or (type(IsOnlineNetworkLoggingEnabled) == "function"
-		and IsOnlineNetworkLoggingEnabled() == true)
+-- Diagnostics are strictly opt-in.  In particular, do not emit boot-time flow
+-- traces before ThemePrefs and the optional debug file have been read.
+ITGOnline.onlineFlowLoggingDefaultEnabled = false
+ITGOnline.debugOnlineTrace = type(IsOnlineNetworkLoggingEnabled) == "function"
+	and IsOnlineNetworkLoggingEnabled() == true
 ITGOnline.debugAuthTrace = type(IsOnlineAuthLoggingEnabled) == "function"
 	and IsOnlineAuthLoggingEnabled() == true
 ITGOnline.debugScoreTrace = type(IsOnlineScoreLoggingEnabled) == "function"
@@ -1117,18 +1115,26 @@ function ITGOnline:RefreshDebugFlags(force)
 	end
 	self.lastDebugConfigPollAt = now
 
-	if not file_exists(self.debugConfigPath) then
-		ini_write(self.debugConfigPath, {
-			["ITGOnlineDebug"] = {
-				["OnlineTrace"] = "true",
-				["AuthTrace"] = "false",
-				["ScoreTrace"] = "false",
-			}
-		})
-	end
-
+	local buildId = table.concat({
+		type(ProductVersion) == "function" and tostring(ProductVersion()) or "unknown-product",
+		type(VersionDate) == "function" and tostring(VersionDate()) or "unknown-date",
+		type(VersionTime) == "function" and tostring(VersionTime()) or "unknown-time",
+	}, "|")
 	local debugIni = ini_read(self.debugConfigPath) or {}
 	local debugSection = type(debugIni.ITGOnlineDebug) == "table" and debugIni.ITGOnlineDebug or {}
+	if tostring(debugSection.BuildId or "") ~= buildId then
+		debugIni = {
+			["ITGOnlineDebug"] = {
+				["BuildId"] = buildId,
+				["OnlineTrace"] = "false",
+				["AuthTrace"] = "false",
+				["ReadyFlow"] = "false",
+				["ScoreTrace"] = "false",
+			}
+		}
+		ini_write(self.debugConfigPath, debugIni)
+		debugSection = debugIni.ITGOnlineDebug
+	end
 	local function enabled(prefFn, iniKey)
 		local prefEnabled = type(prefFn) == "function" and prefFn() == true
 		local value = tostring(debugSection[iniKey] or ""):lower()
@@ -2361,6 +2367,40 @@ end
 
 function ITGOnline:IsLocalTwoPlayerSession()
 	return self:LocalPartyPlan().twoPlayer == true
+end
+
+function ITGOnline:LocalCompanionOnlineUserId()
+	if not self:IsLocalTwoPlayerSession()
+		or not self:HasActiveAccessTokenForPlayer(PLAYER_2)
+	then
+		return ""
+	end
+	return online_user_identifier(self:UserForLocalPlayer(PLAYER_2))
+end
+
+function ITGOnline:LocalOnlinePresentationSide(userId, isViewerPresence)
+	local companionUserId = self:LocalCompanionOnlineUserId()
+	if ITGOnlineLocalIdentity and ITGOnlineLocalIdentity.online_presentation_side then
+		return ITGOnlineLocalIdentity.online_presentation_side(
+			userId,
+			self.user and self.user.id or nil,
+			companionUserId,
+			isViewerPresence
+		)
+	end
+	local normalizedUserId = tostring(userId or "")
+	if normalizedUserId == "" then return nil end
+	if companionUserId ~= ""
+		and online_protocol_ids_match(normalizedUserId, companionUserId)
+	then return "P2" end
+	local isPrimary = isViewerPresence == true
+		or (isViewerPresence == nil
+			and self.user
+			and online_protocol_ids_match(normalizedUserId, self.user.id))
+	if isPrimary then
+		return companionUserId ~= "" and "P1" or "self"
+	end
+	return nil
 end
 
 function ITGOnline:ActiveLocalPartyId()
@@ -6324,9 +6364,18 @@ function ITGOnline:MaybeAutoConfirmSelectedSongAndMarkLobbyReady(room, source, c
 		end
 
 		if not availabilityOk then
-			online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
-				.. " step=availability"
-				.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
+			if availabilityResponse and availabilityResponse.deferred == true then
+				online_flow_trace("song_selected_auto_ready_deferred key=" .. tostring(key)
+					.. " step=availability"
+					.. " reason=" .. tostring(availabilityResponse.deferredReason
+						or availabilityResponse.errorCode
+						or "availability_pending")
+					.. " retryAfter=" .. tostring(availabilityResponse.retryAfter or "nil"))
+			else
+				online_flow_trace("song_selected_auto_ready_failed key=" .. tostring(key)
+					.. " step=availability"
+					.. " message=" .. tostring(response_message(availabilityResponse, availabilityDecoded, "availability failed")))
+			end
 			finish(false, availabilityDecoded, availabilityResponse)
 			return
 		end
@@ -11400,10 +11449,17 @@ function ITGOnline:ResolveSelectedSongAvailabilityPayload(selectedSong, source)
 			return match.payload, tostring(match.matchSource or "packsync_hash_match")
 		end
 
-		online_flow_trace("song_availability_pack_sync_match_failed source=" .. tostring(source or "unknown")
-			.. " status=" .. tostring(match and match.status or "nil")
-			.. " reason=" .. tostring(match and match.reason or directReason or "unknown"))
-		return nil, tostring(match and match.reason or directReason or "local_payload_unavailable")
+		local matchReason = tostring(match and match.reason or directReason or "local_payload_unavailable")
+		if matchReason == "hashing_local_files" then
+			online_flow_trace("song_availability_pack_sync_match_pending source=" .. tostring(source or "unknown")
+				.. " status=" .. tostring(match and match.status or "nil")
+				.. " reason=" .. matchReason)
+		else
+			online_flow_trace("song_availability_pack_sync_match_failed source=" .. tostring(source or "unknown")
+				.. " status=" .. tostring(match and match.status or "nil")
+				.. " reason=" .. matchReason)
+		end
+		return nil, matchReason
 	end
 
 	return nil, tostring(directReason or "local_payload_unavailable")
@@ -19249,6 +19305,7 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 	local cachedPayload = self.cachedLobbySearchPayload or { lobbies = {}, onlinePlayers = {} }
 	local onlinePlayers = {}
 	local found = false
+	local localCompanionUserId = self:LocalCompanionOnlineUserId()
 	local status = tostring(user.status or payload.status or "available")
 	local shouldRemove = status == "offline" or status == "disconnected" or status == "left"
 	online_flow_trace("lobby_presence_payload_begin userId=" .. tostring(user.id or "nil")
@@ -19261,6 +19318,7 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 	for player in ivalues(cachedPayload.onlinePlayers or {}) do
 		if online_protocol_ids_match(player.id, user.id) then
 			if not shouldRemove then
+				local partyCompanion = party_companion_descriptor(user)
 				onlinePlayers[#onlinePlayers + 1] = {
 					id = user.id,
 					name = user_display_name(user, player.name or ("User " .. tostring(user.id or "?"))),
@@ -19268,7 +19326,12 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 					status = status ~= "" and status or player.status or "available",
 					room = user.room,
 					lastSeenAt = user.last_seen_at or player.lastSeenAt,
-					isSelf = false,
+					presenceIdentity = user.presence_identity or player.presenceIdentity,
+					isSelf = player.isSelf == true,
+					isLocalCompanion = player.isLocalCompanion == true,
+					localSide = player.localSide,
+					partyCompanionId = partyCompanion and partyCompanion.id or player.partyCompanionId,
+					partyCompanionName = partyCompanion and partyCompanion.name or player.partyCompanionName,
 				}
 			end
 			found = true
@@ -19278,6 +19341,9 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 	end
 
 	if not found and not shouldRemove and user.id ~= nil then
+		local isLocalCompanion = localCompanionUserId ~= ""
+			and online_protocol_ids_match(user.id, localCompanionUserId)
+		local partyCompanion = party_companion_descriptor(user)
 		onlinePlayers[#onlinePlayers + 1] = {
 			id = user.id,
 			name = user_display_name(user, "User " .. tostring(user.id or "?")),
@@ -19286,6 +19352,10 @@ function ITGOnline:ApplyLobbyPresencePayload(payload)
 			room = user.room,
 			lastSeenAt = user.last_seen_at,
 			isSelf = false,
+			isLocalCompanion = isLocalCompanion,
+			localSide = isLocalCompanion and "P2" or nil,
+			partyCompanionId = partyCompanion and partyCompanion.id or nil,
+			partyCompanionName = partyCompanion and partyCompanion.name or nil,
 		}
 	end
 
@@ -21996,8 +22066,10 @@ elseif name == "room.score_updated" then
 	if payload.leaderboard and versionRoomId ~= "" then
 		local previousVersion = tonumber(self.lastLeaderboardVersionByRoomId[versionRoomId]) or 0
 		if incomingVersion > 0 and incomingVersion <= previousVersion then
-			online_flow_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
-				.. " previous=" .. tostring(previousVersion))
+			if self.debugScoreTrace == true then
+				online_score_trace("ignored_stale_score_leaderboard version=" .. tostring(incomingVersion)
+					.. " previous=" .. tostring(previousVersion))
+			end
 		elseif incomingVersion > 0 then
 			self.lastLeaderboardVersionByRoomId[versionRoomId] = incomingVersion
 			leaderboardIsFresh = true
@@ -22069,10 +22141,14 @@ elseif name == "room.score_updated" then
 		local playStateVersionKey = tostring(roomId or expectedRoomId or "")
 		local previousPlayStateVersion = tonumber(self.lastPlayStateVersionByRoomId[playStateVersionKey]) or 0
 		if incomingPlayStateVersion <= 0 and previousPlayStateVersion > 0 then
-			online_flow_trace("ignored_unversioned_score_play_state previous=" .. tostring(previousPlayStateVersion))
+			if self.debugScoreTrace == true then
+				online_score_trace("ignored_unversioned_score_play_state previous=" .. tostring(previousPlayStateVersion))
+			end
 		elseif incomingPlayStateVersion > 0 and incomingPlayStateVersion < previousPlayStateVersion then
-			online_flow_trace("ignored_stale_score_play_state version=" .. tostring(incomingPlayStateVersion)
-				.. " previous=" .. tostring(previousPlayStateVersion))
+			if self.debugScoreTrace == true then
+				online_score_trace("ignored_stale_score_play_state version=" .. tostring(incomingPlayStateVersion)
+					.. " previous=" .. tostring(previousPlayStateVersion))
+			end
 		else
 			if incomingPlayStateVersion > 0 then
 				self.lastPlayStateVersionByRoomId[playStateVersionKey] = incomingPlayStateVersion
@@ -22446,7 +22522,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 	end
 	local rawVisibleRoomCount = decoded and decoded.visible_rooms and #decoded.visible_rooms or 0
 	local rawOnlineUserCount = decodedOnlineUsers and #decodedOnlineUsers or 0
-	local selfOnlineUserFiltered = 0
+	local selfOnlineUserCount = 0
 	local rawOnlineUserIds = {}
 	local displayOnlineUserIds = {}
 	local rawPresenceIdentities = {}
@@ -22455,11 +22531,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 	local selfPresenceDevices = {}
 	local retainedSameAccountPresenceIds = {}
 	local retainedSameAccountSessionIds = {}
-	local localCompanionUserId = ""
-	if self:IsLocalTwoPlayerSession() then
-		local companionUser = self:UserForLocalPlayer(PLAYER_2)
-		localCompanionUserId = online_user_identifier(companionUser)
-	end
+	local localCompanionUserId = self:LocalCompanionOnlineUserId()
 
 	if decoded and decoded.visible_rooms ~= nil then
 		for room in ivalues(decoded.visible_rooms or {}) do
@@ -22520,7 +22592,7 @@ function ITGOnline:LobbySearchPayload(decoded)
 			local isViewerPresence = presenceIdentity.is_viewer == true or presenceIdentity.isViewer == true
 			local isSelf = isViewerPresence
 			if isSelf then
-				selfOnlineUserFiltered = selfOnlineUserFiltered + 1
+				selfOnlineUserCount = selfOnlineUserCount + 1
 				selfPresenceIdentities[#selfPresenceIdentities + 1] = presenceKey
 				if viewerSession.api_token_id or viewerSession.apiTokenId then
 					selfPresenceSessionIds[#selfPresenceSessionIds + 1] = tostring(viewerSession.api_token_id or viewerSession.apiTokenId)
@@ -22528,41 +22600,42 @@ function ITGOnline:LobbySearchPayload(decoded)
 				if viewerSession.device_name or viewerSession.deviceName then
 					selfPresenceDevices[#selfPresenceDevices + 1] = tostring(viewerSession.device_name or viewerSession.deviceName)
 				end
-			else
-				local partyCompanion = party_companion_descriptor(user)
-				local isLocalCompanion = localCompanionUserId ~= ""
-					and online_protocol_ids_match(user.id, localCompanionUserId)
-				local sameAccountNonViewer = self.user and online_protocol_ids_match(user.id, self.user.id)
-				if sameAccountNonViewer then
-					retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = "present"
-					local apiTokenId = presenceIdentity.api_token_id or presenceIdentity.apiTokenId
-					if apiTokenId then
-						retainedSameAccountSessionIds[#retainedSameAccountSessionIds + 1] = "present"
-					end
-					online_flow_trace("lobby_search_presence_retained_same_account"
-						.. " userId=" .. tostring(user.id or "?")
-						.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
-						.. " presenceKey=" .. tostring(presenceKey)
-						.. " hasApiTokenId=" .. tostring(apiTokenId ~= nil)
-						.. " isViewerPresence=" .. tostring(isViewerPresence)
-						.. " status=" .. tostring(user.status or "nil")
-						.. " roomId=" .. tostring(user.room and user.room.id or "nil"))
-				end
-				onlinePlayers[#onlinePlayers + 1] = {
-					id = user.id,
-					name = user_display_name(user, "User " .. tostring(user.id or "?")),
-					displayName = user.display_name or user.displayName or user.name,
-					status = user.status or "available",
-					room = user.room,
-					lastSeenAt = user.last_seen_at,
-					presenceIdentity = user.presence_identity,
-					isSelf = false,
-					isLocalCompanion = isLocalCompanion,
-					partyCompanionId = partyCompanion and partyCompanion.id or nil,
-					partyCompanionName = partyCompanion and partyCompanion.name or nil,
-				}
-				displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
 			end
+			local partyCompanion = party_companion_descriptor(user)
+			local isLocalCompanion = localCompanionUserId ~= ""
+				and online_protocol_ids_match(user.id, localCompanionUserId)
+			local sameAccountNonViewer = not isSelf
+				and self.user and online_protocol_ids_match(user.id, self.user.id)
+			if sameAccountNonViewer then
+				retainedSameAccountPresenceIds[#retainedSameAccountPresenceIds + 1] = "present"
+				local apiTokenId = presenceIdentity.api_token_id or presenceIdentity.apiTokenId
+				if apiTokenId then
+					retainedSameAccountSessionIds[#retainedSameAccountSessionIds + 1] = "present"
+				end
+				online_flow_trace("lobby_search_presence_retained_same_account"
+					.. " userId=" .. tostring(user.id or "?")
+					.. " selfUserId=" .. tostring(self.user and self.user.id or "nil")
+					.. " presenceKey=" .. tostring(presenceKey)
+					.. " hasApiTokenId=" .. tostring(apiTokenId ~= nil)
+					.. " isViewerPresence=" .. tostring(isViewerPresence)
+					.. " status=" .. tostring(user.status or "nil")
+					.. " roomId=" .. tostring(user.room and user.room.id or "nil"))
+			end
+			onlinePlayers[#onlinePlayers + 1] = {
+				id = user.id,
+				name = user_display_name(user, "User " .. tostring(user.id or "?")),
+				displayName = user.display_name or user.displayName or user.name,
+				status = user.status or "available",
+				room = user.room,
+				lastSeenAt = user.last_seen_at,
+				presenceIdentity = user.presence_identity,
+				isSelf = isSelf,
+				isLocalCompanion = isLocalCompanion,
+				localSide = self:LocalOnlinePresentationSide(user.id, isViewerPresence),
+				partyCompanionId = partyCompanion and partyCompanion.id or nil,
+				partyCompanionName = partyCompanion and partyCompanion.name or nil,
+			}
+			displayOnlineUserIds[#displayOnlineUserIds + 1] = tostring(user.id or "?")
 		end
 	else
 		for player in ivalues(cachedPayload.onlinePlayers or {}) do
@@ -22571,18 +22644,17 @@ function ITGOnline:LobbySearchPayload(decoded)
 		end
 	end
 
-	local selfOnlyPresenceFiltered = decodedOnlineUsers ~= nil
+	local selfOnlyPresence = decodedOnlineUsers ~= nil
 		and rawOnlineUserCount > 0
-		and rawOnlineUserCount == selfOnlineUserFiltered
-		and #onlinePlayers == 0
+		and rawOnlineUserCount == selfOnlineUserCount
 
 	local payload = {
 		lobbies = lobbies,
 		onlinePlayers = onlinePlayers,
 		presenceDiagnostics = {
 			rawOnlineUserCount = rawOnlineUserCount,
-			selfOnlineUserFiltered = selfOnlineUserFiltered,
-			selfOnlyPresenceFiltered = selfOnlyPresenceFiltered,
+			selfOnlineUserCount = selfOnlineUserCount,
+			selfOnlyPresence = selfOnlyPresence,
 			rawOnlineUserIds = rawOnlineUserIds,
 			displayOnlineUserIds = displayOnlineUserIds,
 			rawPresenceIdentities = rawPresenceIdentities,
@@ -22602,8 +22674,8 @@ function ITGOnline:LobbySearchPayload(decoded)
 		.. " normalizedLobbies=" .. tostring(#lobbies)
 		.. " normalizedOnlinePlayers=" .. tostring(#onlinePlayers)
 		.. " displayOnlinePlayers=" .. tostring(#onlinePlayers)
-		.. " selfOnlineUserFiltered=" .. tostring(selfOnlineUserFiltered)
-		.. " selfOnlyPresenceFiltered=" .. tostring(selfOnlyPresenceFiltered)
+		.. " selfOnlineUserCount=" .. tostring(selfOnlineUserCount)
+		.. " selfOnlyPresence=" .. tostring(selfOnlyPresence)
 		.. " rawOnlineUserIds=" .. table.concat(rawOnlineUserIds, ",")
 		.. " displayOnlineUserIds=" .. table.concat(displayOnlineUserIds, ",")
 		.. " rawPresenceIdentities=" .. table.concat(rawPresenceIdentities, ",")
@@ -22681,6 +22753,7 @@ function ITGOnline:LobbyStatePayload(room)
 		screenName = "ScreenOnlineLobbies"
 	end
 	local players = {}
+	local localCompanionUserId = self:LocalCompanionOnlineUserId()
 	for member in ivalues(room.members or {}) do
 		local user = member.user or member
 		local userId = tostring(user.id or member.user_id or "")
@@ -22731,7 +22804,10 @@ function ITGOnline:LobbyStatePayload(room)
 				profileName = user_display_name(user, "Player " .. userId),
 				partyCompanionId = partyCompanion and partyCompanion.id or nil,
 				partyCompanionName = partyCompanion and partyCompanion.name or nil,
-				isLocalCompanion = partyCompanion and partyCompanion.isLocalCompanion == true or false,
+				isSelf = self.user and online_protocol_ids_match(self.user.id, userId) or false,
+				isLocalCompanion = localCompanionUserId ~= ""
+					and online_protocol_ids_match(localCompanionUserId, userId) or false,
+				localSide = self:LocalOnlinePresentationSide(userId, nil),
 				screenName = memberScreenName,
 				-- A green check means options are validated, never merely that a
 				-- local chart was found during the lobby-ready barrier.
