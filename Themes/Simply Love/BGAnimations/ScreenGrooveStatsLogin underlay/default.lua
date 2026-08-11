@@ -6,6 +6,7 @@ local grooveStatsWs = nil
 local ARROWCLOUD_BASE_URL = "https://api.arrowcloud.dance"
 local ARROWCLOUD_DEVICE_LOGIN_START_PATH = "/device-login/start"
 local ARROWCLOUD_DEVICE_LOGIN_POLL_PATH = "/device-login/poll"
+local arrowCloudDeviceLogin = assert(ArrowCloudDeviceLogin, "ArrowCloudDeviceLogin is required")
 
 local qrEncoder = nil
 
@@ -405,11 +406,9 @@ local af = Def.ActorFrame{
 	PollArrowCloudLoginCommand = function(self)
 		local runToken = self.arrowCloudRunToken
 		local now = GetTimeSinceStart()
-		local hasPending = false
 
 		for pn, state in pairs(self.arrowCloudStates) do
 			if state.status == "waiting" then
-				hasPending = true
 				if not state.polling and now >= (state.nextPollAt or 0) then
 					state.polling = true
 					request_arrowcloud_poll(state.sessionId, state.pollToken, function(response, ok, body)
@@ -422,32 +421,34 @@ local af = Def.ActorFrame{
 							return
 						end
 
-						local status = body.status and tostring(body.status) or "pending"
-						if status == "pending" then
-							state.nextPollAt = GetTimeSinceStart() + (state.pollIntervalSeconds or 3)
-						elseif status == "consumed" and body.apiKey and tostring(body.apiKey) ~= "" then
-							SL[pn].ArrowCloudApiKey = tostring(body.apiKey)
+						local outcome = arrowCloudDeviceLogin.poll_outcome(body)
+						if outcome.kind == "retry" then
+							local interval = outcome.intervalSeconds or state.pollIntervalSeconds or 3
+							state.nextPollAt = GetTimeSinceStart() + interval
+						elseif outcome.kind == "success" then
+							SL[pn].ArrowCloudApiKey = outcome.apiKey
 							WriteArrowCloudIni(state.player)
 							state.status = "success"
 							if panel then
 								panel:playcommand("ClearArrowCloudQr")
 								panel:playcommand("SetStatus", { text = THEME:GetString("ScreenSelectProfile", "ArrowCloudProfileConnected") })
 							end
-						elseif status == "expired" or status == "cancelled" then
+						else
 							state.status = "failure"
 							if panel then
 								panel:playcommand("ClearArrowCloudQr")
-								panel:playcommand("SetStatus", { text = "Arrow Cloud: " .. status })
+								panel:playcommand("SetStatus", { text = "Arrow Cloud: " .. outcome.status })
 							end
-						else
-							state.nextPollAt = GetTimeSinceStart() + (state.pollIntervalSeconds or 3)
 						end
 					end)
 				end
 			end
 		end
 
-		if hasPending then
+		-- Keep the scheduler alive while the start request is still in flight.  The
+		-- previous waiting-only check raced the HTTP callback: a response taking
+		-- longer than 200 ms displayed a QR code after polling had already stopped.
+		if arrowCloudDeviceLogin.has_in_flight(self.arrowCloudStates) then
 			self:sleep(0.2):queuecommand("PollArrowCloudLogin")
 		end
 	end,

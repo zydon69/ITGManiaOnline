@@ -85,6 +85,11 @@ if(BUILD_TESTING)
               ${CMAKE_SOURCE_DIR}/Tests/online_local_party_spec.lua
               ${CMAKE_SOURCE_DIR})
     add_test(
+      NAME arrowcloud_device_login_behavior
+      COMMAND ${ITGMANIA_LUA_EXECUTABLE}
+              ${CMAKE_SOURCE_DIR}/Tests/arrowcloud_device_login_spec.lua
+              ${CMAKE_SOURCE_DIR})
+    add_test(
       NAME online_score_judgments_behavior
       COMMAND ${ITGMANIA_LUA_EXECUTABLE}
               ${CMAKE_SOURCE_DIR}/Tests/online_score_judgments_spec.lua
