@@ -32,11 +32,52 @@ local roomStateMachine = assert(dofile(
 local diagnostics = assert(dofile(
 	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineDiagnostics.lua"
 ))
+local transportRecovery = assert(dofile(
+	sourceRoot .. "/Themes/Simply Love/Scripts/02 SL-ITGOnlineTransportRecovery.lua"
+))
 
 local function equal(actual, expected, label)
 	assert(actual == expected, (label or "value")
 		.. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
+
+local retryAttempt, retryDelay, retryAt = transportRecovery.schedule(0, 100, 1, 10, 0)
+equal(retryAttempt, 1, "transport recovery first attempt")
+equal(retryDelay, 1, "transport recovery first delay")
+equal(retryAt, 101, "transport recovery first deadline")
+retryAttempt, retryDelay, retryAt = transportRecovery.schedule(retryAttempt, retryAt, 1, 10, 0)
+equal(retryAttempt, 2, "transport recovery second attempt")
+equal(retryDelay, 2, "transport recovery exponential delay")
+equal(retryAt, 103, "transport recovery second deadline")
+retryAttempt, retryDelay, retryAt = transportRecovery.schedule(8, 300, 1, 10, 0)
+equal(retryAttempt, 9, "transport recovery keeps counting capped attempts")
+equal(retryDelay, 10, "transport recovery caps its outage delay")
+equal(retryAt, 310, "transport recovery capped deadline")
+retryAttempt, retryDelay, retryAt = transportRecovery.schedule(0, 400, 1, 10, 430)
+equal(retryAttempt, 1, "transport recovery probe gate keeps first attempt semantics")
+equal(retryDelay, 30, "transport recovery honors the shared probe deadline")
+equal(retryAt, 430, "transport recovery never schedules before the shared probe")
+
+local transportState = {}
+local advanced
+transportState, advanced, retryDelay =
+	transportRecovery.observe_transport_failure(transportState, 200, 1, 10)
+equal(advanced, true, "first offline response advances transport backoff")
+equal(retryDelay, 1, "first offline response keeps a fast retry")
+transportState, advanced =
+	transportRecovery.observe_transport_failure(transportState, 200.2, 1, 10)
+equal(advanced, false, "parallel failures coalesce into one transport window")
+equal(transportState.attempt, 1, "parallel failures do not inflate the attempt counter")
+transportState, advanced, retryDelay =
+	transportRecovery.observe_transport_failure(transportState, 201, 1, 10)
+equal(advanced, true, "due transport probe advances backoff")
+equal(retryDelay, 2, "due transport probe doubles delay")
+equal(transportRecovery.watchdogs_allowed(transportState), false,
+	"room watchdogs pause while HTTP is unavailable")
+transportState, advanced = transportRecovery.observe_transport_success(transportState)
+equal(advanced, true, "successful HTTP response reports recovery")
+equal(transportRecovery.watchdogs_allowed(transportState), true,
+	"successful HTTP response releases room watchdogs")
 
 local canonicalRoomLeaderboard = { { user_id = 1, score_percent = 42 } }
 equal(leaderboardPolicy.canonical_leaderboard({
@@ -1075,6 +1116,31 @@ assert(clientSource:find('MaintainCompanionRealtime("primary_connection_ready")'
 	"a recovered coordinator websocket must restore the companion websocket")
 assert(clientSource:find('MaintainCompanionRealtime("companion_heartbeat_recovered")', 1, true),
 	"a recovered companion HTTP heartbeat must restore its websocket")
+local primaryConnectStart = assert(clientSource:find("function ITGOnline:ConnectWebSocket", 1, true))
+local primaryConnectEnd = assert(clientSource:find("function ITGOnline:CompanionRealtimeContext", primaryConnectStart, true))
+local primaryConnectSource = clientSource:sub(primaryConnectStart, primaryConnectEnd - 1)
+assert(primaryConnectSource:find('ScheduleRealtimeReconnect("ticket_failed")', 1, true)
+	and primaryConnectSource:find('ScheduleRealtimeReconnect("socket_open_failed")', 1, true),
+	"every primary realtime connection failure must advance the shared backoff")
+local companionConnectStart = assert(clientSource:find("function ITGOnline:ConnectCompanionWebSocket", 1, true))
+local companionConnectEnd = assert(clientSource:find("function ITGOnline:ConnectLocalPlayerPartyWebSockets", companionConnectStart, true))
+local companionConnectSource = clientSource:sub(companionConnectStart, companionConnectEnd - 1)
+assert(companionConnectSource:find('ScheduleCompanionRealtimeReconnect(context, "ticket_failed")', 1, true),
+	"a failed companion ticket must advance its reconnect backoff")
+local companionMaintainStart = assert(clientSource:find("function ITGOnline:MaintainCompanionRealtime", 1, true))
+local companionMaintainEnd = assert(clientSource:find("function ITGOnline:SendRealtimeAck", companionMaintainStart, true))
+local companionMaintainSource = clientSource:sub(companionMaintainStart, companionMaintainEnd - 1)
+assert(companionMaintainSource:find("primary_owns_offline_probe", 1, true),
+	"P1 must own the sole recovery probe while the cabinet HTTP transport is offline")
+local realtimeMaintenanceStart = assert(clientSource:find("function ITGOnline:MaintainRealtimeAndRoomSync", 1, true))
+local realtimeMaintenanceEnd = assert(clientSource:find("function ITGOnline:RoomKey", realtimeMaintenanceStart, true))
+local realtimeMaintenanceSource = clientSource:sub(realtimeMaintenanceStart, realtimeMaintenanceEnd - 1)
+assert(realtimeMaintenanceSource:find("HttpTransportWatchdogsAllowed", 1, true)
+	and realtimeMaintenanceSource:find("current_room_watchdog_transport_suppressed", 1, true)
+	and realtimeMaintenanceSource:find("and httpRecoveryAllowed", 1, true),
+	"room fetch and sync watchdogs must pause during confirmed transport loss")
+assert(realtimeMaintenanceSource:find("self:HttpTransportProbeNotBefore()", 1, true),
+	"the primary realtime retry must honor the shared HTTP probe deadline")
 assert(onlineScorePushSource:find("ITGOnline:FlushLiveScore()", 1, true),
 	"ScreenGameplay must remain the sole owner of primary live-score transport")
 local helperReadyStart = assert(onlineHelpersSource:find("function maybe_set_lobby_ready", 1, true),

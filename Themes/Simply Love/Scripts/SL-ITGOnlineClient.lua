@@ -130,6 +130,15 @@ ITGOnline.realtimeReconnectNextAttemptAt = ITGOnline.realtimeReconnectNextAttemp
 ITGOnline.realtimeReconnectAttempt = ITGOnline.realtimeReconnectAttempt or 0
 ITGOnline.realtimeReconnectBaseDelaySeconds = ITGOnline.realtimeReconnectBaseDelaySeconds or 1.0
 ITGOnline.realtimeReconnectMaxDelaySeconds = ITGOnline.realtimeReconnectMaxDelaySeconds or 10.0
+ITGOnline.httpTransportRecoveryState = ITGOnline.httpTransportRecoveryState or {
+	unavailable = false,
+	attempt = 0,
+	nextProbeAt = 0,
+}
+ITGOnline.httpTransportRecoveryBaseDelaySeconds =
+	ITGOnline.httpTransportRecoveryBaseDelaySeconds or 1.0
+ITGOnline.httpTransportRecoveryMaxDelaySeconds =
+	ITGOnline.httpTransportRecoveryMaxDelaySeconds or 10.0
 ITGOnline.screenGeneration = ITGOnline.screenGeneration or 0
 ITGOnline.currentScreenName = ITGOnline.currentScreenName or "NoScreen"
 ITGOnline.lastUserActivitySentAt = ITGOnline.lastUserActivitySentAt or 0
@@ -2956,6 +2965,21 @@ function ITGOnline:ResetRealtimeState()
 	self.pendingLiveScoreSnapshot = nil
 	self.pendingLiveScoreRoundKey = ""
 	self.liveScoreInFlight = false
+	self.realtimeReconnectAttempt = 0
+	self.realtimeReconnectNextAttemptAt = 0
+	if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.observe_transport_success then
+		self.httpTransportRecoveryState = select(1,
+			ITGOnlineTransportRecovery.observe_transport_success(
+				self.httpTransportRecoveryState
+			)
+		)
+	else
+		self.httpTransportRecoveryState = {
+			unavailable = false,
+			attempt = 0,
+			nextProbeAt = 0,
+		}
+	end
 	self:InvalidateSongAvailabilityRequests("realtime_state_reset")
 end
 
@@ -2964,12 +2988,36 @@ function ITGOnline:ScheduleRealtimeReconnect(reason)
 		return false
 	end
 
-	local attempt = math.max(1, (tonumber(self.realtimeReconnectAttempt) or 0) + 1)
-	self.realtimeReconnectAttempt = attempt
+	local now = GetTimeSinceStart()
+	local scheduledAt = tonumber(self.realtimeReconnectNextAttemptAt) or 0
+	if scheduledAt > now then
+		online_flow_trace_throttled("realtime_reconnect_schedule_coalesced", 3.0,
+			"realtime_reconnect_schedule_coalesced reason=" .. tostring(reason or "unknown")
+			.. " attempt=" .. tostring(tonumber(self.realtimeReconnectAttempt) or 0)
+			.. " remaining=" .. string.format("%.3f", scheduledAt - now))
+		return true
+	end
+
 	local baseDelay = tonumber(self.realtimeReconnectBaseDelaySeconds) or 1.0
 	local maxDelay = tonumber(self.realtimeReconnectMaxDelaySeconds) or 10.0
-	local delay = math.min(maxDelay, baseDelay * math.pow(2, math.min(attempt - 1, 4)))
-	self.realtimeReconnectNextAttemptAt = GetTimeSinceStart() + delay
+	local notBefore = self:HttpTransportProbeNotBefore()
+	local attempt, delay, nextAttemptAt
+	if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.schedule then
+		attempt, delay, nextAttemptAt = ITGOnlineTransportRecovery.schedule(
+			self.realtimeReconnectAttempt,
+			now,
+			baseDelay,
+			maxDelay,
+			notBefore
+		)
+	else
+		attempt = math.max(1, (tonumber(self.realtimeReconnectAttempt) or 0) + 1)
+		delay = math.min(maxDelay, baseDelay * (2 ^ math.min(attempt - 1, 4)))
+		nextAttemptAt = math.max(now + delay, notBefore)
+		delay = nextAttemptAt - now
+	end
+	self.realtimeReconnectAttempt = attempt
+	self.realtimeReconnectNextAttemptAt = nextAttemptAt
 	online_flow_trace("realtime_reconnect_scheduled reason=" .. tostring(reason or "unknown")
 		.. " attempt=" .. tostring(attempt)
 		.. " delay=" .. string.format("%.3f", delay)
@@ -2985,6 +3033,90 @@ function ITGOnline:ScheduleRealtimeReconnect(reason)
 		attempt = attempt,
 	})
 	return true
+end
+
+function ITGOnline:ObserveHttpTransportResponse(response)
+	local statusCode = tonumber(response and response.statusCode)
+	self.httpTransportRecoveryState = self.httpTransportRecoveryState or {}
+	if statusCode and statusCode > 0 then
+		local changed = false
+		if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.observe_transport_success then
+			self.httpTransportRecoveryState, changed =
+				ITGOnlineTransportRecovery.observe_transport_success(self.httpTransportRecoveryState)
+		else
+			changed = self.httpTransportRecoveryState.unavailable == true
+			self.httpTransportRecoveryState = { unavailable = false, attempt = 0, nextProbeAt = 0 }
+		end
+		if changed then
+			local now = GetTimeSinceStart()
+			-- A successful authenticated HTTP response is an authoritative network
+			-- recovery signal.  Release stale reconnect deadlines so the next
+			-- maintenance tick can restore the realtime channels immediately.
+			if not self.realtimeConnected and not self.realtimeConnecting then
+				self.realtimeReconnectNextAttemptAt = math.min(
+					tonumber(self.realtimeReconnectNextAttemptAt) or now,
+					now
+				)
+			end
+			for _, context in pairs(self.localPartyRealtime or {}) do
+				if type(context) == "table"
+					and context.connected ~= true
+					and context.connecting ~= true
+				then
+					context.reconnectNextAttemptAt = math.min(
+						tonumber(context.reconnectNextAttemptAt) or now,
+						now
+					)
+				end
+			end
+			online_flow_trace("http_transport_recovered status=" .. tostring(statusCode)
+				.. " room=" .. tostring(self.currentRoomId or "nil"))
+		end
+		return true
+	end
+
+	local now = GetTimeSinceStart()
+	local advanced = false
+	local delay = 0
+	if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.observe_transport_failure then
+		self.httpTransportRecoveryState, advanced, delay =
+			ITGOnlineTransportRecovery.observe_transport_failure(
+				self.httpTransportRecoveryState,
+				now,
+				self.httpTransportRecoveryBaseDelaySeconds,
+				self.httpTransportRecoveryMaxDelaySeconds
+			)
+	else
+		local state = self.httpTransportRecoveryState
+		if state.unavailable ~= true or now >= (tonumber(state.nextProbeAt) or 0) then
+			state.attempt = math.max(1, (tonumber(state.attempt) or 0) + 1)
+			delay = math.min(10, 2 ^ math.min(state.attempt - 1, 4))
+			state.nextProbeAt = now + delay
+			advanced = true
+		end
+		state.unavailable = true
+	end
+	if advanced then
+		online_flow_trace("http_transport_unavailable attempt="
+			.. tostring(self.httpTransportRecoveryState.attempt or 1)
+			.. " delay=" .. string.format("%.3f", delay)
+			.. " room=" .. tostring(self.currentRoomId or "nil"))
+	end
+	return false
+end
+
+function ITGOnline:HttpTransportProbeNotBefore()
+	local state = self.httpTransportRecoveryState
+	if type(state) ~= "table" or state.unavailable ~= true then return 0 end
+	return tonumber(state.nextProbeAt) or 0
+end
+
+function ITGOnline:HttpTransportWatchdogsAllowed()
+	if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.watchdogs_allowed then
+		return ITGOnlineTransportRecovery.watchdogs_allowed(self.httpTransportRecoveryState)
+	end
+	return type(self.httpTransportRecoveryState) ~= "table"
+		or self.httpTransportRecoveryState.unavailable ~= true
 end
 
 function ITGOnline:RealtimeIsConnected()
@@ -3192,10 +3324,18 @@ function ITGOnline:ReconcileCurrentRoomAfterRealtimeGap(source, minIntervalSecon
 	if not connected and self.ScheduleRealtimeReconnect then
 		self:ScheduleRealtimeReconnect("critical_room_reconcile:" .. tostring(source or "unknown"))
 	end
-	if self.currentRoomId and self.FetchCurrentRoomFallback then
+	local httpRecoveryAllowed = not self.HttpTransportWatchdogsAllowed
+		or self:HttpTransportWatchdogsAllowed()
+	if self.currentRoomId and self.FetchCurrentRoomFallback and httpRecoveryAllowed then
 		self:FetchCurrentRoomFallback("critical_room_reconcile:" .. tostring(source or "unknown"), 0)
-	elseif self.Sync then
+	elseif self.Sync and httpRecoveryAllowed then
 		self:Sync()
+	elseif not httpRecoveryAllowed then
+		online_flow_trace_throttled("critical_room_reconcile_http_suppressed", 5.0,
+			"critical_room_reconcile_http_suppressed reason=transport_unavailable"
+			.. " source=" .. tostring(source or "unknown")
+			.. " room=" .. tostring(self.currentRoomId or "nil")
+			.. " nextProbeAt=" .. tostring(self:HttpTransportProbeNotBefore()))
 	end
 	return true
 end
@@ -3300,7 +3440,10 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	end
 
 	if not self.realtimeConnected and not self.realtimeConnecting then
-		local nextAttemptAt = tonumber(self.realtimeReconnectNextAttemptAt) or 0
+		local nextAttemptAt = math.max(
+			tonumber(self.realtimeReconnectNextAttemptAt) or 0,
+			self:HttpTransportProbeNotBefore()
+		)
 		if now >= nextAttemptAt then
 			online_flow_trace("realtime_reconnect_attempt source=" .. tostring(source or "unknown")
 				.. " attempt=" .. tostring((tonumber(self.realtimeReconnectAttempt) or 0) + 1)
@@ -3413,6 +3556,8 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 	if roomId then
 		local realtimeFresh = self.RealtimeIsFresh and self:RealtimeIsFresh() or false
 		local realtimeConnected = self.RealtimeIsConnected and self:RealtimeIsConnected() or false
+		local httpRecoveryAllowed = not self.HttpTransportWatchdogsAllowed
+			or self:HttpTransportWatchdogsAllowed()
 		local recoveryRequired = self.needsSyncAfterScreenCancel == true
 			or not realtimeFresh
 			or not realtimeConnected
@@ -3422,7 +3567,7 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 		local elapsed = now - (tonumber(self.lastCurrentRoomWatchdogAt) or 0)
 		if elapsed >= interval then
 			self.lastCurrentRoomWatchdogAt = now
-			if recoveryRequired then
+			if recoveryRequired and httpRecoveryAllowed then
 				online_flow_trace("current_room_watchdog_recover source=" .. tostring(source or "unknown")
 					.. " room=" .. tostring(roomId)
 					.. " screen=" .. screenName
@@ -3434,6 +3579,12 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 				if self.FetchCurrentRoomFallback then
 					self:FetchCurrentRoomFallback("current_room_watchdog:" .. tostring(source or "unknown"), 1.0)
 				end
+			elseif recoveryRequired then
+				online_flow_trace_throttled("current_room_watchdog_transport_suppressed", 5.0,
+					"current_room_watchdog_transport_suppressed"
+					.. " source=" .. tostring(source or "unknown")
+					.. " room=" .. tostring(roomId)
+					.. " nextProbeAt=" .. tostring(self:HttpTransportProbeNotBefore()))
 			elseif online_flow_trace_throttled then
 				online_flow_trace_throttled("current_room_watchdog_healthy", 60.0,
 					"current_room_watchdog_healthy room=" .. tostring(roomId)
@@ -3441,7 +3592,10 @@ function ITGOnline:MaintainRealtimeAndRoomSync(source)
 					.. " realtimeAge=" .. string.format("%.3f", self:RealtimeLastMessageAge()))
 			end
 			local syncInterval = recoveryRequired and 2.0 or 30.0
-			if self.Sync and not self.syncInFlight and (now - (tonumber(self.lastSyncRequestedAt) or 0)) >= syncInterval then
+			if self.Sync and not self.syncInFlight
+				and httpRecoveryAllowed
+				and (now - (tonumber(self.lastSyncRequestedAt) or 0)) >= syncInterval
+			then
 				online_flow_trace("current_room_watchdog_sync source=" .. tostring(source or "unknown")
 					.. " room=" .. tostring(roomId)
 					.. " syncInterval=" .. tostring(syncInterval))
@@ -4023,6 +4177,9 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 			end
 
 			ITGOnline.requests[requestId] = nil
+			if self.ObserveHttpTransportResponse then
+				self:ObserveHttpTransportResponse(response)
+			end
 			local decoded, decodeError = safe_decode(response and response.body)
 			local ok = response and response.statusCode and response.statusCode >= 200 and response.statusCode < 300
 			if ok and decodeError ~= nil then
@@ -4154,6 +4311,9 @@ function ITGOnline:Request(method, path, payload, callback, alreadyRetriedAuth, 
 	end)
 	if not requestOk or not request then
 		self.requests[requestId] = nil
+		if self.ObserveHttpTransportResponse then
+			self:ObserveHttpTransportResponse(nil)
+		end
 		safe_callback(callback, false, nil, {
 			errorMessage = "Network request could not be started.",
 			error = tostring(request or "request_start_failed"),
@@ -9256,6 +9416,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 			self.realtimeConnecting = false
 			self.realtimeConnectStartedAt = 0
 			self.realtimeConnected = false
+			self:ScheduleRealtimeReconnect("ticket_failed")
 			self:FlushRealtimeConnectCallbacks(
 				"error",
 				response_message(response, decoded, "WebSocket ticket request failed"))
@@ -9491,6 +9652,7 @@ function ITGOnline:ConnectWebSocket(callbacks)
 			self.realtimeConnectStartedAt = 0
 			self.realtimeConnected = false
 			self.socket = nil
+			self:ScheduleRealtimeReconnect("socket_open_failed")
 			self:FlushRealtimeConnectCallbacks("error", "WebSocket could not be opened.")
 			online_flow_trace("connect_websocket_open_failed generation=" .. tostring(generation)
 				.. " error=" .. tostring(socketOrError or "nil"))
@@ -9519,6 +9681,49 @@ function ITGOnline:CompanionRealtimeContext(player)
 		self.localPartyRealtime[key] = context
 	end
 	return context
+end
+
+function ITGOnline:ScheduleCompanionRealtimeReconnect(context, reason)
+	if type(context) ~= "table" or self.disconnecting then return false end
+	local now = GetTimeSinceStart()
+	local scheduledAt = tonumber(context.reconnectNextAttemptAt) or 0
+	if scheduledAt > now then
+		online_flow_trace_throttled(
+			"companion_realtime_schedule_coalesced:" .. tostring(context.key or "unknown"),
+			3.0,
+			"companion_realtime_schedule_coalesced localPlayer=" .. tostring(context.key or "unknown")
+				.. " reason=" .. tostring(reason or "unknown")
+				.. " attempt=" .. tostring(tonumber(context.reconnectAttempt) or 0)
+				.. " remaining=" .. string.format("%.3f", scheduledAt - now)
+		)
+		return true
+	end
+
+	local notBefore = self:HttpTransportProbeNotBefore()
+	local attempt, delay, nextAttemptAt
+	if ITGOnlineTransportRecovery and ITGOnlineTransportRecovery.schedule then
+		attempt, delay, nextAttemptAt = ITGOnlineTransportRecovery.schedule(
+			context.reconnectAttempt,
+			now,
+			self.realtimeReconnectBaseDelaySeconds,
+			self.realtimeReconnectMaxDelaySeconds,
+			notBefore
+		)
+	else
+		attempt = math.max(1, (tonumber(context.reconnectAttempt) or 0) + 1)
+		delay = math.min(10, 2 ^ math.min(attempt - 1, 4))
+		nextAttemptAt = math.max(now + delay, notBefore)
+		delay = nextAttemptAt - now
+	end
+	context.reconnectAttempt = attempt
+	context.reconnectNextAttemptAt = nextAttemptAt
+	online_flow_trace("companion_realtime_reconnect_scheduled localPlayer="
+		.. tostring(context.key or "unknown")
+		.. " reason=" .. tostring(reason or "unknown")
+		.. " attempt=" .. tostring(attempt)
+		.. " delay=" .. string.format("%.3f", delay)
+		.. " nextAt=" .. string.format("%.3f", nextAttemptAt))
+	return true
 end
 
 function ITGOnline:CloseCompanionRealtime(player, reason)
@@ -9822,6 +10027,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 			local message = response_message(response, decoded, "WebSocket ticket request failed")
 			online_flow_trace("companion_realtime_ticket_failed localPlayer=" .. playerKey
 				.. " status=" .. tostring(response and response.statusCode or "nil"))
+			self:ScheduleCompanionRealtimeReconnect(context, "ticket_failed")
 			for _, bundle in ipairs(pending) do safe_callback(bundle and bundle.error, message) end
 			return
 		end
@@ -9890,13 +10096,14 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 						if context.socket == socket then context.socket = nil end
 						local pending = context.pendingCallbacks or {}
 						context.pendingCallbacks = {}
-						context.reconnectAttempt = (tonumber(context.reconnectAttempt) or 0) + 1
-						local delay = math.min(10, math.pow(2, math.max(0, context.reconnectAttempt - 1)))
-						context.reconnectNextAttemptAt = GetTimeSinceStart() + delay
+						self:ScheduleCompanionRealtimeReconnect(
+							context,
+							"socket_" .. messageType:lower()
+						)
 						online_flow_trace("companion_realtime_" .. messageType:lower()
 							.. " localPlayer=" .. playerKey
 							.. " reason=" .. tostring(message.reason or "unknown")
-							.. " reconnectDelay=" .. tostring(delay))
+							.. " reconnectAt=" .. tostring(context.reconnectNextAttemptAt or 0))
 						for _, bundle in ipairs(pending) do
 							safe_callback(bundle and bundle[messageType == "Close" and "close" or "error"], message.reason)
 						end
@@ -9909,6 +10116,7 @@ function ITGOnline:ConnectCompanionWebSocket(player, callbacks)
 			context.connectStartedAt = 0
 			context.connected = false
 			context.socket = nil
+			self:ScheduleCompanionRealtimeReconnect(context, "socket_open_failed")
 			local pending = context.pendingCallbacks or {}
 			context.pendingCallbacks = {}
 			for _, bundle in ipairs(pending) do
@@ -9978,7 +10186,22 @@ function ITGOnline:MaintainCompanionRealtime(source)
 	end
 	local context = self:CompanionRealtimeContext(PLAYER_2)
 	if context.connected or context.connecting then return false end
-	if GetTimeSinceStart() < (tonumber(context.reconnectNextAttemptAt) or 0) then return false end
+	local now = GetTimeSinceStart()
+	local transportUnavailable = type(self.httpTransportRecoveryState) == "table"
+		and self.httpTransportRecoveryState.unavailable == true
+	if transportUnavailable and not self:RealtimeIsConnected() then
+		online_flow_trace_throttled("companion_realtime_primary_probe_owner", 5.0,
+			"companion_realtime_reconnect_suppressed reason=primary_owns_offline_probe"
+			.. " localPlayer=P2"
+			.. " source=" .. tostring(source or "unknown")
+			.. " nextPrimaryAttemptAt=" .. tostring(self.realtimeReconnectNextAttemptAt or 0))
+		return false
+	end
+	local nextAttemptAt = math.max(
+		tonumber(context.reconnectNextAttemptAt) or 0,
+		transportUnavailable and self:HttpTransportProbeNotBefore() or 0
+	)
+	if now < nextAttemptAt then return false end
 	online_flow_trace("companion_realtime_reconnect source=" .. tostring(source or "unknown")
 		.. " localPlayer=P2"
 		.. " attempt=" .. tostring((tonumber(context.reconnectAttempt) or 0) + 1))
@@ -18082,7 +18305,9 @@ function ITGOnline:HeartbeatCompanion(player, status, roomId, force, activity, r
 			return
 		end
 		local statusCode = tonumber(response and response.statusCode) or 0
-		local retryable = statusCode == 0 or statusCode == 429 or statusCode >= 500
+		local retryable = statusCode == 429
+			or statusCode >= 500
+			or (statusCode == 0 and self:HttpTransportWatchdogsAllowed())
 		local requestRoomStillCurrent = tostring(roomId or "") == tostring(self.currentRoomId or "")
 		if not ok and retryable and retryCount < 2 and requestRoomStillCurrent and not queued then
 			queued = {
@@ -18338,7 +18563,9 @@ function ITGOnline:Heartbeat(status, force, activity, activityRetryCount)
 				.. " active_room=" .. tostring(self.currentRoomId or "nil"))
 		end
 		local responseStatusCode = tonumber(response and response.statusCode) or 0
-		local activityRetryable = responseStatusCode == 0 or responseStatusCode == 429 or responseStatusCode >= 500
+		local activityRetryable = responseStatusCode == 429
+			or responseStatusCode >= 500
+			or (responseStatusCode == 0 and self:HttpTransportWatchdogsAllowed())
 		if not ok and activity == true and activityRetryable and requestContextStillCurrent
 			and activityRetryCount < 2 and queuedStatus == nil then
 			queuedStatus = status
