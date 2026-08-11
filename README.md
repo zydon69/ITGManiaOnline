@@ -1,194 +1,252 @@
-ITGmania
-========
+<div align="center">
 
-ITGmania is a fork of [StepMania 5.1](https://github.com/stepmania/stepmania/tree/5_1-new), an advanced cross-platform rhythm game for home and arcade use.
+# ✨ What's New in Our ITGmania Fork
 
-[![Continuous integration](https://github.com/itgmania/itgmania/actions/workflows/ci.yml/badge.svg?branch=beta)](https://github.com/itgmania/itgmania/actions/workflows/ci.yml) [![Nightly release](https://github.com/itgmania/itgmania/actions/workflows/release.yml/badge.svg?branch=beta&event=push)](https://github.com/itgmania/itgmania/actions/workflows/release.yml?query=branch%3Abeta+event%3Apush)
+### More ways to play. Less setup. An experience built around dance pads.
 
-## Changes to StepMania 5.1
+[![Online](https://img.shields.io/badge/ONLINE-P1_%2F_P1%2BP2-7c3aed?style=for-the-badge&logo=socketdotio&logoColor=white)](#-itg-online--play-together-from-anywhere)
+[![Game modes](https://img.shields.io/badge/MODES-DOUBLE_%E2%80%A2_COUPLE_%E2%80%A2_ROUTINE-f43f5e?style=for-the-badge)](#-double-couple-and-routine)
+[![macOS Metal](https://img.shields.io/badge/macOS-NATIVE_METAL-0ea5e9?style=for-the-badge&logo=apple&logoColor=white)](#-native-metal-on-macos)
+[![Teejusb FSR](https://img.shields.io/badge/PAD-TEEJUSB_FSR-10b981?style=for-the-badge)](#-teejusb-fsr-built-directly-into-itgmania)
 
-- Built-in network functionality
-- Fully 64-bit, optimized for modern OSes
-- Reload new songs from within the song select screen
-- The mine fix applied (courtesy of [DinsFire64](https://gist.github.com/DinsFire64/4a3f763cd3033afd55a176980b32a3b5))
-- Held misses tracked in the engine for pad debugging
-- Fixed overlapping hold bug
-- Per-player visual delay
-- Per-player disabling of timing windows
-- New preference to control note render ordering
-- Increased the Stats.xml file size limit to 100MB
-- Changed the default binding for P2/back from hyphen to backslash
+This fork expands **ITGmania + Simply Love** with a richer local and online
+experience, while preserving the accuracy and readability expected from a
+serious rhythm game.
 
-## ITG Online additions in this fork
+</div>
 
-This fork contains an integrated online mode wired to an ITG Online Laravel
-server. The full product specification is maintained in
-[`cahier_des_charges.md`](cahier_des_charges.md), and client setup details are
-documented in [`Docs/ITGOnline.md`](Docs/ITGOnline.md).
+---
 
-### Online room and song synchronization
+## 🌈 At a Glance
 
-The online flow is designed so every player plays the same chart while avoiding
-unnecessary downloads:
+| | Feature | What it changes |
+|:--:|---|---|
+| 🕺 | **Double / Couple / Routine** | New ways to play solo, together, or through a shared choreography |
+| 🌐 | **ITG Online** | Synchronized rooms for P1 alone or P1 + P2 on the same machine |
+| 📦 | **Pack downloads** | Guided pack discovery and installation through StepManiaOnline |
+| 🎚️ | **Multi-offset** | Six named offset profiles, available in the options or through <kbd>F3</kbd> + <kbd>B</kbd> |
+| 🦶 | **Native teejusb FSR support** | Read, configure, and monitor your pad directly from ITGmania |
+| 🍎 | **Metal on macOS** | A native rendering engine designed for modern Macs |
+| 🎛️ | **Option presets** | Six independently saved configurations for each player |
+| 👤 | **Modernized profiles** | Profile creation, selection, and score-service logins in a clearer flow |
+| 🛡️ | **Stability** | Memory leak fixes and improved diagnostics |
 
-- the room manager selects the reference chart;
-- the client identifies the chart with technical metadata such as pack, simfile
-  path, `chart_key`, `song_hash`, and `chart_hash`;
-- each player first checks whether the exact compatible chart exists locally;
-- if the manager's pack is missing, the client searches across local packs and
-  accepts a match only when the hashes are compatible;
-- if no local compatible chart exists, the client can offer a pack download;
-- pack sync status is broadcast to the room and shown beside each player.
+---
 
-Pack sync statuses include states such as:
+## 🕺 Double, Couple, and Routine
 
-```text
-searching
-found
-no_match
-downloading
-reloading
-mismatch
-failed
-ready
-```
+The engine and theme now support three additional ways to enjoy compatible
+charts:
 
-StepManiaOnline-style pack search/download can be used as a source for missing
-packs. The client searches, downloads, extracts, reloads songs, and validates the
-result by hash before marking the player ready.
+- **Double** — one player uses both sides of the pad;
+- **Couple** — two players play coordinated charts, one on each side;
+- **Routine** — two players share one choreography and one combined result.
 
-### Synchronized live leaderboard
+Support goes beyond presentation: difficulty selection, chart validation,
+gameplay, and score consolidation have all been adapted for these styles.
 
-The live leaderboard uses server-published musical ticks instead of simply
-showing the latest raw score received from each client. This reduces the visual
-advantage of low latency during close score races.
+> [!TIP]
+> Available charts still depend on which modes are actually included in your
+> song packs.
 
-The server publishes leaderboard snapshots on fixed musical ticks, currently
-designed around a 0.5 second tick with a bounded wait window. A tick is published
-as soon as all active players are covered, or after a deadline with missing
-players marked as pending.
+---
 
-Leaderboard payloads expose synchronization metadata:
+## 🌐 ITG Online — Play Together from Anywhere
 
-```text
-leaderboard_sync_position_seconds
-leaderboard_publish_tick_seconds
-leaderboard_publish_tick_complete
-leaderboard_pending_user_ids
-```
+<div align="center">
 
-Each entry can also describe how the tick value was produced:
+![P1](https://img.shields.io/badge/LOCAL-P1-2563eb?style=flat-square)
+![P1 + P2](https://img.shields.io/badge/LOCAL-P1_%2B_P2-db2777?style=flat-square)
+![Live leaderboard](https://img.shields.io/badge/SCORE-LIVE_LEADERBOARD-f59e0b?style=flat-square)
+![Authoritative server](https://img.shields.io/badge/SYNC-AUTHORITATIVE_SERVER-16a34a?style=flat-square)
 
-```text
-leaderboard_tick_pending
-leaderboard_tick_source=snapshot|carry_forward|zero|terminal
-```
+</div>
 
-The final competitive result remains independent from the live display and is
-recorded through the final score flow on the server.
+Online mode lets you join or manage a room with:
 
-### Online diagnostics
+- **P1 alone** on one machine;
+- **P1 + P2** playing together on the same machine;
+- synchronized song and difficulty selection;
+- a coordinated options screen before gameplay;
+- a live leaderboard followed by a shared final ranking;
+- proper handling of disconnects, early exits, failures, and returns to the
+  room.
 
-The client and server log the important online transitions and leaderboard
-decisions:
+The server remains authoritative over the room and round state. Clients
+resynchronize after a connection loss so stale local data cannot override the
+room’s actual state.
 
-- pack sync status changes;
-- room phase transitions;
-- song availability rejections;
-- score snapshot rejection reasons;
-- leaderboard tick selection;
-- complete, pending, and degraded ticks;
-- ignored stale leaderboard versions.
+### 📦 Missing a Pack? Let ITGmania Handle It
 
-The game also includes compact resource snapshots around screen transitions to
-help detect local or online memory leaks during soak tests.
+When a player does not have the selected song, the game can:
 
-## Installation
+1. look for a genuinely compatible chart in the local library;
+2. query **[StepManiaOnline](https://stepmaniaonline.net/)**;
+3. let the player choose the correct pack when several matches exist;
+4. ask the server for permission to start the download;
+5. download and extract the pack;
+6. reload the song library without restarting the game;
+7. validate the chart using its metadata and hashes before marking the player
+   as ready.
 
-You can choose between using the installer or using the portable build. Using the installer is recommended, because it makes upgrading to new versions easier.
+Download status and progress are shared with the room. Once a download has been
+authorized and started, it becomes part of the round synchronization protocol.
 
-### Windows
+<details>
+<summary><strong>🔍 For Developers — Online Architecture</strong></summary>
 
-**Windows 7 is the minimum supported version.**
+The client separates local identity, score transport, ready-state coordination,
+realtime event routing, and room-state transitions. Live scores use synchronized
+musical positions, while the final result follows a separate, immutable
+submission flow.
 
- * You will likely have to manually allow the installer to start.
+Client setup and behavior are documented in
+[`Docs/ITGOnline.md`](Docs/ITGOnline.md).
 
-### macOS
+</details>
 
-**macOS users need to have macOS 11 (Big Sur) or higher to run ITGmania.**
-* Move ITGmania.app to the Applications folder, and then run the following command in Terminal:
+---
 
-   * `xattr -c /Applications/ITGmania.app`
+## 🎚️ Six Global Offset Profiles
 
-* All game data will be located in the user's _Application Support_ folder (`~/Library/Application Support/ITGmania`).
-* If you are upgrading from ITGmania 1.1.0 or older, please note all user data will now be located within the _Application Support_ folder.
-* macOS users no longer need to add the game to "Input Monitoring" - the keyboard works as-is.
-* Please note for macOS users the Edit Mode zoom in/out commands have been changed to Option+Up/Down, to prevent an overlap with a Mission Control shortcut (Ctrl+Up)
- 
-### Linux
+Changing displays, headphones, sound cards, or complete setups should not mean
+losing a carefully calibrated timing value.
 
-**Linux users should receive all they need from the package manager of their choice.**
+The **Multi-offset** system provides **six persistent slots**:
 
-* **Debian-based** (Ubuntu, Mint, MX Linux, Pop!_OS, etc):
+- every profile has its own name and offset value;
+- the active profile and its settings persist between sessions;
+- profiles can be selected and renamed from the options;
+- <kbd>F3</kbd> + <kbd>B</kbd> quickly switches to the next profile;
+- a recovery backup protects the configuration if the primary file becomes
+  invalid.
 
-  * `sudo apt install libgdk-pixbuf-2.0-0 libgl1 libglvnd0 libgtk-3-0 libusb-0.1-4 libxinerama1 libxtst6`
+For example: `Headphones`, `Television`, `Projector`, `Arcade`, `Capture` — name
+them to match your own setups.
 
-* **Fedora-based** (Bazzite, Nobara, AlmaLinux, etc):
+---
 
-  * `sudo dnf install gdk-pixbuf2 gtk3 libusb-compat-0.1 libXinerama libXtst`
+## 🦶 Teejusb FSR Built Directly into ITGmania
 
-*  **Arch-based** (CachyOS, EndeavourOS, Manjaro, Garuda, etc):
+The **teejusb-fsr** integration communicates with the controller directly over
+serial. You no longer need to run the local monitoring server just to play.
 
-   * `sudo pacman -S mesa gtk3 libusb-compat libxinerama libxtst llvm-libs`
+From the dedicated configuration screen, you can:
 
-* **Gentoo Linux**:
+- detect controllers and assign them to players;
+- read all four FSR values from a pad in realtime;
+- adjust each threshold;
+- load thresholds from the controller;
+- save thresholds back to the controller;
+- display FSR values during gameplay for pad diagnostics.
 
-   * `sudo emerge --ask dev-build/cmake media-libs/alsa-lib media-libs/glew media-libs/libglvnd dev-libs/libusb dev-lang/nasm media-libs/libpulse x11-libs/gtk+ media-sound/alsa-utils`  
+Multiple controllers can be monitored and assigned independently, with support
+for up to four players.
 
-* **OpenSUSE Linux**:
+> [!NOTE]
+> The flashing tools and external monitor remain useful for installing,
+> updating, or diagnosing the controller outside the game. They are simply no
+> longer required for everyday monitoring inside ITGmania.
 
-   * All editions of OpenSUSE already have everything you need pre-installed.
+---
 
+## 🍎 Native Metal on macOS
 
-### Build From Source
+This fork adds a true **Metal** rendering engine for macOS, featuring:
 
-ITGmania can be compiled using [CMake](http://www.cmake.org/). More information about using CMake to build ITGmania can be found in both the `Build` directory and CMake's documentation.
+- native presentation through `CAMetalLayer`;
+- proper Retina and window-resize handling;
+- presentation pacing tied to the physical display;
+- Metal shaders for the rendering pipeline;
+- an **OpenGL** fallback when needed.
 
-## Resources
+Metal is the default native choice on macOS in this fork. The OpenGL renderer
+remains available from the graphics options.
 
-* [ITGmania Website](https://www.itgmania.com/)
-* [StepMania 5.1 to ITGmania Migration Guide](Docs/Userdocs/sm5_migration.md)
-* [Lua for ITGmania](https://quietly-turning.github.io/Lua-For-SM5/LuaAPI?engine=ITGmania)
-* Lua API Documentation can be found in the Docs folder.
+---
 
-## Licensing Terms
+## 🎛️ Presets for the Options Screen
 
-ITGmania, as well as the [Simply Love](https://github.com/Simply-Love/Simply-Love-SM5) theme, are both under the GPLv3 license, or at your option, any later version.
+Each player gets **six persistent, renameable presets** directly on the options
+screen.
 
-If ITGmania code is used in your project, we would also appreciate it if you link back to [ITGmania](https://github.com/itgmania/itgmania) as well as [StepMania](https://github.com/stepmania/stepmania).
+A preset remembers the relevant gameplay settings stored in that player’s
+profile. Speed, appearance, reading options, and other preferences can be
+recalled instantly instead of being configured one row at a time before every
+round.
 
-For specific information/legalese:
+P1 and P2 presets are independent: each player gets their own settings back
+when their profile is loaded.
 
-* All of our source code is under the [GPLv3 license](https://www.gnu.org/licenses/gpl-3.0.en.html).
-* Songs included within the 'StepMania 5' folder are under the [<abbr title="Creative Commons Non-Commercial">CC-NC</abbr> license](https://creativecommons.org/).
-* Simply Love is licensed under the GPLv3, or, at your option, any later version.
-* The copyright for songs in the 'Club Fantastic' folders rests with the original authors. The content is explicitly NOT placed under a Creative Commons license (or similar license), but has been provided free of charge, for personal or public use, including online broadcasting, tournaments, and other purposes. Go to the [Club Fantastic](https://www.clubfantastic.com/) website for more information.
-* The [MAD library](http://www.underbit.com/products/mad/) and [FFmpeg codecs](https://www.ffmpeg.org/) when built with our code use the [GPL license](http://www.gnu.org).
-* This software is based in part on the work of the Independent JPEG Group.
-* Check the [Docs/Licenses.txt](Docs/Licenses.txt) for the licenses of the used libraries.
+---
 
-## Credits
+## 👤 Profiles and Score Services, Brought Together
 
-### ITGmania Team
-- Martin Natano (natano)
-- teejusb
+### A Modernized Profile Flow
 
-### Contributors
-- [Club Fantastic](https://wiki.clubfantastic.dance/en/Credits)
-- [DinsFire64](https://gist.github.com/DinsFire64/4a3f763cd3033afd55a176980b32a3b5) (Mine Fix)
-- [EvocaitArt](https://twitter.com/EvocaitArt) (Enchantment NoteSkin)
-- [jenx](https://www.amarion.net/) (Fast Profile Switching)
-- [LightningXCE](https://twitter.com/lightningxce) (Cyber NoteSkin)
-- [MegaSphere](https://github.com/Pete-Lawrence/Peters-Noteskins) (Note/Rainbow/Vivid NoteSkins)
-- [StepMania 5](Docs/credits_SM5.txt)
-- [Old StepMania Team](Docs/credits_old_Stepmania_Team.txt)
+The **profile creation and selection screen**, adapted from work by
+**[Arrow Cloud](https://arrowcloud.dance/)**, makes it easier to create, select,
+and edit a local profile before playing.
+
+### HardEX
+
+The **HardEX** scoring mode, also adapted from Arrow Cloud’s work, is available
+alongside ITG Classic and EX scoring.
+
+### One Clear Login Screen for Every Player
+
+One unified screen brings together
+**[GrooveStats](https://groovestats.com/)** and
+**[Arrow Cloud](https://arrowcloud.dance/)** login. P1 and P2 each retain their
+own account state inside their own profile, keeping player identities separate
+without requiring a different login flow for each service.
+
+> [!IMPORTANT]
+> GrooveStats, Arrow Cloud, and StepManiaOnline are third-party services. Their
+> availability, accounts, and APIs are managed independently by their
+> respective teams.
+
+---
+
+## 🛡️ Stability and Performance Diagnostics
+
+This version fixes several resource-management and memory-leak issues discovered
+during extended play sessions.
+
+Targeted diagnostics have also been added around:
+
+- screen transitions;
+- graphics-resource loading;
+- rendering and frame pacing;
+- networking, downloads, and Online scores.
+
+The goal is simple: keep long sessions running smoothly and make problems
+reproducible when hardware, a song pack, or a network connection behaves
+unexpectedly.
+
+---
+
+## 💜 Credits
+
+This project is, above all, a community effort. This fork builds upon work from:
+
+- **[ITGmania](https://github.com/itgmania/itgmania)** and **StepMania** for the
+  engine;
+- **[Simply Love](https://github.com/Simply-Love/Simply-Love-SM5)** for the
+  theme;
+- **teejusb** for the teejusb-fsr ecosystem;
+- **[Arrow Cloud](https://arrowcloud.dance/)** for the profile screen and
+  HardEX scoring mode;
+- **[GrooveStats](https://groovestats.com/)** and
+  **[StepManiaOnline](https://stepmaniaonline.net/)** for their community
+  services.
+
+<div align="center">
+
+### Ready to Step onto the Pad?
+
+![Play local](https://img.shields.io/badge/PLAY-LOCAL-06b6d4?style=for-the-badge)
+![Play online](https://img.shields.io/badge/PLAY-ONLINE-8b5cf6?style=for-the-badge)
+![Open source](https://img.shields.io/badge/BUILD-TOGETHER-ec4899?style=for-the-badge)
+
+</div>
