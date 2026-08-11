@@ -431,8 +431,10 @@ local function local_member_pack_status(room)
 	if type(members) ~= "table" then return "" end
 	for _, member in pairs(members) do
 		local user = type(member) == "table" and (member.user or member.player or {}) or {}
-		local memberUserId = tostring((type(member) == "table" and
-			(member.user_id or member.userId or member.player_id or member.playerId)) or user.id or "")
+		local explicitMemberUserId = type(member) == "table" and
+			(member.user_id or member.userId or member.player_id or member.playerId) or nil
+		local memberUserId = tostring(explicitMemberUserId or user.id
+			or (type(member) == "table" and member.id) or "")
 		if type(member) == "table" and memberUserId == localUserId then
 			return tostring(member.pack_sync_status or member.status or "")
 		end

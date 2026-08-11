@@ -1038,6 +1038,8 @@ assert(onlinePackSyncSource:find("server_confirms_single_player_manager_selectio
 	"a manager selection already confirmed by the server must avoid redundant pack-sync reports")
 assert(onlinePackSyncSource:find("manager_selection_already_confirmed", 1, true),
 	"the manager fast path must remain explicit and diagnosable")
+assert(onlinePackSyncSource:find('or (type(member) == "table" and member.id)', 1, true),
+	"pack-sync acknowledgement must resolve the flat member identity returned by RoomResource")
 equal(onlineLobbyMetrics.PersistScreens, "",
 	"stateful online screens must be reconstructed between rounds")
 assert(tostring(onlineLobbyMetrics.GroupedScreens or ""):find("ScreenGameplay", 1, true),
